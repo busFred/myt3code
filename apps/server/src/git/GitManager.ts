@@ -192,7 +192,11 @@ type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 type GitActionProgressEmitter = (event: GitActionProgressPayload) => Effect.Effect<void, never>;
 
 function isNotGitRepositoryError(error: GitCommandError): boolean {
-  return error.message.toLowerCase().includes("not a git repository");
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("not a git repository") ||
+    message.includes("does not point to a valid repository")
+  );
 }
 
 interface OpenPrInfo {

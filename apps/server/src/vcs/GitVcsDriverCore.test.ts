@@ -1928,6 +1928,26 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           reason: "not_a_repository",
         });
         assert.include(error.message, "(not_a_repository)");
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        yield* fileSystem.writeFileString(
+          pathService.join(cwd, ".git"),
+          "gitdir: /missing-git-directory\n",
+        );
+        const gitfileError = yield* driver
+          .execute({
+            operation: "GitVcsDriver.test.notARepository",
+            cwd,
+            args: ["rev-parse", "--abbrev-ref", "HEAD"],
+            env: { LC_ALL: "C" },
+          })
+          .pipe(Effect.flip);
+        assert.deepInclude(gitfileError, {
+          _tag: "GitCommandError",
+          operation: "GitVcsDriver.test.notARepository",
+          reason: "not_a_repository",
+        });
       }),
     );
 
