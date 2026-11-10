@@ -46,6 +46,25 @@ it.layer(NodeServices.layer)("merge release update manifests", (it) => {
     }),
   );
 
+  it.effect("merges Windows alone when macOS is skipped", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const releaseAssetsDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "merge-release-update-manifests-skip-mac-",
+      });
+      yield* Effect.forEach(["latest-win-arm64.yml", "latest-win-x64.yml"], (fileName) =>
+        fs.writeFileString(path.join(releaseAssetsDir, fileName), manifest(fileName)),
+      );
+
+      yield* mergeReleaseUpdateManifestFiles(releaseAssetsDir, true);
+
+      const win = yield* fs.readFileString(path.join(releaseAssetsDir, "latest.yml"));
+      assert.include(win, "latest-win-arm64.yml");
+      assert.include(win, "latest-win-x64.yml");
+    }),
+  );
+
   it.effect.each([
     {
       platform: "macOS",

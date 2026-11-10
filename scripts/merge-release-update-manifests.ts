@@ -5,7 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { Argument, Command } from "effect/cli";
+import { Argument, Command, Flag } from "effect/cli";
 
 import { mergeUpdateManifestFiles, type UpdateManifestPlatform } from "./merge-update-manifests.ts";
 
@@ -42,6 +42,7 @@ function pairArchitectures(
 
 function planReleaseUpdateManifestMerges(
   fileNames: ReadonlyArray<string>,
+  skipMac: boolean,
 ): ReadonlyArray<ReleaseUpdateManifestMerge> {
   const macArm64 = new Map<string, string>();
   const macX64 = new Map<string, string>();
@@ -70,7 +71,7 @@ function planReleaseUpdateManifestMerges(
   // electron-builder names the macOS arm64 manifest without an arch suffix,
   // so the merged macOS feed keeps that name; Windows gets `<channel>.yml`.
   return [
-    ...pairArchitectures("macOS", macArm64, macX64).map(
+    ...(skipMac ? [] : pairArchitectures("macOS", macArm64, macX64)).map(
       ({ arm64, x64 }): ReleaseUpdateManifestMerge => ({
         platform: "mac",
         primary: arm64,
@@ -90,11 +91,14 @@ function planReleaseUpdateManifestMerges(
 }
 
 export const mergeReleaseUpdateManifestFiles = Effect.fn("mergeReleaseUpdateManifestFiles")(
-  function* (releaseAssetsDirArg: string) {
+  function* (releaseAssetsDirArg: string, skipMac = false) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const releaseAssetsDir = path.resolve(releaseAssetsDirArg);
-    const plans = planReleaseUpdateManifestMerges(yield* fs.readDirectory(releaseAssetsDir));
+    const plans = planReleaseUpdateManifestMerges(
+      yield* fs.readDirectory(releaseAssetsDir),
+      skipMac,
+    );
 
     yield* Effect.forEach(
       plans,
@@ -123,8 +127,12 @@ export const mergeReleaseUpdateManifestsCommand = Command.make(
     releaseAssetsDir: Argument.String("release-assets-dir").pipe(
       Argument.withDescription("Directory containing every desktop release artifact."),
     ),
+    skipMac: Flag.Boolean("skip-mac").pipe(
+      Flag.withDescription("Release without macOS builds (forks without macOS runners)."),
+      Flag.withDefault(false),
+    ),
   },
-  ({ releaseAssetsDir }) => mergeReleaseUpdateManifestFiles(releaseAssetsDir),
+  ({ releaseAssetsDir, skipMac }) => mergeReleaseUpdateManifestFiles(releaseAssetsDir, skipMac),
 ).pipe(
   Command.withDescription("Require and merge complete arm64/x64 desktop updater manifest pairs."),
 );
