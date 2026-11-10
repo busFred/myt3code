@@ -86,7 +86,10 @@ jobs:
                 ? dispatchChannel
                 : 'stable';
 
-            await assertReleaseSource({ github, context, releaseChannel });
+            const repoFullName = `${context.repo.owner}/${context.repo.repo}`;
+            if (repoFullName !== 'busFred/myt3code') {
+              await assertReleaseSource({ github, context, releaseChannel });
+            }
 
             if (context.eventName === 'schedule') {
               core.setOutput('has_changes', await shouldReleaseNightly({ github, context, core }));
@@ -402,7 +405,7 @@ jobs:
     # ids come from .env.example. Everything else matches nightly: the tracing
     # read below needs only repository-level Cloudflare credentials.
     environment:
-      name: ${{ inputs.channel != 'preview' && 'production' || '' }}
+      name: ${{ inputs.channel != 'preview' && github.repository == 'pingdotgg/t3code' && 'production' || '' }}
     outputs:
       clerk_publishable_key: ${{ steps.public_config.outputs.clerk_publishable_key }}
       clerk_jwt_template: ${{ steps.public_config.outputs.clerk_jwt_template }}
@@ -471,7 +474,7 @@ jobs:
         name: Resolve production relay public config
         shell: bash
         env:
-          PREVIEW: ${{ inputs.channel == 'preview' }}
+          PREVIEW: ${{ inputs.channel == 'preview' || github.repository == 'busFred/myt3code' }}
         run: |
           set -euo pipefail
 
@@ -1137,7 +1140,7 @@ jobs:
   build_web:
     name: Build hosted web app
     needs: [preflight, relay_public_config]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.preflight.outputs.release_channel != 'preview' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.preflight.outputs.release_channel != 'preview' && github.repository == 'pingdotgg/t3code' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -1424,7 +1427,7 @@ jobs:
 
   finalize:
     name: Finalize release
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'stable' }}
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'stable' && github.repository == 'pingdotgg/t3code' }}
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
