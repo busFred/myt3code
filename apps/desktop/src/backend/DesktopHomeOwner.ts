@@ -15,6 +15,7 @@ import { BACKEND_QUIT_STOP_TIMEOUT } from "./DesktopBackendManager.ts";
 const HomeOwnerRuntimeState = Schema.Struct({
   pid: Schema.Int,
   port: Schema.Int,
+  origin: Schema.optional(Schema.String),
   serviceManaged: Schema.optional(Schema.Boolean),
   serverVersion: Schema.optional(Schema.String),
 });
@@ -37,26 +38,28 @@ const isProcessAlive = (pid: number): boolean => {
  * Whether a server holds the T3 home's ownership lock (an exclusive transaction on
  * `server-owner.sqlite`). A read-only read is refused with SQLITE_BUSY only while it is held.
  */
-const isHomeOwnershipLocked = Effect.fn("DesktopHomeOwner.isHomeOwnershipLocked")(function* () {
-  const path = yield* Path.Path;
-  const { stateDir } = yield* DesktopEnvironment.DesktopEnvironment;
-  const lockPath = path.join(stateDir, "server-owner.sqlite");
-  return yield* Effect.sync(() => {
-    try {
-      const db = new NodeSqlite.DatabaseSync(lockPath, { readOnly: true });
+export const isHomeOwnershipLocked = Effect.fn("DesktopHomeOwner.isHomeOwnershipLocked")(
+  function* () {
+    const path = yield* Path.Path;
+    const { stateDir } = yield* DesktopEnvironment.DesktopEnvironment;
+    const lockPath = path.join(stateDir, "server-owner.sqlite");
+    return yield* Effect.sync(() => {
       try {
-        db.exec("PRAGMA busy_timeout = 0");
-        db.prepare("SELECT count(*) FROM sqlite_master").get();
-        return false;
-      } finally {
-        db.close();
+        const db = new NodeSqlite.DatabaseSync(lockPath, { readOnly: true });
+        try {
+          db.exec("PRAGMA busy_timeout = 0");
+          db.prepare("SELECT count(*) FROM sqlite_master").get();
+          return false;
+        } finally {
+          db.close();
+        }
+      } catch (cause) {
+        // Anything but SQLITE_BUSY (a missing file included) leaves the decision to the backend.
+        return cause instanceof Error && "errcode" in cause && cause.errcode === 5;
       }
-    } catch (cause) {
-      // Anything but SQLITE_BUSY (a missing file included) leaves the decision to the backend.
-      return cause instanceof Error && "errcode" in cause && cause.errcode === 5;
-    }
-  });
-});
+    });
+  },
+);
 
 // A quitting app's backend holds the lock until it exits, which can outlast the relaunch of an update.
 const HOME_OWNERSHIP_RELEASE_GRACE = Duration.sum(BACKEND_QUIT_STOP_TIMEOUT, Duration.seconds(3));
@@ -87,6 +90,12 @@ export const readLiveHomeOwner = Effect.fn("DesktopHomeOwner.readLiveHomeOwner")
   return Option.flatMap(raw, decodeHomeOwner).pipe(
     Option.filter((owner) => isProcessAlive(owner.pid)),
   );
+});
+
+export const ownerOrigin = (owner: HomeOwner) => owner.origin ?? `http://127.0.0.1:${owner.port}`;
+
+export const readLockedHomeOwner = Effect.fn("DesktopHomeOwner.readLockedHomeOwner")(function* () {
+  return (yield* isHomeOwnershipLocked()) ? yield* readLiveHomeOwner() : Option.none<HomeOwner>();
 });
 
 export const homeOwnedMessage = (owner: Option.Option<HomeOwner>): string =>

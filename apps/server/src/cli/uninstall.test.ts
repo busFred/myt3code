@@ -34,6 +34,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("t3 uninstall com
         Layer.succeed(
           BootService.BootService,
           BootService.BootService.of({
+            start: Effect.succeed("started"),
+            stop: Effect.succeed("stopped"),
             status: Effect.succeed({
               supported: true,
               installed: true,

@@ -1250,6 +1250,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     desktopOnly: true,
   },
   {
+    id: "service-quit-behavior",
+    title: "When quitting while connected to the background service",
+    to: "/settings/connections",
+    searchTerms: ["quit stop background service app ask remember"],
+    desktopOnly: true,
+  },
+  {
     id: "network-access",
     title: "Network access",
     to: "/settings/access",

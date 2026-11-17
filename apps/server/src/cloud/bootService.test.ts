@@ -217,6 +217,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
     lingerStartsManager: boolean;
     enabled: boolean;
     active: boolean;
+    launchdLoaded: boolean;
     /** systemd refuses starts until `reset-failed`, as after `StartLimitBurst` trips. */
     startLimitHit: boolean;
     /** A Windows launcher: it holds its lock until its task ends. */
@@ -231,6 +232,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
     lingerStartsManager: true,
     enabled: true,
     active: true,
+    launchdLoaded: false,
     startLimitHit: false,
   };
   const runner = ProcessRunner.ProcessRunner.of({
@@ -252,6 +254,10 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
         control.managerReachable ||= control.lingerStartsManager;
       }
       if (!failed && command === "systemctl --user enable t3code.service") control.enabled = true;
+      if (!failed && input.command === "launchctl") {
+        if (input.args[0] === "bootstrap") control.launchdLoaded = true;
+        if (input.args[0] === "bootout") control.launchdLoaded = false;
+      }
       const taskMissing =
         input.command === "schtasks" && input.args[0] !== "/Create" && control.task === undefined;
       if (input.command === "schtasks" && !failed) {
@@ -265,7 +271,12 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
         if (input.args[0] === "/Delete") delete control.task;
         if (input.args[0] === "/End") control.launcher?.close();
       }
-      if (!refusedStart && !failed && command.startsWith("systemctl --user restart "))
+      if (
+        !refusedStart &&
+        !failed &&
+        (command.startsWith("systemctl --user restart ") ||
+          command.startsWith("systemctl --user start "))
+      )
         control.active = true;
       // The manager loads units only from its own unit directory.
       const unitOutsideManager =
@@ -282,35 +293,42 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       }
       return {
         stdout:
-          input.command === "busctl"
-            ? JSON.stringify({
-                type: "as",
-                data: [
-                  "/usr/lib/systemd/user",
-                  `${managerUnitDir}.control`,
-                  "/run/user/501/systemd/transient",
-                  managerUnitDir,
-                  "/etc/systemd/user",
-                ],
-              })
-            : input.args[0] === "--version"
-              ? `t3 v${/versions[\\/]([^\\/]+)[\\/]/.exec(input.command)?.[1] ?? "1.2.3"}\n`
-              : input.command === "schtasks" && input.args.includes("/XML")
-                ? control.task?.enabled === false
-                  ? disabledServiceTask(control.task.xml)
-                  : (control.task?.xml ?? "")
-                : input.command === "loginctl" && input.args[0] === "show-user"
-                  ? `${control.linger ?? ""}\n`
-                  : input.args[1] === "is-enabled"
-                    ? control.enabled
-                      ? "enabled\n"
-                      : "disabled\n"
-                    : "",
+          input.command === "launchctl" && input.args[0] === "print"
+            ? control.launchdLoaded
+              ? "state = running\npid = 123\n"
+              : ""
+            : input.command === "busctl"
+              ? JSON.stringify({
+                  type: "as",
+                  data: [
+                    "/usr/lib/systemd/user",
+                    `${managerUnitDir}.control`,
+                    "/run/user/501/systemd/transient",
+                    managerUnitDir,
+                    "/etc/systemd/user",
+                  ],
+                })
+              : input.args[0] === "--version"
+                ? `t3 v${/versions[\\/]([^\\/]+)[\\/]/.exec(input.command)?.[1] ?? "1.2.3"}\n`
+                : input.command === "schtasks" && input.args.includes("/XML")
+                  ? control.task?.enabled === false
+                    ? disabledServiceTask(control.task.xml)
+                    : (control.task?.xml ?? "")
+                  : input.command === "loginctl" && input.args[0] === "show-user"
+                    ? `${control.linger ?? ""}\n`
+                    : input.args[1] === "is-enabled"
+                      ? control.enabled
+                        ? "enabled\n"
+                        : "disabled\n"
+                      : "",
         stderr: "",
         code: ChildProcessSpawner.ExitCode(
           taskMissing && input.args.includes("/HRESULT")
             ? 0x80070002
             : failed ||
+                (input.command === "launchctl" &&
+                  input.args[0] === "print" &&
+                  !control.launchdLoaded) ||
                 taskMissing ||
                 unitOutsideManager ||
                 ((command === "systemctl --user show-environment" || input.command === "busctl") &&
@@ -408,6 +426,52 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
 });
 
 it.layer(NodeServices.layer)("boot service install", (it) => {
+  it.effect.each(["linux", "darwin", "win32"] as const)(
+    "stops without uninstalling and starts without replacing the unit on %s",
+    (platform) =>
+      Effect.gen(function* () {
+        const { service, fs, commands, control, makeService, baseDir } =
+          yield* makeHarness(platform);
+        const plan = yield* service.install();
+        const unit = yield* fs.readFileString(plan.unitPath);
+        commands.length = 0;
+        expect(yield* service.stop).toBe("stopped");
+        expect(yield* service.stop).toBe("stopped");
+        expect(yield* fs.readFileString(plan.unitPath)).toBe(unit);
+        expect(commands).toContain(
+          platform === "linux"
+            ? "systemctl --user stop t3code.service"
+            : platform === "darwin"
+              ? "launchctl bootout --wait gui/501/com.t3tools.t3code.service"
+              : "schtasks /Change /TN t3code-PC-theo /DISABLE",
+        );
+        control.active = false;
+        commands.length = 0;
+        expect(yield* service.start).toBe("started");
+        expect(yield* fs.readFileString(plan.unitPath)).toBe(unit);
+        expect(commands).toContain(
+          platform === "linux"
+            ? "systemctl --user start t3code.service"
+            : platform === "darwin"
+              ? `launchctl bootstrap gui/501 ${plan.unitPath}`
+              : "schtasks /Run /TN t3code-PC-theo",
+        );
+        expect(commands.some((command) => command.includes("/Create"))).toBe(false);
+        commands.length = 0;
+        expect(yield* service.start).toBe("started");
+        expect(
+          commands.some((command) => command.includes("restart") || command.includes("bootout")),
+        ).toBe(false);
+        if (platform === "linux") expect((yield* service.status).running).toBe(true);
+
+        const other = yield* makeService(undefined, "1.2.3", `${baseDir}-other`);
+        commands.length = 0;
+        expect(yield* other.stop).toBe("skipped");
+        expect(yield* other.start).toBe("skipped");
+        expect(commands).toEqual([]);
+      }),
+  );
+
   it.effect(
     "fails before installing files or validating a runtime when lingering needs an administrator",
     () =>

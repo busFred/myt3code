@@ -154,6 +154,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   getLocalEnvironmentBearerToken: () =>
     ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
+  getServiceQuitBehavior: () => ipcRenderer.sendSync(IpcChannels.GET_SERVICE_QUIT_BEHAVIOR_CHANNEL),
+  setServiceQuitBehavior: (behavior) =>
+    ipcRenderer.invoke(IpcChannels.SET_SERVICE_QUIT_BEHAVIOR_CHANNEL, behavior),
   getLocalEnvironmentEnabled: () =>
     ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL) !== false,
   setLocalEnvironmentEnabled: (enabled) =>

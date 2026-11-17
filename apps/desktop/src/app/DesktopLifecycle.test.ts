@@ -56,6 +56,7 @@ function layerElectronApp(
     setDockIcon: () => Effect.void,
     appendCommandLineSwitch: () => Effect.void,
     removeCommandLineSwitch: () => Effect.void,
+    onSystemShutdown: (listener) => registerListener("system-shutdown", listener),
     onBeforeQuitForUpdate: (listener) => registerListener("before-quit-for-update", listener),
     on: (eventName, listener) =>
       registerListener(eventName, listener as unknown as (...args: readonly unknown[]) => void),
@@ -110,9 +111,77 @@ function layerDesktopWindow(
 }
 
 describe("DesktopLifecycle", () => {
-  it.effect.each(["darwin", "win32", "linux"] satisfies ReadonlyArray<NodeJS.Platform>)(
-    "lets the updater's quit event proceed on %s",
-    (platform) => {
+  it.effect("cancels a user quit before shutdown and suppresses duplicate quit dialogs", () =>
+    Effect.gen(function* () {
+      const listeners = new Map<string, (...args: readonly unknown[]) => void>();
+      const prompted = yield* Deferred.make<void>();
+      const choice = yield* Deferred.make<boolean>();
+      const activated = yield* Deferred.make<void>();
+      let prompts = 0;
+      let shutdownRequests = 0;
+      const layer = Layer.mergeAll(
+        DesktopLifecycle.layer,
+        DesktopState.layer,
+        layerElectronApp(listeners),
+        layerElectronTheme,
+        layerElectronWindow(),
+        layerDesktopWindow({
+          activate: Deferred.succeed(activated, undefined).pipe(Effect.asVoid),
+        }),
+        Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+          platform: "linux",
+          appImagePath: Option.none(),
+          isDevelopment: false,
+        } as DesktopEnvironment.DesktopEnvironment["Service"]),
+        Layer.mock(DesktopShutdown.DesktopShutdown, {
+          request: Effect.sync(() => {
+            shutdownRequests++;
+          }),
+        }),
+      );
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const state = yield* DesktopState.DesktopState;
+          yield* Ref.set(
+            state.localBackendAttachment,
+            Option.some({
+              owner: { pid: 123, port: 3773, serviceManaged: true },
+              readOwner: Effect.succeedNone,
+              getBearerToken: Effect.succeed("bearer"),
+              confirmQuit: () =>
+                Effect.sync(() => {
+                  prompts++;
+                }).pipe(
+                  Effect.andThen(Deferred.succeed(prompted, undefined)),
+                  Effect.andThen(Deferred.await(choice)),
+                ),
+            }),
+          );
+          yield* (yield* DesktopLifecycle.DesktopLifecycle).register;
+          const event = { preventDefault: () => undefined } as Electron.Event;
+          listeners.get("before-quit")!(event);
+          yield* Deferred.await(prompted);
+          listeners.get("before-quit")!(event);
+          assert.equal(prompts, 1);
+          yield* Deferred.succeed(choice, false);
+          yield* Deferred.await(activated);
+          assert.equal(shutdownRequests, 0);
+          assert.isFalse(yield* Ref.get(state.quitting));
+        }),
+      ).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect.each(
+    (["darwin", "win32", "linux"] as const).flatMap((platform) =>
+      (["before-quit-for-update", "system-shutdown"] as const).map((source) => ({
+        platform,
+        source,
+      })),
+    ),
+  )(
+    "lets $source proceed on $platform without asking to stop the service",
+    ({ platform, source }) => {
       const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
       let windowsDestroyed = false;
       const layerEnvironment = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
@@ -139,10 +208,20 @@ describe("DesktopLifecycle", () => {
 
       return Effect.scoped(
         Effect.gen(function* () {
+          const stateBeforeQuit = yield* DesktopState.DesktopState;
+          yield* Ref.set(
+            stateBeforeQuit.localBackendAttachment,
+            Option.some({
+              owner: { pid: 123, port: 3773, serviceManaged: true },
+              readOwner: Effect.succeedNone,
+              getBearerToken: Effect.succeed("bearer"),
+              confirmQuit: () => Effect.die("system and updater quits must not prompt"),
+            }),
+          );
           const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
           yield* lifecycle.register;
 
-          appListeners.get("before-quit-for-update")?.();
+          appListeners.get(source)?.();
           yield* Effect.yieldNow;
 
           let prevented = false;
@@ -157,7 +236,7 @@ describe("DesktopLifecycle", () => {
             prevented,
             "cancelling this event prevents the updater from completing its relaunch",
           );
-          assert.isTrue(windowsDestroyed);
+          assert.equal(windowsDestroyed, source === "before-quit-for-update");
 
           const state = yield* DesktopState.DesktopState;
           assert.isTrue(yield* Ref.get(state.quitting));

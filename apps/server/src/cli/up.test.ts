@@ -347,6 +347,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
         Layer.succeed(
           BootService.BootService,
           BootService.BootService.of({
+            start: Effect.succeed("started"),
+            stop: Effect.succeed("stopped"),
             status: Effect.succeed(status),
             withStopped: (operation) => operation,
             restart: Effect.sync(() => restarts++).pipe(

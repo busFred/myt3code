@@ -15,6 +15,15 @@ import { HttpClient } from "effect/http";
 import * as Schema from "effect/Schema";
 
 import { CLI_RELEASE_BASE_URL_ENV } from "@t3tools/shared/cliRelease";
+import {
+  BOOT_SERVICE_LAUNCHD_LABEL,
+  BOOT_SERVICE_PLIST_FILE,
+  BOOT_SERVICE_TASK_FILE,
+  BOOT_SERVICE_UNIT_FILE,
+  defaultSystemdUnitDir,
+  launchdPlistPath,
+  scheduledTaskPath,
+} from "@t3tools/shared/bootServiceUnitPath";
 
 import * as ProcessRunner from "../processRunner.ts";
 import { acquireServiceSelectionLock } from "./serviceSelectionLock.ts";
@@ -54,17 +63,10 @@ export {
   serviceUnitProgramOf as bootServiceProgramOf,
 } from "./serviceProtocol.ts";
 
-const BOOT_SERVICE_NAME = "t3code";
-export const BOOT_SERVICE_UNIT_FILE = `${BOOT_SERVICE_NAME}.service`;
-// `.service` suffix keeps the label distinct from the desktop app's bundle id
-// (com.t3tools.t3code), so launchd and TCC records never collide.
-export const BOOT_SERVICE_LAUNCHD_LABEL = "com.t3tools.t3code.service";
-export const BOOT_SERVICE_PLIST_FILE = `${BOOT_SERVICE_LAUNCHD_LABEL}.plist`;
+export { BOOT_SERVICE_LAUNCHD_LABEL, BOOT_SERVICE_PLIST_FILE, BOOT_SERVICE_UNIT_FILE };
 export const BOOT_SERVICE_LOG_FILE = "boot-service.log";
 /** `schtasks /Query /HRESULT` exits with this when the task is not registered. */
 const WINDOWS_TASK_NOT_FOUND = 0x80070002;
-/** Task Scheduler keeps its own copy; this one lets status and repair read the task back. */
-const BOOT_SERVICE_TASK_FILE = `${BOOT_SERVICE_NAME}-task.xml`;
 
 /** systemd expands `%` specifiers, including in unquoted append-log paths. */
 function escapeSystemdSpecifiers(value: string): string {
@@ -295,19 +297,6 @@ export interface BootServiceManager {
   readonly deactivate: ReadonlyArray<BootServiceStep>;
   readonly finalize: ReadonlyArray<BootServiceStep>;
 }
-
-const defaultSystemdUnitDir = (path: Path.Path, homeDir: string, xdgConfigHome: string) =>
-  path.join(
-    path.isAbsolute(xdgConfigHome) ? xdgConfigHome : path.join(homeDir, ".config"),
-    "systemd",
-    "user",
-  );
-
-const scheduledTaskPath = (path: Path.Path, localAppData: string) =>
-  path.join(localAppData, "t3code", BOOT_SERVICE_TASK_FILE);
-
-const launchdPlistPath = (path: Path.Path, homeDir: string) =>
-  path.join(homeDir, "Library", "LaunchAgents", BOOT_SERVICE_PLIST_FILE);
 
 function systemdManager(input: {
   readonly path: Path.Path;
@@ -755,6 +744,7 @@ export interface BootServiceStatus {
   readonly supported: boolean;
   readonly installed: boolean;
   readonly current: boolean;
+  readonly running?: boolean;
   readonly installedVersion?: string;
   readonly installedBaseDir?: string;
   /** Set when the installed unit serves a different T3 home than this CLI. */
@@ -777,6 +767,8 @@ export class BootService extends Context.Service<
      * inside the service the restart can only be `queued` with the service
      * manager, since the stop ends this process.
      */
+    readonly start: Effect.Effect<"started" | "skipped", BootServiceError>;
+    readonly stop: Effect.Effect<"stopped" | "skipped", BootServiceError>;
     readonly restart: Effect.Effect<"restarted" | "queued" | "skipped", BootServiceError>;
     /**
      * Runs the operation with this home's service stopped; other homes are left alone.
@@ -1435,6 +1427,61 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     return handOff ? { ...installedPlan, handedOff: true } : installedPlan;
   });
 
+  const changeRunning = Effect.fn("cloud.boot_service.change_running")(function* (start: boolean) {
+    const manager = yield* requireManager;
+    const unit = yield* fs.readFileString(unitPath).pipe(Effect.option);
+    if (Option.isNone(unit)) return "skipped" as const;
+    const installedBaseDir = bootServiceBaseDirOf(unit.value);
+    if (
+      installedBaseDir === undefined ||
+      path.resolve(installedBaseDir) !== path.resolve(input.baseDir)
+    ) {
+      return "skipped" as const;
+    }
+    const launchdTarget = `gui/${uid}/${BOOT_SERVICE_LAUNCHD_LABEL}`;
+    if (!start) {
+      yield* runSteps(manager.stop);
+      if (
+        manager.kind === "launchd" &&
+        succeeded(yield* probe("launchctl", ["print", launchdTarget]))
+      ) {
+        return yield* new BootServiceCommandError({
+          step: "stopping the installed launch agent",
+        });
+      }
+      return "stopped" as const;
+    }
+    if (manager.kind === "launchd") {
+      const loaded = yield* probe("launchctl", ["print", launchdTarget]);
+      if (!succeeded(loaded)) {
+        yield* runSteps(manager.activate);
+      } else {
+        yield* runSteps(manager.activate.slice(0, 1));
+        if (!Option.getOrThrow(loaded).stdout.includes("pid = ")) {
+          yield* runSteps([
+            {
+              step: "starting the service",
+              command: "launchctl",
+              args: ["kickstart", launchdTarget],
+            },
+          ]);
+        }
+      }
+    } else if (manager.kind === "schtasks") {
+      const running = yield* Effect.promise(() => serviceLauncherIsRunning(launcherLockPath(unit)));
+      yield* runSteps(running ? manager.restart.slice(0, 1) : manager.restart);
+    } else {
+      yield* runSteps(
+        manager.activate.map((step) =>
+          "args" in step
+            ? { ...step, args: step.args.map((arg) => (arg === "restart" ? "start" : arg)) }
+            : step,
+        ),
+      );
+    }
+    return "started" as const;
+  });
+
   const restart: BootService["Service"]["restart"] = Effect.gen(function* () {
     const manager = yield* requireManager;
     const unit = yield* fs.readFileString(unitPath).pipe(Effect.option);
@@ -1540,10 +1587,24 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const status: BootService["Service"]["status"] = Effect.gen(function* () {
     const manager = detectedManager;
     if (manager === undefined) {
-      return { supported: false, installed: false, current: false, unitPath, logPath };
+      return {
+        supported: false,
+        installed: false,
+        current: false,
+        running: false,
+        unitPath,
+        logPath,
+      };
     }
     if (!(yield* fs.exists(unitPath))) {
-      return { supported: true, installed: false, current: false, unitPath, logPath };
+      return {
+        supported: true,
+        installed: false,
+        current: false,
+        running: false,
+        unitPath,
+        logPath,
+      };
     }
     const [unit, runtimeEntryExists, runtimeSentinel, stateText] = yield* Effect.all([
       fs.readFileString(unitPath),
@@ -1567,10 +1628,19 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         : manager.kind === "schtasks"
           ? [...(yield* readSchtasksProblems(Option.some(unit)))]
           : [];
+    const running =
+      manager.kind === "launchd"
+        ? Option.getOrUndefined(
+            yield* probe("launchctl", ["print", `gui/${uid}/${BOOT_SERVICE_LAUNCHD_LABEL}`]),
+          )?.stdout.includes("pid = ") === true
+        : manager.kind === "systemd"
+          ? succeeded(yield* probe("systemctl", ["--user", "is-active", BOOT_SERVICE_UNIT_FILE]))
+          : !problems.includes("service-stopped");
     if (yield* fs.exists(restartPendingPath)) problems.push("restart-pending");
     return {
       supported: true,
       installed: true,
+      running,
       ...(installedVersion === undefined ? {} : { installedVersion }),
       ...(installedBaseDir === undefined ? {} : { installedBaseDir }),
       ...(otherBaseDir === undefined ? {} : { otherBaseDir }),
@@ -1592,7 +1662,23 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     Effect.withSpan("cloud.boot_service.status"),
   );
 
-  return BootService.of({ install, restart, withStopped, uninstall, status });
+  return BootService.of({
+    install,
+    restart,
+    withStopped,
+    uninstall,
+    status,
+    start: changeRunning(true).pipe(
+      Effect.map((outcome) =>
+        outcome === "skipped" ? ("skipped" as const) : ("started" as const),
+      ),
+    ),
+    stop: changeRunning(false).pipe(
+      Effect.map((outcome) =>
+        outcome === "skipped" ? ("skipped" as const) : ("stopped" as const),
+      ),
+    ),
+  });
 });
 
 export const layer = (input: {

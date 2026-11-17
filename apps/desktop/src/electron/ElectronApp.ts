@@ -70,6 +70,7 @@ export class ElectronApp extends Context.Service<
     readonly setDesktopName: (desktopName: string) => Effect.Effect<void>;
     readonly setDockIcon: (iconPath: string) => Effect.Effect<void>;
     readonly appendCommandLineSwitch: (switchName: string, value?: string) => Effect.Effect<void>;
+    readonly onSystemShutdown: (listener: () => void) => Effect.Effect<void, never, Scope.Scope>;
     readonly onBeforeQuitForUpdate: (
       listener: () => void,
     ) => Effect.Effect<void, never, Scope.Scope>;
@@ -249,6 +250,24 @@ export const make = ElectronApp.of({
       Electron.app.commandLine.removeSwitch(switchName);
     });
   }),
+  onSystemShutdown: Effect.fn("ElectronApp.onSystemShutdown")((listener) =>
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        let registered = false;
+        const register = () => {
+          Electron.powerMonitor.on("shutdown", listener);
+          registered = true;
+        };
+        if (Electron.app.isReady()) register();
+        else Electron.app.once("ready", register);
+        return () => {
+          Electron.app.removeListener("ready", register);
+          if (registered) Electron.powerMonitor.removeListener("shutdown", listener);
+        };
+      }),
+      (removeListener) => Effect.sync(removeListener),
+    ).pipe(Effect.asVoid),
+  ),
   on: addScopedAppListener,
 });
 

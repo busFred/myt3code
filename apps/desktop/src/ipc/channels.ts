@@ -142,3 +142,6 @@ export const TAKE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:take-legacy-local-stor
 export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-local-storage";
 
 export const RESTART_AUDIO_SERVICE_CHANNEL = "desktop:restart-audio-service";
+
+export const GET_SERVICE_QUIT_BEHAVIOR_CHANNEL = "desktop:get-service-quit-behavior";
+export const SET_SERVICE_QUIT_BEHAVIOR_CHANNEL = "desktop:set-service-quit-behavior";

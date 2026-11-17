@@ -315,6 +315,13 @@ describe("t3 pair", () => {
         assert.equal(credentials.length, 1);
         assert.equal(credentials[0]?.label, "t3 pair");
         assert.deepEqual(credentials[0]?.scopes, AuthStandardClientScopes);
+        const json = JSON.parse(
+          yield* captureStdout(runCli(["pair", "--base-dir", baseDir, "--json"])),
+        );
+        assert.match(json.credential, /^[A-Z2-9]+$/);
+        assert.equal(json.httpBaseUrl, origin);
+        assert.isString(json.expiresAt);
+        assert.isFalse(Number.isNaN(Date.parse(json.expiresAt)));
       }),
     ).pipe(
       Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),

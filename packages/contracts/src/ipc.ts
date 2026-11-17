@@ -1056,6 +1056,13 @@ export type DesktopMediaRead = typeof DesktopMediaReadSchema.Type;
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
+export const DesktopServiceQuitBehaviorSchema = Schema.Literals([
+  "ask",
+  "app-only",
+  "app-and-service",
+]);
+export type DesktopServiceQuitBehavior = typeof DesktopServiceQuitBehaviorSchema.Type;
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled: () => boolean;
@@ -1084,6 +1091,8 @@ export interface DesktopBridge {
   getPrimaryPasteEnabled?: () => boolean;
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
   getLocalEnvironmentEnabled: () => boolean;
+  getServiceQuitBehavior: () => DesktopServiceQuitBehavior;
+  setServiceQuitBehavior: (behavior: DesktopServiceQuitBehavior) => Promise<void>;
   setLocalEnvironmentEnabled: (enabled: boolean) => Promise<void>;
   /** The environment ID recorded in this app's T3 home, such as its own machine's background service. */
   getHostEnvironmentId?: () => Promise<string | null>;

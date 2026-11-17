@@ -1,4 +1,6 @@
 import {
+  DesktopServiceQuitBehaviorSchema,
+  type DesktopServiceQuitBehavior,
   DesktopServerExposureModeSchema,
   DesktopUpdateChannelSchema,
   type DesktopServerExposureMode,
@@ -28,6 +30,8 @@ import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
 import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 
 export interface DesktopSettings {
+  readonly serviceQuitBehavior: DesktopServiceQuitBehavior;
+  readonly serviceConnectionRemembered: boolean;
   readonly localEnvironmentEnabled: boolean;
   readonly linuxPasswordStore: LinuxPasswordStorePreference;
   readonly mainWindowBounds: DesktopWindowBounds | null;
@@ -69,6 +73,8 @@ export const DEFAULT_MAIN_WINDOW_SIZE = {
 } as const;
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
+  serviceQuitBehavior: "ask",
+  serviceConnectionRemembered: false,
   localEnvironmentEnabled: true,
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   mainWindowBounds: null,
@@ -96,6 +102,8 @@ const optionalReadableKey = <S extends Schema.Top>(schema: S) =>
   Schema.optionalKey(schema.pipe(Schema.catchDecoding(() => Effect.succeedNone)));
 
 const DesktopSettingsDocument = Schema.Struct({
+  serviceQuitBehavior: optionalReadableKey(DesktopServiceQuitBehaviorSchema),
+  serviceConnectionRemembered: optionalReadableKey(Schema.Boolean),
   localEnvironmentEnabled: optionalReadableKey(Schema.Boolean),
   linuxPasswordStore: optionalReadableKey(Schema.Unknown),
   mainWindowBounds: optionalReadableKey(Schema.NullOr(DesktopWindowBoundsDocument)),
@@ -151,6 +159,13 @@ export class DesktopSettingsWriteError extends Schema.TaggedError<DesktopSetting
 export class DesktopAppSettings extends Context.Service<
   DesktopAppSettings,
   {
+    readonly setServiceQuitBehavior: (
+      behavior: DesktopServiceQuitBehavior,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly rememberServiceConnection: Effect.Effect<
+      DesktopSettingsChange,
+      DesktopSettingsWriteError
+    >;
     readonly load: Effect.Effect<DesktopSettings>;
     readonly get: Effect.Effect<DesktopSettings>;
     readonly setLocalEnvironmentEnabled: (
@@ -225,6 +240,9 @@ function normalizeDesktopSettingsDocument(
     (parsed.wslBackendEnabled === undefined && parsed.wslMode === "wsl");
 
   return {
+    serviceQuitBehavior: parsed.serviceQuitBehavior ?? defaultSettings.serviceQuitBehavior,
+    serviceConnectionRemembered:
+      parsed.serviceConnectionRemembered ?? defaultSettings.serviceConnectionRemembered,
     localEnvironmentEnabled: parsed.localEnvironmentEnabled !== false,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
@@ -249,6 +267,10 @@ function toDesktopSettingsDocument(
 ): DesktopSettingsDocument {
   const document: Mutable<DesktopSettingsDocument> = {};
 
+  if (settings.serviceQuitBehavior !== defaults.serviceQuitBehavior)
+    document.serviceQuitBehavior = settings.serviceQuitBehavior;
+  if (settings.serviceConnectionRemembered !== defaults.serviceConnectionRemembered)
+    document.serviceConnectionRemembered = settings.serviceConnectionRemembered;
   if (settings.localEnvironmentEnabled !== defaults.localEnvironmentEnabled) {
     document.localEnvironmentEnabled = settings.localEnvironmentEnabled;
   }
@@ -592,6 +614,15 @@ export const make = Effect.gen(function* () {
 
       return yield* persist((settings) => setWslOnly(settings, enabled));
     }),
+    setServiceQuitBehavior: Effect.fn("desktop.settings.setServiceQuitBehavior")(
+      function (serviceQuitBehavior) {
+        return persist((settings) => ({ ...settings, serviceQuitBehavior }));
+      },
+    ),
+    rememberServiceConnection: persist((settings) => ({
+      ...settings,
+      serviceConnectionRemembered: true,
+    })),
     setLocalEnvironmentEnabled: Effect.fn("desktop.settings.setLocalEnvironmentEnabled")(
       function* (enabled) {
         yield* Effect.annotateCurrentSpan({ enabled });
@@ -657,6 +688,15 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setWslOnly: Effect.fn("DesktopAppSettings.setWslOnly")(function (enabled) {
           return update((settings) => setWslOnly(settings, enabled));
         }),
+        setServiceQuitBehavior: Effect.fn("DesktopAppSettings.setServiceQuitBehavior")(
+          function (serviceQuitBehavior) {
+            return update((settings) => ({ ...settings, serviceQuitBehavior }));
+          },
+        ),
+        rememberServiceConnection: update((settings) => ({
+          ...settings,
+          serviceConnectionRemembered: true,
+        })),
         setLocalEnvironmentEnabled: Effect.fn("DesktopAppSettings.setLocalEnvironmentEnabled")(
           function (enabled) {
             return update((settings) => setLocalEnvironmentEnabled(settings, enabled));

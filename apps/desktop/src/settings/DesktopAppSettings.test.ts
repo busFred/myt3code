@@ -137,12 +137,16 @@ describe("DesktopSettings", () => {
           yield* settings.setWslBackendEnabled(true);
           yield* settings.setWslDistro("Ubuntu");
           yield* settings.setServerExposureMode("network-accessible");
+          yield* settings.setServiceQuitBehavior("app-and-service");
+          yield* settings.rememberServiceConnection;
           const before = yield* settings.get;
           assert.isTrue((yield* settings.setLocalEnvironmentEnabled(false)).changed);
           assert.deepEqual(yield* settings.load, { ...before, localEnvironmentEnabled: false });
           assert.isFalse((yield* settings.setLocalEnvironmentEnabled(false)).changed);
           yield* settings.setLocalEnvironmentEnabled(true);
           assert.deepEqual(yield* settings.load, before);
+          assert.equal((yield* settings.get).serviceQuitBehavior, "app-and-service");
+          assert.isTrue((yield* settings.get).serviceConnectionRemembered);
         }),
       ),
   );
@@ -224,6 +228,8 @@ describe("DesktopSettings", () => {
 
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
+          serviceQuitBehavior: "ask",
+          serviceConnectionRemembered: false,
           localEnvironmentEnabled: true,
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
           mainWindowMaximized: false,
@@ -377,6 +383,8 @@ describe("DesktopSettings", () => {
 
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
+          serviceQuitBehavior: "ask",
+          serviceConnectionRemembered: false,
           localEnvironmentEnabled: true,
           mainWindowBounds: null,
           mainWindowMaximized: false,
@@ -406,6 +414,8 @@ describe("DesktopSettings", () => {
 
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
+          serviceQuitBehavior: "ask",
+          serviceConnectionRemembered: false,
           localEnvironmentEnabled: true,
           mainWindowBounds: null,
           mainWindowMaximized: false,
