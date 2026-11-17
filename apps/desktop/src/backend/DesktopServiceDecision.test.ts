@@ -95,6 +95,8 @@ describe("background service update", () => {
     ["attach", true, undefined, "1.2.4", "skip"],
     ["attach", true, "unknown", "1.2.4", "skip"],
     ["attach", false, "1.2.3", "1.2.4", "skip"],
+    ["required", true, "1.2.3", "1.2.4", "ask"],
+    ["required", true, "1.2.5", "1.2.4", "skip"],
   ] as const)(
     "%s service=%s %s -> %s",
     (trigger, serviceManaged, serviceVersion, targetVersion, expected) => {
@@ -116,6 +118,10 @@ describe("background service update", () => {
     ["attach", "failure", 0, "update"],
     ["attach", "failure", 1, "continue"],
     ["attach", "failure", 99, "continue"],
+    ["required", "confirm", 0, "update"],
+    ["required", "confirm", 1, "cancel"],
+    ["required", "failure", 0, "update"],
+    ["required", "failure", 1, "cancel"],
   ] as const)("%s %s response=%s -> %s", (trigger, phase, response, expected) => {
     expect(serviceUpdateResponse(trigger, phase, response)).toBe(expected);
   });

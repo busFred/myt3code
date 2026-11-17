@@ -26,6 +26,7 @@ import {
   quitDecision,
   serviceUpdateDecision,
   serviceUpdateResponse,
+  type ServiceUpdateTrigger,
 } from "./DesktopServiceDecision.ts";
 
 export class DesktopServiceConnectionError extends Schema.TaggedError<DesktopServiceConnectionError>()(
@@ -151,7 +152,7 @@ const updateBackgroundService = Effect.fn("DesktopServiceConnection.updateBackgr
 export const coordinateServiceUpdate = Effect.fn(
   "DesktopServiceConnection.coordinateServiceUpdate",
 )(function* (input: {
-  readonly trigger: "install" | "attach";
+  readonly trigger: ServiceUpdateTrigger;
   readonly version: string;
   readonly owner: DesktopHomeOwner.HomeOwner;
   readonly readOwner: Attachment["readOwner"];
@@ -169,14 +170,20 @@ export const coordinateServiceUpdate = Effect.fn(
     return "continue" as const;
   const dialog = yield* ElectronDialog.ElectronDialog;
   const continueLabel =
-    input.trigger === "attach" ? `Continue with v${owner.serverVersion}` : "Update app only";
+    input.trigger === "install"
+      ? "Update app only"
+      : input.trigger === "required"
+        ? "Quit"
+        : `Continue with v${owner.serverVersion}`;
   const confirmation = yield* dialog.showMessageBox({
     type: "warning",
     title: "Update background service",
     message:
       input.trigger === "install"
         ? "Updating restarts the background service. Running agent turns, terminals and remote connections on it will be interrupted."
-        : `The background service runs v${owner.serverVersion}, older than this app (v${input.version}). Update it now? This restarts the service.`,
+        : input.trigger === "required"
+          ? `This app (v${input.version}) can't sign in to the background service v${owner.serverVersion}. Update the service to connect. This restarts the service.`
+          : `The background service runs v${owner.serverVersion}, older than this app (v${input.version}). Update it now? This restarts the service.`,
     buttons:
       input.trigger === "install"
         ? ["Update and restart", "Cancel"]
@@ -353,7 +360,7 @@ export const prepareLocalBackend = Effect.fn("DesktopServiceConnection.prepareLo
       readOwner,
       showSplash: desktopWindow.showUpdatingServiceSplash,
     });
-    const initialOwner = Option.getOrElse(yield* readOwner, () => connectedOwner);
+    let initialOwner = Option.getOrElse(yield* readOwner, () => connectedOwner);
     const httpClient = yield* HttpClient.HttpClient;
     // Each mint spawns the CLI and adds a session, so reuse the bearer until the server changes.
     const bearer = yield* Ref.make(
@@ -459,6 +466,27 @@ export const prepareLocalBackend = Effect.fn("DesktopServiceConnection.prepareLo
         ),
       ),
     );
+    // A newer app's CLI may need a database upgrade the older service refuses, so sign-in can fail.
+    if (
+      serviceUpdateDecision({
+        trigger: "attach",
+        serviceManaged: initialOwner.serviceManaged === true,
+        serviceVersion: initialOwner.serverVersion,
+        targetVersion: environment.appVersion,
+      }) === "ask" &&
+      Result.isFailure(yield* getBearerToken().pipe(Effect.result))
+    ) {
+      const outcome = yield* coordinateServiceUpdate({
+        trigger: "required",
+        version: environment.appVersion,
+        owner: initialOwner,
+        readOwner,
+        showSplash: desktopWindow.showUpdatingServiceSplash,
+      });
+      if (outcome !== "continue") return "quit" as const;
+      const updatedOwner = initialOwner;
+      initialOwner = Option.getOrElse(yield* readOwner, () => updatedOwner);
+    }
     yield* Ref.set(
       state.localBackendAttachment,
       Option.some({
