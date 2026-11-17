@@ -9,6 +9,12 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Path from "effect/Path";
+import * as Result from "effect/Result";
+import type * as ChildProcess from "effect/process/ChildProcess";
+import * as DesktopState from "../app/DesktopState.ts";
+import * as DesktopHomeOwner from "./DesktopHomeOwner.ts";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -43,15 +49,23 @@ const tailnetNetworkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces = {
   ],
 };
 
-function layerMockSpawner(statusJson: string | (() => string) = "{}", onSpawn?: () => void) {
+function layerMockSpawner(
+  statusJson: string | (() => string) = "{}",
+  onSpawn?: () => void,
+  options?: {
+    readonly onCommand: (command: ChildProcess.Command) => Effect.Effect<void>;
+    readonly exitCode: number;
+  },
+) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() =>
-      Effect.sync(() => {
+    ChildProcessSpawner.make((command) =>
+      Effect.gen(function* () {
+        yield* options?.onCommand(command) ?? Effect.void;
         onSpawn?.();
         return ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(1),
-          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(options?.exitCode ?? 0)),
           isRunning: Effect.succeed(false),
           kill: () => Effect.void,
           unref: Effect.succeed(Effect.void),
@@ -106,6 +120,7 @@ function layer(input: {
   });
 
   return DesktopServerExposure.layer.pipe(
+    Layer.provideMerge(DesktopState.layer),
     Layer.provideMerge(input.desktopSettingsLayer ?? DesktopAppSettings.layer),
     Layer.provideMerge(input.managedPolicyLayer ?? DesktopManagedPolicy.layerTest()),
     Layer.provideMerge(NodeFileSystem.layer),
@@ -123,6 +138,7 @@ const withHarness = <A, E, R>(
     A,
     E,
     | R
+    | DesktopState.DesktopState
     | DesktopEnvironment.DesktopEnvironment
     | FileSystem.FileSystem
     | DesktopServerExposure.DesktopServerExposure
@@ -153,6 +169,142 @@ const withHarness = <A, E, R>(
   }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped);
 
 describe("DesktopServerExposure", () => {
+  it.effect.each([undefined, "127.0.0.1", "::1", "0.0.0.0"])(
+    "reads attached service exposure from runtime host %s",
+    (host) =>
+      withHarness(
+        lanNetworkInterfaces,
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const environment = yield* DesktopEnvironment.DesktopEnvironment;
+          const owner = {
+            pid: process.pid,
+            port: 5888,
+            serviceManaged: true,
+            ...(host ? { host } : {}),
+          };
+          yield* fs.makeDirectory(environment.stateDir, { recursive: true });
+          yield* fs.writeFileString(
+            `${environment.stateDir}/server-runtime.json`,
+            JSON.stringify(owner),
+          );
+          const readOwner = DesktopHomeOwner.readLiveHomeOwner().pipe(
+            Effect.provide(
+              yield* Effect.context<
+                DesktopEnvironment.DesktopEnvironment | FileSystem.FileSystem | Path.Path
+              >(),
+            ),
+          );
+          yield* Ref.set(
+            (yield* DesktopState.DesktopState).localBackendAttachment,
+            Option.some({
+              owner,
+              readOwner,
+              getBearerToken: Effect.succeed("bearer"),
+              confirmQuit: () => Effect.succeed(true),
+            }),
+          );
+          const exposure = yield* DesktopServerExposure.DesktopServerExposure;
+          const settings = yield* DesktopAppSettings.DesktopAppSettings;
+          yield* settings.setServerExposureMode("network-accessible");
+          yield* settings.setTailscaleServe({ enabled: true, port: Option.none() });
+          const state = yield* exposure.getState;
+          assert.isFalse(state.tailscaleServeEnabled);
+          assert.equal(state.attachedToService, true);
+          assert.equal(state.mode, host === "0.0.0.0" ? "network-accessible" : "local-only");
+          assert.equal(state.endpointUrl, host === "0.0.0.0" ? "http://192.168.1.20:5888" : null);
+          assert.equal(state.advertisedHost, host === "0.0.0.0" ? "192.168.1.20" : null);
+          assert.deepEqual(
+            (yield* exposure.getAdvertisedEndpoints).map((endpoint) => endpoint.httpBaseUrl),
+            host === "0.0.0.0"
+              ? ["http://127.0.0.1:5888/", "http://192.168.1.20:5888/"]
+              : ["http://127.0.0.1:5888/"],
+          );
+          assert.isTrue(
+            Result.isFailure(
+              yield* exposure.setTailscaleServeEnabled({ enabled: true }).pipe(Effect.result),
+            ),
+          );
+        }),
+      ),
+  );
+
+  it.effect.each([0, 1])(
+    "changes attached service LAN access through the CLI (exit %s)",
+    (exitCode) => {
+      let onCommand: (command: ChildProcess.Command) => Effect.Effect<void> = () =>
+        Effect.die("fixture not initialized");
+      const commands: ReadonlyArray<string>[] = [];
+      return withHarness(
+        lanNetworkInterfaces,
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const environment = yield* DesktopEnvironment.DesktopEnvironment;
+          const owner = { pid: process.pid, port: 5888, serviceManaged: true };
+          yield* fs.makeDirectory(environment.stateDir, { recursive: true });
+          const writeRuntime = Effect.fn("test.writeRuntime")((host: string) =>
+            fs.writeFileString(
+              `${environment.stateDir}/server-runtime.json`,
+              JSON.stringify({ ...owner, host }),
+            ),
+          );
+          yield* writeRuntime("127.0.0.1");
+          const readOwner = DesktopHomeOwner.readLiveHomeOwner().pipe(
+            Effect.provide(
+              yield* Effect.context<
+                DesktopEnvironment.DesktopEnvironment | FileSystem.FileSystem | Path.Path
+              >(),
+            ),
+          );
+          yield* Ref.set(
+            (yield* DesktopState.DesktopState).localBackendAttachment,
+            Option.some({
+              owner,
+              readOwner,
+              getBearerToken: Effect.succeed("bearer"),
+              confirmQuit: () => Effect.succeed(true),
+            }),
+          );
+          onCommand = Effect.fn("test.onCommand")(function* (command: ChildProcess.Command) {
+            assert.equal(command._tag, "StandardCommand");
+            if (command._tag !== "StandardCommand") return;
+            commands.push(command.args.map(String));
+            if (exitCode === 0)
+              yield* writeRuntime(command.args.includes("--lan") ? "0.0.0.0" : "127.0.0.1").pipe(
+                Effect.orDie,
+              );
+          });
+          const exposure = yield* DesktopServerExposure.DesktopServerExposure;
+          for (const mode of ["network-accessible", "local-only"] as const) {
+            const result = yield* exposure.setMode(mode).pipe(Effect.result);
+            if (exitCode !== 0) {
+              assert.isTrue(Result.isFailure(result));
+              if (Result.isFailure(result)) assert.include(result.failure.message, "exit 1");
+              assert.equal((yield* exposure.getState).mode, "local-only");
+            } else {
+              const change = Result.getOrThrow(result);
+              assert.equal(change.requiresRelaunch, false);
+              assert.equal(change.state.mode, mode);
+              assert.equal(
+                (yield* (yield* DesktopAppSettings.DesktopAppSettings).get).serverExposureMode,
+                mode,
+              );
+            }
+          }
+          assert.deepEqual(
+            commands.map((args) => args.slice(1)),
+            [
+              ["up", "--lan", "--yes", "--base-dir", environment.baseDir],
+              ["up", "--no-lan", "--yes", "--base-dir", environment.baseDir],
+            ],
+          );
+        }),
+        {},
+        layerMockSpawner("", undefined, { exitCode, onCommand: (command) => onCommand(command) }),
+      );
+    },
+  );
+
   it.effect("uses cached Tailscale identity to exclude another VPN's pairing address", () => {
     let statusReads = 0;
     return withHarness(
