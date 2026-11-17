@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
@@ -17,6 +18,8 @@ import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { resolveEntryPath, resolveHostCliHint } from "./invocation.ts";
+
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 export const layer = (config: ServerConfig.ServerConfig["Service"]) =>
   BootService.layer({
@@ -291,6 +294,32 @@ const serviceUpdateCommand = Command.make("update", serviceReconcileFlags).pipe(
   ),
 );
 
+const serviceRunningCommand = (action: "start" | "stop") =>
+  Command.make(action, projectLocationFlags).pipe(
+    Command.withDescription(
+      `${action === "start" ? "Start" : "Stop"} the installed background service.`,
+    ),
+    Command.withHandler((flags) =>
+      runServiceCommand(
+        flags,
+        Effect.gen(function* () {
+          const service = yield* BootService.BootService;
+          const status = yield* service.status;
+          const outcome = yield* service[action];
+          yield* Console.log(
+            outcome === "skipped"
+              ? status.otherBaseDir !== undefined
+                ? `The T3 Code service serves ${status.otherBaseDir}, so it was not ${action === "start" ? "started" : "stopped"}. Pass \`${BootService.formatBootServiceBaseDirOption(status.otherBaseDir)}\` to manage it.`
+                : "T3 Code service is not installed."
+              : action === "start"
+                ? "Started the T3 Code service."
+                : "Stopped the T3 Code service. It remains installed.",
+          );
+        }),
+      ),
+    ),
+  );
+
 const serviceRestartCommand = Command.make("restart", projectLocationFlags).pipe(
   Command.withDescription(
     "Restart the background service. Picks up a version installed by `t3 update` that was not restarted at the time.",
@@ -345,7 +374,10 @@ const serviceUninstallCommand = Command.make("uninstall", projectLocationFlags).
   ),
 );
 
-const serviceStatusCommand = Command.make("status", projectLocationFlags).pipe(
+const serviceStatusCommand = Command.make("status", {
+  ...projectLocationFlags,
+  json: Flag.Boolean("json").pipe(Flag.withDefault(false)),
+}).pipe(
   Command.withDescription("Show whether the T3 Code background service is installed."),
   Command.withHandler((flags) =>
     runServiceCommand(
@@ -354,6 +386,16 @@ const serviceStatusCommand = Command.make("status", projectLocationFlags).pipe(
         const service = yield* BootService.BootService;
         const path = yield* Path.Path;
         const status = yield* service.status;
+        if (flags.json) {
+          yield* Console.log(
+            yield* encodeJson({
+              ...status,
+              running: status.running ?? false,
+              problems: status.problems ?? [],
+            }),
+          );
+          return;
+        }
         const protection =
           status.installed && (yield* HostProcess.Platform) === "linux"
             ? yield* ServiceProtection.readProtection(path.dirname(status.unitPath)).pipe(
@@ -492,6 +534,8 @@ export const serviceCommand = Command.make("service").pipe(
   Command.withDescription("Manage the T3 Code background service."),
   Command.withSubcommands([
     serviceInstallCommand,
+    serviceRunningCommand("start"),
+    serviceRunningCommand("stop"),
     serviceRestartCommand,
     serviceUninstallCommand,
     serviceStatusCommand,

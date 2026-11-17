@@ -18,6 +18,7 @@ import {
 } from "@t3tools/shared/desktopBootstrapToken";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopBackendPool from "./DesktopBackendPool.ts";
 import * as DesktopLocalEnvironmentAuth from "./DesktopLocalEnvironmentAuth.ts";
 
@@ -83,6 +84,7 @@ describe("DesktopLocalEnvironmentAuth", () => {
         ]),
       } as unknown as DesktopBackendPool.DesktopBackendPool["Service"]);
       const layerTest = DesktopLocalEnvironmentAuth.layer.pipe(
+        Layer.provide(DesktopState.layer),
         Layer.provide(Layer.mergeAll(layerPool, layerHttpClient, NodeCrypto.layerMac)),
       );
 
@@ -154,6 +156,7 @@ describe("DesktopLocalEnvironmentAuth", () => {
         }).pipe(
           Effect.provide(
             DesktopLocalEnvironmentAuth.layer.pipe(
+              Layer.provide(DesktopState.layer),
               Layer.provide(Layer.mergeAll(poolLayer, httpClientLayer, NodeCrypto.layerMac)),
             ),
           ),
@@ -211,6 +214,7 @@ describe("DesktopLocalEnvironmentAuth", () => {
       const auth = yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth.pipe(
         Effect.provide(
           DesktopLocalEnvironmentAuth.layer.pipe(
+            Layer.provide(DesktopState.layer),
             Layer.provide(Layer.mergeAll(layerPool, layerHttpClient, NodeCrypto.layerMac)),
           ),
         ),
@@ -255,6 +259,7 @@ describe("DesktopLocalEnvironmentAuth", () => {
       const auth = yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth.pipe(
         Effect.provide(
           DesktopLocalEnvironmentAuth.layer.pipe(
+            Layer.provide(DesktopState.layer),
             Layer.provide(
               Layer.mergeAll(layerRestartingPool, layerHttpClient, NodeCrypto.layerMac),
             ),
@@ -312,6 +317,7 @@ describe("DesktopLocalEnvironmentAuth", () => {
       const auth = yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth.pipe(
         Effect.provide(
           DesktopLocalEnvironmentAuth.layer.pipe(
+            Layer.provide(DesktopState.layer),
             Layer.provide(Layer.mergeAll(layerPool, layerHttpClient, NodeCrypto.layerMac)),
           ),
         ),

@@ -794,14 +794,22 @@ export const make = Effect.gen(function* () {
       logUpdaterWarning("Could not write the update-in-progress marker.", { errorTag: error._tag }),
     ),
   );
-  const removeUpdateInProgressMarker = fileSystem
-    .remove(updateInProgressMarkerPath, { force: true })
-    .pipe(Effect.ignore);
+  const removeUpdateInProgressMarker = Ref.get(desktopState.localBackendAttachment).pipe(
+    Effect.flatMap((attachment) =>
+      Option.isSome(attachment)
+        ? Effect.void
+        : fileSystem.remove(updateInProgressMarkerPath, { force: true }).pipe(Effect.ignore),
+    ),
+  );
 
   // Failed or interrupted installs leave no replacement backend; later quits must release the tunnel.
-  const removeUpdateRestartMarker = fileSystem
-    .remove(updateRestartMarkerPath, { force: true })
-    .pipe(Effect.ignore);
+  const removeUpdateRestartMarker = Ref.get(desktopState.localBackendAttachment).pipe(
+    Effect.flatMap((attachment) =>
+      Option.isSome(attachment)
+        ? Effect.void
+        : fileSystem.remove(updateRestartMarkerPath, { force: true }).pipe(Effect.ignore),
+    ),
+  );
 
   const installRecordPath = environment.path.join(
     updateRestartMarkerDir,
@@ -851,6 +859,7 @@ export const make = Effect.gen(function* () {
     [
       finishUpdateAction("install"),
       Ref.set(desktopState.quitting, false),
+      Ref.set(desktopState.quitReason, "user"),
       Ref.set(installRunningBackendsRef, []),
       removeUpdateRestartMarker,
       removeUpdateInProgressMarker,
@@ -930,12 +939,16 @@ export const make = Effect.gen(function* () {
           return { accepted: false, completed: false, failed: false };
         }
 
+        yield* Ref.set(desktopState.quitReason, "update");
         yield* Ref.set(desktopState.quitting, true);
         yield* Ref.set(installRunningBackendsRef, []);
 
         return yield* Effect.gen(function* () {
-          yield* writeUpdateRestartMarker;
-          yield* writeUpdateInProgressMarker;
+          // Attached services own their lifecycle; part 2 coordinates their updates separately.
+          if (Option.isNone(yield* Ref.get(desktopState.localBackendAttachment))) {
+            yield* writeUpdateRestartMarker;
+            yield* writeUpdateInProgressMarker;
+          }
           const { downloadedVersion } = yield* Ref.get(updateStateRef);
           if (downloadedVersion !== null) yield* writeInstallRecord(downloadedVersion);
           // Stop pooled backends and SSH tunnels before quitAndInstall can outrun their scope finalizers.

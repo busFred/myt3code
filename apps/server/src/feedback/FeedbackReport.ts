@@ -179,6 +179,8 @@ export const T3_CLI_COMMANDS: ReadonlyArray<string> = [
   "t3 service",
   "t3 service install",
   "t3 service restart",
+  "t3 service start",
+  "t3 service stop",
   "t3 service uninstall",
   "t3 service status",
   "t3 service protect",

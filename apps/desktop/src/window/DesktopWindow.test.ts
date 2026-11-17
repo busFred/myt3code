@@ -266,6 +266,8 @@ function layerTest(input: {
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
   const layerDesktopAppSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
+    setServiceQuitBehavior: () => Effect.die("unexpected service quit behavior change"),
+    rememberServiceConnection: Effect.die("unexpected service connection change"),
     get: Effect.sync(() => desktopSettings),
     load: Effect.sync(() => desktopSettings),
     setMainWindowBounds: (bounds, isMaximized) =>

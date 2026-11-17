@@ -36,6 +36,8 @@ function makeTestService(
   const uninstalls: Array<true> = [];
   const service = BootService.BootService.of({
     status: Effect.succeed(serviceStatus),
+    start: Effect.succeed("started"),
+    stop: Effect.succeed("stopped"),
     withStopped: (operation) => operation,
     restart: Effect.sync(() => {
       restarts.push(true);
@@ -60,6 +62,40 @@ function makeTestService(
 }
 
 it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands", (it) => {
+  it.effect("prints one JSON status object without human guidance", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-json-" });
+      const serviceStatus = {
+        ...status,
+        running: true,
+        installedVersion: "1.2.3",
+        installedBaseDir: baseDir,
+        problems: [],
+      };
+      vi.spyOn(BootService, "layer").mockReturnValue(
+        Layer.succeed(BootService.BootService, makeTestService(serviceStatus).service),
+      );
+      const lines = yield* Command.runWith(serviceCommand, { version: packageJson.version })([
+        "status",
+        "--json",
+        "--base-dir",
+        baseDir,
+      ]).pipe(
+        Effect.andThen(TestConsole.logLines),
+        Effect.provideService(HostProcess.Environment, {}),
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+            Layer.fresh(TestConsole.layer),
+          ),
+        ),
+      );
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(String(lines[0]))).toMatchObject(serviceStatus);
+    }),
+  );
+
   it.effect.each(
     (["install", "update"] as const).flatMap((command) => [
       {

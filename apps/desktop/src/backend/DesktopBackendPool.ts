@@ -26,6 +26,7 @@ import { ChildProcessSpawner } from "effect/process";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopBackendRecoveryProcess from "./DesktopBackendRecoveryProcess.ts";
+import * as DesktopAttachedBackend from "./DesktopAttachedBackend.ts";
 import * as DesktopHomeOwner from "./DesktopHomeOwner.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
@@ -151,7 +152,8 @@ export const layer = Layer.effect(
     const electronDialog = yield* ElectronDialog.ElectronDialog;
     const electronApp = yield* ElectronApp.ElectronApp;
     const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
-    const { primaryBackendStartup, databaseMigrationProgress } = yield* DesktopState.DesktopState;
+    const { primaryBackendStartup, databaseMigrationProgress, localBackendAttachment } =
+      yield* DesktopState.DesktopState;
     const recovery = yield* makeRecovery;
     // Parent instance scopes to the pool so shutdown runs stop finalizers before the OS kills backends.
     const layerScope = yield* Scope.Scope;
@@ -247,7 +249,7 @@ export const layer = Layer.effect(
       },
     );
 
-    const primary = yield* DesktopBackendManager.makeBackendInstance({
+    const ownedPrimary = yield* DesktopBackendManager.makeBackendInstance({
       id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
       // Resolve lazily: startup loads persisted settings after pool initialization.
       label: configuration.resolvePrimaryLabel,
@@ -295,6 +297,35 @@ export const layer = Layer.effect(
           Effect.andThen(electronApp.quit),
         ),
     });
+
+    const attachedPrimary = yield* DesktopAttachedBackend.make({
+      onReady: (origin, reconnecting) =>
+        desktopWindow.handleBackendReady(origin).pipe(
+          Effect.andThen(
+            reconnecting ? desktopWindow.runMainContentsCommand("reload") : Effect.void,
+          ),
+          Effect.andThen(SubscriptionRef.set(primaryBackendStartup, { _tag: "Ready" })),
+          Effect.catch((error) =>
+            logBackendPoolWarning("failed to open attached backend window", {
+              error: error.message,
+            }),
+          ),
+        ),
+      onShutdown: desktopWindow.handleBackendNotReady,
+    });
+    const selectedPrimary = Ref.get(localBackendAttachment).pipe(
+      Effect.map((attachment) => (Option.isSome(attachment) ? attachedPrimary : ownedPrimary)),
+    );
+    const primary: DesktopBackendInstance = {
+      id: ownedPrimary.id,
+      label: selectedPrimary.pipe(Effect.flatMap((instance) => instance.label)),
+      start: selectedPrimary.pipe(Effect.flatMap((instance) => instance.start)),
+      stop: (options) => selectedPrimary.pipe(Effect.flatMap((instance) => instance.stop(options))),
+      currentConfig: selectedPrimary.pipe(Effect.flatMap((instance) => instance.currentConfig)),
+      snapshot: selectedPrimary.pipe(Effect.flatMap((instance) => instance.snapshot)),
+      waitForReady: (timeout) =>
+        selectedPrimary.pipe(Effect.flatMap((instance) => instance.waitForReady(timeout))),
+    };
 
     const instancesRef = yield* SynchronizedRef.make<
       ReadonlyMap<BackendInstanceId, RegisteredInstance>
