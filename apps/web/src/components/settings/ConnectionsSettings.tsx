@@ -263,7 +263,7 @@ function ConnectionsSettingsContent({
   });
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   const accessEnvironment = useEnvironment(accessEnvironmentId);
-  // Desktop network, Tailscale, and WSL controls change the backend this app spawned.
+  // Desktop controls apply only to the primary local backend.
   const isPrimaryAccess =
     accessEnvironmentId !== null && accessEnvironmentId === primaryEnvironmentId;
   const accessSessionState = useEnvironmentSessionState(accessEnvironmentId);
@@ -421,6 +421,7 @@ function ConnectionsSettingsContent({
   const desktopWslError = desktopWslMutationError ?? desktopWsl.error;
   const isLoadingWslState = desktopWsl.isPending && desktopWsl.data === null;
   const desktopServerExposureState = desktopNetworkAccess.data?.serverExposureState ?? null;
+  const attachedToService = desktopServerExposureState?.attachedToService === true;
   const desktopAdvertisedEndpoints =
     desktopNetworkAccess.data?.advertisedEndpoints ?? EMPTY_ADVERTISED_ENDPOINTS;
   const desktopServerExposureError =
@@ -1064,14 +1065,18 @@ function ConnectionsSettingsContent({
     <SettingsRow
       title={searchableSetting("tailscale-https").title}
       description={
-        tailscaleHttpsEndpoint
-          ? tailscaleHttpsEndpoint.status === "available"
-            ? tailscaleHttpsEndpoint.httpBaseUrl
-            : "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
-          : missingTailscaleEndpointDescription(desktopServerExposureState)
+        attachedToService
+          ? "Managed by the background service. Run `t3 up` on this computer to change it."
+          : tailscaleHttpsEndpoint
+            ? tailscaleHttpsEndpoint.status === "available"
+              ? tailscaleHttpsEndpoint.httpBaseUrl
+              : "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
+            : missingTailscaleEndpointDescription(desktopServerExposureState)
       }
       control={
-        tailscaleHttpsEndpoint ? (
+        attachedToService ? (
+          <Switch checked={false} disabled aria-label="Enable Tailscale HTTPS" />
+        ) : tailscaleHttpsEndpoint ? (
           <Switch
             checked={tailscaleHttpsEndpoint.status === "available"}
             disabled={isUpdatingTailscaleServe}
@@ -1407,9 +1412,11 @@ function ConnectionsSettingsContent({
                     : "Disable network access?"}
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "Let your other devices connect to T3 Code over the network. Pair devices to give them access. T3 Code will restart."
-                    : "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. T3 Code will restart."}
+                  {attachedToService
+                    ? "Changing network access restarts the background service, interrupting its running agent turns and connections. The app will reconnect automatically."
+                    : pendingDesktopServerExposureMode === "network-accessible"
+                      ? "Let your other devices connect to T3 Code over the network. Pair devices to give them access. T3 Code will restart."
+                      : "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. T3 Code will restart."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

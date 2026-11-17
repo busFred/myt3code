@@ -507,6 +507,7 @@ export const DesktopServerExposureModeSchema = Schema.Literals([
 ]);
 
 export interface DesktopServerExposureState {
+  attachedToService?: boolean;
   mode: DesktopServerExposureMode;
   endpointUrl: string | null;
   advertisedHost: string | null;
@@ -515,6 +516,7 @@ export interface DesktopServerExposureState {
 }
 
 export const DesktopServerExposureStateSchema = Schema.Struct({
+  attachedToService: Schema.optionalKey(Schema.Boolean),
   mode: DesktopServerExposureModeSchema,
   endpointUrl: Schema.NullOr(Schema.String),
   advertisedHost: Schema.NullOr(Schema.String),
