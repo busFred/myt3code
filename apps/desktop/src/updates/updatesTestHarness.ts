@@ -6,6 +6,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as PlatformError from "effect/PlatformError";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import { ChildProcessSpawner } from "effect/process";
+import type * as Electron from "electron";
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
 
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -30,6 +35,10 @@ export interface UpdatesHarnessOptions {
   readonly setDisableDifferentialDownload?: Effect.Effect<void>;
   readonly downloadUpdate?: Effect.Effect<void, ElectronUpdater.ElectronUpdaterDownloadUpdateError>;
   readonly quitAndInstall?: Effect.Effect<void, ElectronUpdater.ElectronUpdaterQuitAndInstallError>;
+  readonly mainWindow?: Electron.BrowserWindow;
+  readonly serviceUpdateExitCode?: Effect.Effect<number>;
+  readonly serviceUpdateError?: string;
+  readonly dialogResponses?: ReadonlyArray<number>;
   readonly stopBackend?: Effect.Effect<void>;
   readonly startBackend?: Effect.Effect<void>;
   readonly backendDesiredRunning?: boolean;
@@ -57,6 +66,49 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
   const sentStates: DesktopUpdateState[] = [];
   const installSteps: string[] = [];
+  const serviceUpdateArgs: ReadonlyArray<string>[] = [];
+  const dialogs: Electron.MessageBoxOptions[] = [];
+  const layerDialog = Layer.mock(ElectronDialog.ElectronDialog, {
+    showMessageBox: (dialogOptions) =>
+      Effect.sync(() => {
+        dialogs.push(dialogOptions);
+        return {
+          response: options.dialogResponses?.[dialogs.length - 1] ?? 0,
+          checkboxChecked: false,
+        };
+      }),
+  });
+  const layerSpawner = Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make((command) => {
+      if (command._tag !== "StandardCommand" || !command.args.includes("update"))
+        return Effect.die("unexpected bundled CLI command");
+      return Effect.sync(() => {
+        serviceUpdateArgs.push(command.args as ReadonlyArray<string>);
+        installSteps.push("updateService");
+      }).pipe(
+        Effect.as(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(456),
+            exitCode: (options.serviceUpdateExitCode ?? Effect.succeed(0)).pipe(
+              Effect.map(ChildProcessSpawner.ExitCode),
+            ),
+            isRunning: Effect.succeed(false),
+            kill: () => Effect.die("must not signal the service"),
+            unref: Effect.succeed(Effect.void),
+            stdin: Sink.drain,
+            stdout: Stream.empty,
+            stderr: Stream.make(
+              new TextEncoder().encode(options.serviceUpdateError ?? "download failed"),
+            ),
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          }),
+        ),
+      );
+    }),
+  );
 
   const addListener = (eventName: string, listener: (...args: readonly unknown[]) => void) => {
     const eventListeners = listeners.get(eventName) ?? new Set();
@@ -121,7 +173,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const layerWindow = Layer.succeed(ElectronWindow.ElectronWindow, {
     create: () => Effect.die("unexpected BrowserWindow creation"),
     main: Effect.succeedNone,
-    currentMainOrFirst: Effect.succeedNone,
+    currentMainOrFirst: Effect.succeed(Option.fromNullishOr(options.mainWindow)),
     focusedMainOrFirst: Effect.succeedNone,
     setMain: () => Effect.void,
     clearMain: () => Effect.void,
@@ -295,6 +347,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const layer = DesktopUpdates.layer.pipe(
     Layer.provide(layerFileSystem),
     Layer.provide(DesktopUpdatePolicy.layerTest(options.policy)),
+    Layer.provideMerge(layerDialog),
+    Layer.provideMerge(layerSpawner),
     Layer.provideMerge(layerUpdater),
     Layer.provideMerge(layerWindow),
     Layer.provideMerge(layerBackend),
@@ -318,6 +372,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     checkCount: () => checkCount,
     quitAndInstalls: () => quitAndInstallCount,
     installSteps,
+    serviceUpdateArgs,
+    dialogs,
     updateRestartMarkers,
     updateInProgressMarker: () =>
       [...updateMarkerContents].find(([path]) => path.endsWith("/desktop-update-in-progress"))?.[1],

@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -20,17 +21,26 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopHomeOwner from "./DesktopHomeOwner.ts";
-import { launchDecision, quitDecision } from "./DesktopServiceDecision.ts";
+import {
+  launchDecision,
+  quitDecision,
+  serviceUpdateDecision,
+  serviceUpdateResponse,
+} from "./DesktopServiceDecision.ts";
 
 export class DesktopServiceConnectionError extends Schema.TaggedError<DesktopServiceConnectionError>()(
   "DesktopServiceConnectionError",
   {
-    operation: Schema.Literals(["status", "start", "stop", "pair", "connect"]),
+    operation: Schema.Literals(["status", "start", "stop", "pair", "connect", "update"]),
     cause: Schema.Defect(),
   },
 ) {
   override get message() {
-    return `Could not ${this.operation} the local T3 Code server.`;
+    const detail =
+      this.operation === "update"
+        ? ` ${this.cause instanceof Error ? this.cause.message : String(this.cause)}`
+        : "";
+    return `Could not ${this.operation} the local T3 Code server.${detail}`;
   }
 }
 
@@ -56,6 +66,7 @@ const PairResult = Schema.Struct({
   httpBaseUrl: Schema.String,
 });
 
+const isServiceConnectionError = Schema.is(DesktopServiceConnectionError);
 const decodeServiceStatus = Schema.decodeUnknownEffect(Schema.fromJsonString(ServiceStatus));
 const decodePairResult = Schema.decodeUnknownEffect(Schema.fromJsonString(PairResult));
 
@@ -89,20 +100,134 @@ const runBundledCli = Effect.fn("DesktopServiceConnection.runBundledCli")(functi
           },
         ),
       );
-      const [stdout, , code] = yield* Effect.all(
+      const [stdout, stderr, code] = yield* Effect.all(
         [
           handle.stdout.pipe(Stream.decodeText(), Stream.mkString),
-          handle.stderr.pipe(Stream.runDrain),
+          handle.stderr.pipe(Stream.decodeText(), Stream.mkString),
           handle.exitCode,
         ],
         { concurrency: "unbounded" },
       );
-      if (code !== 0) return yield* new DesktopServiceConnectionError({ operation, cause: code });
+      if (code !== 0)
+        return yield* new DesktopServiceConnectionError({
+          operation,
+          cause: `${(stderr.trim() || stdout.trim()).slice(-4000)} (exit ${code})`,
+        });
       return stdout;
     }),
   ).pipe(
-    Effect.timeout(Duration.seconds(130)),
-    Effect.mapError((cause) => new DesktopServiceConnectionError({ operation, cause })),
+    Effect.timeout(operation === "update" ? Duration.minutes(10) : Duration.seconds(130)),
+    Effect.mapError((cause) =>
+      isServiceConnectionError(cause)
+        ? cause
+        : new DesktopServiceConnectionError({ operation, cause }),
+    ),
+  );
+});
+
+const updateBackgroundService = Effect.fn("DesktopServiceConnection.updateBackgroundService")(
+  function* (version: string, readOwner: Attachment["readOwner"]) {
+    yield* runBundledCli("update", ["update", version, "--yes"]);
+    return yield* readOwner.pipe(
+      Effect.repeat({
+        until: (owner) =>
+          Option.isSome(owner) &&
+          owner.value.serviceManaged === true &&
+          owner.value.serverVersion === version,
+        schedule: Schedule.spaced(Duration.millis(250)),
+      }),
+      Effect.timeout(Duration.minutes(2)),
+      Effect.mapError(
+        () =>
+          new DesktopServiceConnectionError({
+            operation: "update",
+            cause: `Timed out waiting for the background service to run v${version}.`,
+          }),
+      ),
+    );
+  },
+);
+
+export const coordinateServiceUpdate = Effect.fn(
+  "DesktopServiceConnection.coordinateServiceUpdate",
+)(function* (input: {
+  readonly trigger: "install" | "attach";
+  readonly version: string;
+  readonly owner: DesktopHomeOwner.HomeOwner;
+  readonly readOwner: Attachment["readOwner"];
+  readonly showSplash?: Effect.Effect<void>;
+}) {
+  const owner = Option.getOrElse(yield* input.readOwner, () => input.owner);
+  if (
+    serviceUpdateDecision({
+      trigger: input.trigger,
+      serviceManaged: owner.serviceManaged === true,
+      serviceVersion: owner.serverVersion,
+      targetVersion: input.version,
+    }) === "skip"
+  )
+    return "continue" as const;
+  const dialog = yield* ElectronDialog.ElectronDialog;
+  const continueLabel =
+    input.trigger === "attach" ? `Continue with v${owner.serverVersion}` : "Update app only";
+  const confirmation = yield* dialog.showMessageBox({
+    type: "warning",
+    title: "Update background service",
+    message:
+      input.trigger === "install"
+        ? "Updating restarts the background service. Running agent turns, terminals and remote connections on it will be interrupted."
+        : `The background service runs v${owner.serverVersion}, older than this app (v${input.version}). Update it now? This restarts the service.`,
+    buttons:
+      input.trigger === "install"
+        ? ["Update and restart", "Cancel"]
+        : ["Update service", continueLabel],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  const decision = serviceUpdateResponse(input.trigger, "confirm", confirmation.response);
+  if (decision !== "update") return decision;
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      yield* input.showSplash ?? Effect.void;
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+      const window = yield* electronWindow.currentMainOrFirst;
+      if (Option.isSome(window) && !window.value.isDestroyed()) {
+        const target = window.value;
+        const title = target.getTitle();
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (target.isDestroyed()) return;
+            target.setTitle(title);
+            target.setProgressBar(-1);
+          }),
+        );
+        yield* Effect.sync(() => {
+          target.setTitle("Updating background service…");
+          target.setProgressBar(2);
+          target.show();
+        });
+      }
+      while (true) {
+        const result = yield* updateBackgroundService(input.version, input.readOwner).pipe(
+          Effect.result,
+        );
+        if (Result.isSuccess(result)) return "continue" as const;
+        const failure = yield* dialog.showMessageBox({
+          type: "error",
+          title: "Couldn't update the background service",
+          message: "The background service update did not complete.",
+          detail: result.failure.message,
+          buttons:
+            input.trigger === "install"
+              ? ["Retry", continueLabel, "Cancel"]
+              : ["Retry", continueLabel],
+          defaultId: 0,
+          cancelId: input.trigger === "install" ? 2 : 1,
+        });
+        const next = serviceUpdateResponse(input.trigger, "failure", failure.response);
+        if (next !== "update") return next;
+      }
+    }),
   );
 });
 
@@ -186,7 +311,7 @@ export const prepareLocalBackend = Effect.fn("DesktopServiceConnection.prepareLo
       action = "start-attach";
     }
     if (action === "start-attach") {
-      yield* desktopWindow.showConnectingSplash;
+      yield* desktopWindow.showConnectingServiceSplash;
       yield* cli("start", ["service", "start"]);
       owner = yield* readOwner.pipe(
         Effect.repeat({
@@ -204,23 +329,31 @@ export const prepareLocalBackend = Effect.fn("DesktopServiceConnection.prepareLo
         operation: "connect",
         cause: "Missing live owner",
       });
-    const initialOwner = owner.value;
+    const connectedOwner = owner.value;
     if (action === "ask-connect") {
       const result = yield* dialog.showMessageBox({
         type: "question",
         title: "Connect to the local server",
-        message: initialOwner.serviceManaged
-          ? `A T3 Code background service (v${initialOwner.serverVersion ?? status.installedVersion ?? "unknown"}, port ${initialOwner.port}) is running for this data folder. Connect to it?`
+        message: connectedOwner.serviceManaged
+          ? `A T3 Code background service (v${connectedOwner.serverVersion ?? status.installedVersion ?? "unknown"}, port ${connectedOwner.port}) is running for this data folder. Connect to it?`
           : DesktopHomeOwner.homeOwnedMessage(owner),
         buttons: ["Connect", "Quit"],
         defaultId: 0,
         cancelId: 1,
       });
       if (result.response !== 0) return "quit" as const;
-      if (initialOwner.serviceManaged) yield* settingsService.rememberServiceConnection;
+      if (connectedOwner.serviceManaged) yield* settingsService.rememberServiceConnection;
     }
-    if (action === "start-attach" && initialOwner.serviceManaged)
+    if (action === "start-attach" && connectedOwner.serviceManaged)
       yield* settingsService.rememberServiceConnection;
+    yield* coordinateServiceUpdate({
+      trigger: "attach",
+      version: environment.appVersion,
+      owner: connectedOwner,
+      readOwner,
+      showSplash: desktopWindow.showUpdatingServiceSplash,
+    });
+    const initialOwner = Option.getOrElse(yield* readOwner, () => connectedOwner);
     const httpClient = yield* HttpClient.HttpClient;
     // Each mint spawns the CLI and adds a session, so reuse the bearer until the server changes.
     const bearer = yield* Ref.make(

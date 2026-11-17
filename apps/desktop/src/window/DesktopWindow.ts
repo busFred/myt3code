@@ -130,6 +130,8 @@ export class DesktopWindow extends Context.Service<
     readonly activate: Effect.Effect<void, DesktopWindowError>;
     readonly createMainIfBackendReady: Effect.Effect<void, DesktopWindowError>;
     readonly showConnectingSplash: Effect.Effect<void>;
+    readonly showConnectingServiceSplash: Effect.Effect<void>;
+    readonly showUpdatingServiceSplash: Effect.Effect<void>;
     readonly handleBackendReady: (httpBaseUrl: URL) => Effect.Effect<void, DesktopWindowError>;
     readonly handleBackendNotReady: Effect.Effect<void>;
     readonly flushMainWindowBounds: Effect.Effect<void>;
@@ -262,12 +264,21 @@ export function resolveInitialMainWindowBounds(
   return DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE;
 }
 
-function buildConnectingSplashDataUrl(shouldUseDarkColors: boolean): string {
+type SplashMessage =
+  | "Connecting to WSL…"
+  | "Connecting to background service…"
+  | "Updating background service…";
+
+function buildConnectingSplashDataUrl(
+  shouldUseDarkColors: boolean,
+  message: SplashMessage,
+): string {
   const background = getInitialWindowBackgroundColor(shouldUseDarkColors);
   const label = shouldUseDarkColors ? "#9ca3af" : "#6b7280";
   const accent = shouldUseDarkColors ? "#f8fafc" : "#1f2937";
   const track = shouldUseDarkColors ? "rgba(248,250,252,0.18)" : "rgba(31,41,55,0.18)";
-  const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>html,body{margin:0;height:100%}body{background:${background};color:${label};font-family:system-ui,-apple-system,'Segoe UI',sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;-webkit-user-select:none;user-select:none;-webkit-app-region:drag}.spinner{width:26px;height:26px;border:3px solid ${track};border-top-color:${accent};border-radius:50%;animation:spin .8s linear infinite}.label{font-size:13px}@keyframes spin{to{transform:rotate(360deg)}}</style></head><body><div class="spinner"></div><div class="label">Connecting to WSL…</div></body></html>`;
+  const indicator = message === "Connecting to WSL…" ? '<div class="spinner"></div>' : "";
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>html,body{margin:0;height:100%}body{background:${background};color:${label};font-family:system-ui,-apple-system,'Segoe UI',sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;-webkit-user-select:none;user-select:none;-webkit-app-region:drag}.spinner{width:26px;height:26px;border:3px solid ${track};border-top-color:${accent};border-radius:50%;animation:spin .8s linear infinite}.label{font-size:13px}@keyframes spin{to{transform:rotate(360deg)}}</style></head><body>${indicator}<div class="label">${message}</div></body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
@@ -1079,55 +1090,61 @@ export const make = Effect.gen(function* () {
     yield* ensureMain;
   }).pipe(Effect.withSpan("desktop.window.createMainIfBackendReady"));
 
-  const showConnectingSplash = Effect.gen(function* () {
-    if (yield* Ref.get(desktopState.quitting)) return;
-    const existingSplash = yield* Ref.get(splashWindowRef);
-    if (Option.isSome(existingSplash)) return;
-    const existingWindow = yield* electronWindow.currentMainOrFirst;
-    if (Option.isSome(existingWindow)) return;
-
-    const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
-    if (yield* Ref.get(desktopState.quitting)) return;
-    const splash = yield* electronWindow.create({
-      width: 360,
-      height: 220,
-      resizable: false,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      frame: false,
-      center: true,
-      show: false,
-      skipTaskbar: false,
-      backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
-      title: environment.displayName,
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
-    if (yield* Ref.get(desktopState.quitting)) {
-      yield* electronWindow.destroyAll;
-      return;
-    }
-    yield* rendererHistory.register(splash.webContents, { surface: "splash" });
-    yield* Ref.set(splashWindowRef, Option.some(splash));
-    splash.once("closed", () => {
-      void runPromise(Ref.set(splashWindowRef, Option.none()));
-    });
-    splash.once("ready-to-show", () => {
-      if (!splash.isDestroyed()) {
-        splash.show();
+  const showSplash = Effect.fn("desktop.window.showConnectingSplash")(
+    function* (message: SplashMessage) {
+      if (yield* Ref.get(desktopState.quitting)) return;
+      const existingSplash = yield* Ref.get(splashWindowRef);
+      if (Option.isSome(existingSplash)) {
+        if (message === "Updating background service…" && !existingSplash.value.isDestroyed()) {
+          const dark = yield* electronTheme.shouldUseDarkColors;
+          void existingSplash.value.loadURL(buildConnectingSplashDataUrl(dark, message));
+        }
+        return;
       }
-    });
-    void splash.loadURL(buildConnectingSplashDataUrl(shouldUseDarkColors));
-    yield* logWindowInfo("connecting splash shown");
-  }).pipe(
+      const existingWindow = yield* electronWindow.currentMainOrFirst;
+      if (Option.isSome(existingWindow)) return;
+
+      const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
+      if (yield* Ref.get(desktopState.quitting)) return;
+      const splash = yield* electronWindow.create({
+        width: 360,
+        height: 220,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        frame: false,
+        center: true,
+        show: false,
+        skipTaskbar: false,
+        backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
+        title: environment.displayName,
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+        },
+      });
+      if (yield* Ref.get(desktopState.quitting)) {
+        yield* electronWindow.destroyAll;
+        return;
+      }
+      yield* rendererHistory.register(splash.webContents, { surface: "splash" });
+      yield* Ref.set(splashWindowRef, Option.some(splash));
+      splash.once("closed", () => {
+        void runPromise(Ref.set(splashWindowRef, Option.none()));
+      });
+      splash.once("ready-to-show", () => {
+        if (!splash.isDestroyed()) {
+          splash.show();
+        }
+      });
+      void splash.loadURL(buildConnectingSplashDataUrl(shouldUseDarkColors, message));
+      yield* logWindowInfo("connecting splash shown");
+    },
     Effect.catch((error) =>
       logWindowWarning("failed to show connecting splash", { message: error.message }),
     ),
-    Effect.withSpan("desktop.window.showConnectingSplash"),
   );
 
   const dispatchRendererEvent = Effect.fn("desktop.window.dispatchRendererEvent")(function* (
@@ -1188,7 +1205,9 @@ export const make = Effect.gen(function* () {
       yield* createMainIfBackendReady;
     }).pipe(Effect.withSpan("desktop.window.activate")),
     createMainIfBackendReady,
-    showConnectingSplash,
+    showConnectingSplash: showSplash("Connecting to WSL…"),
+    showConnectingServiceSplash: showSplash("Connecting to background service…"),
+    showUpdatingServiceSplash: showSplash("Updating background service…"),
     handleBackendReady: Effect.fn("desktop.window.handleBackendReady")(function* (httpBaseUrl) {
       backendHasStarted = true;
       yield* Ref.set(backendReadyRef, true);
