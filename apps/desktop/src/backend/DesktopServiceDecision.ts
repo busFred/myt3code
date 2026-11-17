@@ -29,8 +29,10 @@ export const quitDecision = (
   return behavior === "ask" ? "ask" : "stop-quit";
 };
 
+export type ServiceUpdateTrigger = "install" | "attach" | "required";
+
 export const serviceUpdateDecision = (input: {
-  readonly trigger: "install" | "attach";
+  readonly trigger: ServiceUpdateTrigger;
   readonly serviceManaged: boolean;
   readonly serviceVersion: string | undefined;
   readonly targetVersion: string;
@@ -46,11 +48,12 @@ export const serviceUpdateDecision = (input: {
 };
 
 export const serviceUpdateResponse = (
-  trigger: "install" | "attach",
+  trigger: ServiceUpdateTrigger,
   phase: "confirm" | "failure",
   response: number,
 ) => {
   if (response === 0) return "update";
+  if (trigger === "required") return "cancel";
   if (trigger === "attach" || (phase === "failure" && response === 1)) return "continue";
   return "cancel";
 };

@@ -262,7 +262,24 @@ it.layer(NodeServices.layer)("service version on attach", (it) => {
     { version: "1.2.3", responses: [0, 1], exits: [1], updates: 1, expectedVersion: "1.2.3" },
     { version: "1.2.4", responses: [], exits: [], updates: 0, expectedVersion: "1.2.4" },
     { version: "1.2.5", responses: [], exits: [], updates: 0, expectedVersion: "1.2.5" },
-  ])("v$version, responses=$responses", (input) =>
+    {
+      version: "1.2.3",
+      responses: [1, 1],
+      exits: [],
+      updates: 0,
+      expectedVersion: "1.2.3",
+      pairFails: true,
+      result: "quit",
+    },
+    {
+      version: "1.2.3",
+      responses: [1, 0],
+      exits: [0],
+      updates: 1,
+      expectedVersion: "1.2.4",
+      pairFails: true,
+    },
+  ])("v$version, responses=$responses, pairFails=$pairFails", (input) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -291,7 +308,12 @@ it.layer(NodeServices.layer)("service version on attach", (it) => {
       const spawner = ChildProcessSpawner.make((command) => {
         if (command._tag !== "StandardCommand") return Effect.die("expected bundled CLI");
         const updating = command.args.includes("update");
-        const code = updating ? (input.exits[updates++] ?? 1) : 0;
+        const pairing = command.args.includes("pair");
+        const code = updating
+          ? (input.exits[updates++] ?? 1)
+          : pairing && input.pairFails === true
+            ? 1
+            : 0;
         if (updating) assert.deepEqual(command.args.slice(1, 4), ["update", "1.2.4", "--yes"]);
         return Effect.succeed(
           ChildProcessSpawner.makeHandle({
@@ -309,12 +331,15 @@ it.layer(NodeServices.layer)("service version on attach", (it) => {
             stdin: Sink.drain,
             stdout: Stream.make(
               new TextEncoder().encode(
-                JSON.stringify({
-                  installed: true,
-                  running: true,
-                  current: true,
-                  problems: [],
-                }),
+                JSON.stringify(
+                  pairing
+                    ? {
+                        credential: "PAIR",
+                        expiresAt: "2026-11-17T00:00:00Z",
+                        httpBaseUrl: "http://127.0.0.1:3773",
+                      }
+                    : { installed: true, running: true, current: true, problems: [] },
+                ),
               ),
             ),
             stderr: Stream.make(new TextEncoder().encode("fixture download failed")),
@@ -325,11 +350,17 @@ it.layer(NodeServices.layer)("service version on attach", (it) => {
         );
       });
       yield* Effect.gen(function* () {
-        assert.equal(yield* prepareLocalBackend(), "attach");
+        const result = yield* prepareLocalBackend();
+        assert.equal(result, input.result ?? "attach");
         const state = yield* DesktopState.DesktopState;
-        const attachment = Option.getOrThrow(yield* Ref.get(state.localBackendAttachment));
-        assert.equal(attachment.owner.serverVersion, input.expectedVersion);
-        assert.equal(attachment.owner.port, input.exits.at(-1) === 0 ? 4773 : 3773);
+        const attachment = yield* Ref.get(state.localBackendAttachment);
+        if (result === "attach") {
+          assert.equal(Option.getOrThrow(attachment).owner.serverVersion, input.expectedVersion);
+          assert.equal(
+            Option.getOrThrow(attachment).owner.port,
+            input.exits.at(-1) === 0 ? 4773 : 3773,
+          );
+        } else assert.isTrue(Option.isNone(attachment));
         assert.equal(updates, input.updates);
         assert.equal(dialogs, input.responses.length);
         assert.equal(splashes, input.updates > 0 ? 1 : 0);
@@ -356,9 +387,11 @@ it.layer(NodeServices.layer)("service version on attach", (it) => {
             Layer.mock(ElectronDialog.ElectronDialog, {
               showMessageBox: (options) =>
                 Effect.sync(() => {
-                  if (dialogs === 0)
+                  if (options.title === "Couldn't update the background service")
+                    assert.include(options.detail, "fixture download failed");
+                  else if (dialogs === 0)
                     assert.include(options.message, "older than this app (v1.2.4)");
-                  else assert.include(options.detail, "fixture download failed");
+                  else assert.include(options.message, "can't sign in to the background service");
                   return { response: input.responses[dialogs++] ?? 99, checkboxChecked: false };
                 }),
             }),
@@ -370,7 +403,23 @@ it.layer(NodeServices.layer)("service version on attach", (it) => {
             }),
             Layer.succeed(
               HttpClient.HttpClient,
-              HttpClient.make(() => Effect.die("pairing is deferred")),
+              HttpClient.make((request) =>
+                Effect.succeed(
+                  HttpClientResponse.fromWeb(
+                    request,
+                    new Response(
+                      JSON.stringify({
+                        access_token: "bearer",
+                        issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+                        token_type: "Bearer",
+                        expires_in: 3600,
+                        scope: "orchestration:read",
+                      }),
+                      { headers: { "content-type": "application/json" } },
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         ),
