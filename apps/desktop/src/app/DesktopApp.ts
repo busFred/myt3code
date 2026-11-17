@@ -241,7 +241,7 @@ const startLocalBackend = Effect.gen(function* () {
     return false;
   }
   if (localBackend === "attach") {
-    yield* (yield* DesktopWindow.DesktopWindow).showConnectingSplash;
+    yield* (yield* DesktopWindow.DesktopWindow).showConnectingServiceSplash;
     yield* primaryBackend.start;
     yield* Effect.forkScoped(
       (yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth).getBearerToken.pipe(

@@ -1,4 +1,5 @@
 import type { DesktopServiceQuitBehavior } from "@t3tools/contracts";
+import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 
 export const launchDecision = (input: {
   readonly enabled: boolean;
@@ -26,4 +27,30 @@ export const quitDecision = (
 ) => {
   if (!attachedToService || reason !== "user" || behavior === "app-only") return "quit";
   return behavior === "ask" ? "ask" : "stop-quit";
+};
+
+export const serviceUpdateDecision = (input: {
+  readonly trigger: "install" | "attach";
+  readonly serviceManaged: boolean;
+  readonly serviceVersion: string | undefined;
+  readonly targetVersion: string;
+}) => {
+  if (!input.serviceManaged || input.serviceVersion === input.targetVersion) return "skip";
+  if (input.trigger === "install") return "ask";
+  return input.serviceVersion !== undefined &&
+    parseSemver(input.serviceVersion) !== null &&
+    parseSemver(input.targetVersion) !== null &&
+    compareSemverVersions(input.serviceVersion, input.targetVersion) < 0
+    ? "ask"
+    : "skip";
+};
+
+export const serviceUpdateResponse = (
+  trigger: "install" | "attach",
+  phase: "confirm" | "failure",
+  response: number,
+) => {
+  if (response === 0) return "update";
+  if (trigger === "attach" || (phase === "failure" && response === 1)) return "continue";
+  return "cancel";
 };

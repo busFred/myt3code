@@ -23,8 +23,10 @@ choice, and `t3 status` to see it.
 
 Instead of the background service, you can keep the desktop app running with
 its local environment enabled. Closing the desktop app's last window stops its
-local server. Saving your sign-in alone does not start a server or make the
-machine reachable.
+local server. With the background service installed, the desktop app uses the
+service instead, and quitting the app leaves it running unless you choose to stop
+it; see [Use the desktop app with the service](./background-service.md#use-the-desktop-app-with-the-service).
+Saving your sign-in alone does not start a server or make the machine reachable.
 
 On your other device, sign in to the same T3 Connect account and choose the
 environment. On the app.t3.codes home page with no computer added yet, signing
