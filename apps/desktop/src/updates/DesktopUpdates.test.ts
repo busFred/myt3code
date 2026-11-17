@@ -705,38 +705,63 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("marks the backend stop for an install as an update restart", () => {
-    let markersAtStop: ReadonlyArray<string> = [];
-    let inProgressAtStop: string | undefined;
-    const harness = makeHarness({
-      stopBackend: Effect.sync(() => {
-        markersAtStop = [...harness.updateRestartMarkers];
-        inProgressAtStop = harness.updateInProgressMarker();
-      }),
-    });
+  it.effect.each([false, true])(
+    "marks only an owned backend stop as an update restart, attached=%s",
+    (attached) => {
+      let markersAtStop: ReadonlyArray<string> = [];
+      let inProgressAtStop: string | undefined;
+      const harness = makeHarness({
+        stopBackend: Effect.sync(() => {
+          markersAtStop = [...harness.updateRestartMarkers];
+          inProgressAtStop = harness.updateInProgressMarker();
+        }),
+      });
 
-    return Effect.scoped(
-      Effect.gen(function* () {
-        yield* TestClock.setTime(1_000);
-        const environment = yield* DesktopEnvironment.DesktopEnvironment;
-        const updates = yield* DesktopUpdates.DesktopUpdates;
-        yield* updates.configure;
-        harness.emit("update-downloaded", { version: "1.2.4" });
-        yield* flushCallbacks;
+      return Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(1_000);
+          const environment = yield* DesktopEnvironment.DesktopEnvironment;
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          if (attached) {
+            const state = yield* DesktopState.DesktopState;
+            yield* Ref.set(
+              state.localBackendAttachment,
+              Option.some({
+                owner: { pid: 123, port: 3773, serviceManaged: true },
+                readOwner: Effect.succeedNone,
+                getBearerToken: Effect.succeed("bearer"),
+                confirmQuit: () => Effect.die("updater must not prompt"),
+              }),
+            );
+          }
+          yield* updates.configure;
+          harness.emit("update-downloaded", { version: "1.2.4" });
+          yield* flushCallbacks;
 
-        assert.isTrue((yield* updates.install).accepted);
-        assert.deepEqual(markersAtStop, [
-          environment.path.join(environment.baseDir, "runtime", DESKTOP_UPDATE_RESTART_MARKER_FILE),
-        ]);
-        // SSH launchers wait on this until the replacement backend publishes its runtime.
-        assert.deepEqual(JSON.parse(inProgressAtStop ?? "null"), {
-          startedAt: 1_000,
-          expiresAt: 61_000,
-        });
-        assert.isDefined(harness.updateInProgressMarker());
-      }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
-  });
+          assert.isTrue((yield* updates.install).accepted);
+          if (attached) {
+            assert.deepEqual(markersAtStop, []);
+            assert.isUndefined(inProgressAtStop);
+            assert.isUndefined(harness.updateInProgressMarker());
+            return;
+          }
+          assert.deepEqual(markersAtStop, [
+            environment.path.join(
+              environment.baseDir,
+              "runtime",
+              DESKTOP_UPDATE_RESTART_MARKER_FILE,
+            ),
+          ]);
+          // SSH launchers wait on this until the replacement backend publishes its runtime.
+          assert.deepEqual(JSON.parse(inProgressAtStop ?? "null"), {
+            startedAt: 1_000,
+            expiresAt: 61_000,
+          });
+          assert.isDefined(harness.updateInProgressMarker());
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    },
+  );
 
   it.effect("records the version an install hands to the installer", () => {
     let recordsAtStop: ReadonlyArray<string> = [];

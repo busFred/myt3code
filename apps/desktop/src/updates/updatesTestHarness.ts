@@ -213,6 +213,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const layerSettings =
     setUpdateChannelError || options.beforeSetUpdateChannel || options.savedChannel
       ? Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
+          setServiceQuitBehavior: () => Effect.die("unexpected service quit behavior change"),
+          rememberServiceConnection: Effect.die("unexpected service connection change"),
           get: Effect.sync(() => testSettings),
           load: Effect.sync(() => testSettings),
           setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),

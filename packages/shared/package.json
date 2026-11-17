@@ -379,6 +379,10 @@
       "types": "./src/testing/gitRepositoryEnv.ts",
       "import": "./src/testing/gitRepositoryEnv.ts"
     },
+    "./bootServiceUnitPath": {
+      "types": "./src/bootServiceUnitPath.ts",
+      "import": "./src/bootServiceUnitPath.ts"
+    },
     "./testing/longTempDir": {
       "types": "./src/testing/longTempDir.ts",
       "import": "./src/testing/longTempDir.ts"

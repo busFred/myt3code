@@ -105,7 +105,7 @@ const requestDesktopShutdownAndWait = Effect.fn("desktop.lifecycle.requestShutdo
 );
 
 interface QuitState {
-  phase: "running" | "waiting" | "allowed";
+  phase: "running" | "deciding" | "waiting" | "allowed";
   waitingSinceNanos: bigint;
 }
 
@@ -163,9 +163,24 @@ function handleBeforeQuit(
     void runEffect(exitIfShutdownStalled(quit, "before-quit"));
     return;
   }
+  if (quit.phase === "deciding") return;
+  quit.phase = "deciding";
   void runEffect(
     Effect.gen(function* () {
       const state = yield* DesktopState.DesktopState;
+      const attachment = yield* Ref.get(state.localBackendAttachment);
+      if (
+        Option.isSome(attachment) &&
+        (yield* Ref.get(state.quitReason)) === "user" &&
+        !(yield* attachment.value.confirmQuit(() => quit.phase === "deciding"))
+      ) {
+        if (quit.phase === "deciding") {
+          quit.phase = "running";
+          yield* (yield* DesktopWindow.DesktopWindow).activate;
+        }
+        return false;
+      }
+      if (quit.phase !== "deciding") return false;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
       yield* startWaitingForShutdown(quit);
       yield* Ref.set(state.quitting, true);
@@ -177,8 +192,23 @@ function handleBeforeQuit(
           ),
         ),
       );
-    }).pipe(Effect.withSpan("desktop.lifecycle.beforeQuit")),
-  ).finally(() => {
+      return true;
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          yield* logLifecycleError("failed to complete desktop quit", { cause });
+          if (quit.phase === "waiting") return true;
+          if (quit.phase === "deciding") {
+            quit.phase = "running";
+            yield* Ref.set((yield* DesktopState.DesktopState).quitting, false);
+          }
+          return false;
+        }),
+      ),
+      Effect.withSpan("desktop.lifecycle.beforeQuit"),
+    ),
+  ).then((proceed) => {
+    if (!proceed) return;
     quit.phase = "allowed";
     void runEffect(
       Effect.gen(function* () {
@@ -262,6 +292,9 @@ export const make = DesktopLifecycle.of({
         desktopWindow.syncAppearance.pipe(Effect.withSpan("desktop.lifecycle.themeUpdated")),
       );
     });
+    yield* electronApp.onSystemShutdown(() => {
+      quit.phase = "allowed";
+    });
     yield* electronApp.onBeforeQuitForUpdate(() => {
       // Electron's updater owns the remaining quit/install/relaunch sequence.
       // Cancelling the following app "before-quit" event breaks that sequence,
@@ -281,6 +314,17 @@ export const make = DesktopLifecycle.of({
         ),
       );
     });
+    yield* electronApp.on(
+      "browser-window-created",
+      (_event: Electron.Event, window: Electron.BrowserWindow) => {
+        window.on("query-session-end", () => {
+          quit.phase = "allowed";
+        });
+        window.on("session-end", () => {
+          quit.phase = "allowed";
+        });
+      },
+    );
     yield* electronApp.on("before-quit", (event: Electron.Event) => {
       handleBeforeQuit(event, runEffect, quit);
     });

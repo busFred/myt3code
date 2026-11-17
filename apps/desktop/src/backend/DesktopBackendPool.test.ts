@@ -120,6 +120,7 @@ function layerPool(
     readonly spawner?: ChildProcessSpawner.ChildProcessSpawner["Service"];
     readonly httpClient?: HttpClient.HttpClient;
     readonly onReady?: Effect.Effect<void>;
+    readonly onNotReady?: Effect.Effect<void>;
     readonly backend?: Effect.Success<ReturnType<typeof makeFakeBackendProcess>>;
   } = {},
 ): Layer.Layer<DesktopBackendPool.DesktopBackendPool> {
@@ -211,7 +212,7 @@ function layerPool(
           createMainIfBackendReady: Effect.die("unexpected window create"),
           showConnectingSplash: Effect.void,
           handleBackendReady: () => options.onReady ?? Effect.void,
-          handleBackendNotReady: Effect.void,
+          handleBackendNotReady: options.onNotReady ?? Effect.void,
           flushMainWindowBounds: Effect.void,
           prepareCaptureReveal: Effect.void,
           dispatchMenuAction: () => Effect.die("unexpected menu action"),
@@ -333,6 +334,80 @@ const makeUpdateMarkerFixture = () =>
   });
 
 describe("DesktopBackendPool", () => {
+  it.effect(
+    "attaches without spawning, reconnects after an outage, and only stops its monitor",
+    () =>
+      Effect.gen(function* () {
+        const initialOwner = {
+          pid: 123,
+          port: 3773,
+          origin: "http://127.0.0.1:3773",
+          serviceManaged: true,
+        };
+        const owner = yield* Ref.make(Option.some(initialOwner));
+        const reads = yield* Ref.make(0);
+        const events = yield* Queue.unbounded<string>();
+        const layer = Layer.merge(
+          DesktopState.layer,
+          layerPool(Ref.makeUnsafe("Local"), {
+            httpClient: HttpClient.make((request) =>
+              Effect.succeed(HttpClientResponse.fromWeb(request, new Response("{}"))),
+            ),
+            onReady: Queue.offer(events, "ready").pipe(Effect.asVoid),
+            onNotReady: Queue.offer(events, "not-ready").pipe(Effect.asVoid),
+            onMainContentsCommand: () => Queue.offer(events, "reload").pipe(Effect.asVoid),
+          }),
+        );
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const state = yield* DesktopState.DesktopState;
+            yield* Ref.set(
+              state.localBackendAttachment,
+              Option.some({
+                owner: initialOwner,
+                readOwner: Ref.update(reads, (count) => count + 1).pipe(
+                  Effect.andThen(Ref.get(owner)),
+                ),
+                getBearerToken: Effect.succeed("bearer"),
+                confirmQuit: () => Effect.die("backend cleanup must not stop the service"),
+              }),
+            );
+            const primary = yield* (yield* DesktopBackendPool.DesktopBackendPool).primary;
+            yield* primary.start;
+            assert.equal(yield* Queue.take(events), "ready");
+            assert.isTrue((yield* primary.snapshot).ready);
+            assert.isTrue(Option.isNone((yield* primary.snapshot).activePid));
+            yield* Ref.set(owner, Option.none());
+            yield* TestClock.adjust("1 second");
+            assert.equal(yield* Queue.take(events), "not-ready");
+            assert.isFalse((yield* primary.snapshot).ready);
+            yield* Ref.set(
+              owner,
+              Option.some({
+                ...initialOwner,
+                pid: 456,
+                port: 3775,
+                origin: "http://127.0.0.1:3775",
+              }),
+            );
+            yield* TestClock.adjust("1 second");
+            assert.equal(yield* Queue.take(events), "ready");
+            assert.equal(yield* Queue.take(events), "reload");
+            assert.equal(
+              Option.getOrThrow(yield* primary.currentConfig).httpBaseUrl.href,
+              "http://127.0.0.1:3775/",
+            );
+            yield* primary.stop();
+            assert.equal(yield* Queue.take(events), "not-ready");
+            const readsAtStop = yield* Ref.get(reads);
+            yield* TestClock.adjust("5 seconds");
+            assert.equal(yield* Ref.get(reads), readsAtStop);
+            assert.isFalse((yield* primary.snapshot).desiredRunning);
+          }),
+        ).pipe(Effect.provide(layer));
+      }),
+  );
+
   it.effect(
     "keeps the update marker after HTTP readiness until the backend publishes its runtime",
     () =>

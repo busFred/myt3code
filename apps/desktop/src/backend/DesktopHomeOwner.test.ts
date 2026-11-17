@@ -76,7 +76,12 @@ describe("DesktopHomeOwner.readLiveHomeOwner", () => {
       );
       assert.deepStrictEqual(
         owner,
-        Option.some({ pid: process.pid, port: 3790, serverVersion: "1.2.3" }),
+        Option.some({
+          pid: process.pid,
+          port: 3790,
+          origin: "http://127.0.0.1:3790",
+          serverVersion: "1.2.3",
+        }),
       );
       assert.include(
         DesktopHomeOwner.homeOwnedMessage(owner),

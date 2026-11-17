@@ -56,6 +56,7 @@ function layerElectronApp(
     setDockIcon: () => Effect.void,
     appendCommandLineSwitch: () => Effect.void,
     removeCommandLineSwitch: () => Effect.void,
+    onSystemShutdown: () => Effect.void,
     onBeforeQuitForUpdate: () => Effect.void,
     on: () => Effect.void,
   } satisfies ElectronApp.ElectronApp["Service"]);

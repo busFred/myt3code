@@ -47,6 +47,8 @@ it.live("reports failure when the Windows cleanup shell cannot start", () =>
             logPath: "",
           }),
           withStopped: (operation) => operation,
+          start: Effect.die("unexpected start"),
+          stop: Effect.die("unexpected stop"),
           restart: Effect.die("unexpected restart"),
           install: () => Effect.die("unexpected install"),
           uninstall: Effect.die("unexpected uninstall"),
@@ -98,6 +100,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("t3 uninstall com
         Layer.succeed(
           BootService.BootService,
           BootService.BootService.of({
+            start: Effect.succeed("started"),
+            stop: Effect.succeed("stopped"),
             status: Effect.succeed({
               supported: true,
               installed: true,

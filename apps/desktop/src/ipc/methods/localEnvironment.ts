@@ -1,3 +1,4 @@
+import { DesktopServiceQuitBehaviorSchema } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -28,6 +29,23 @@ export const setLocalEnvironmentEnabled = makeIpcMethod({
     if (change.changed) {
       yield* lifecycle.relaunch(`localEnvironmentEnabled=${enabled}`);
     }
+  }),
+});
+
+export const getServiceQuitBehavior = makeSyncIpcMethod({
+  channel: IpcChannels.GET_SERVICE_QUIT_BEHAVIOR_CHANNEL,
+  result: DesktopServiceQuitBehaviorSchema,
+  handler: Effect.fn("desktop.ipc.localEnvironment.getServiceQuitBehavior")(function* () {
+    return (yield* (yield* DesktopAppSettings.DesktopAppSettings).get).serviceQuitBehavior;
+  }),
+});
+
+export const setServiceQuitBehavior = makeIpcMethod({
+  channel: IpcChannels.SET_SERVICE_QUIT_BEHAVIOR_CHANNEL,
+  payload: DesktopServiceQuitBehaviorSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.localEnvironment.setServiceQuitBehavior")(function* (behavior) {
+    yield* (yield* DesktopAppSettings.DesktopAppSettings).setServiceQuitBehavior(behavior);
   }),
 });
 

@@ -66,6 +66,7 @@ const layerElectronApp = (calls: ElectronAppCalls) =>
         calls.setDockIcon.push(iconPath);
       }),
     appendCommandLineSwitch: () => Effect.void,
+    onSystemShutdown: () => Effect.void,
     onBeforeQuitForUpdate: () => Effect.void,
     removeCommandLineSwitch: () => Effect.void,
     on: () => Effect.void,

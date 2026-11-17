@@ -51,6 +51,15 @@ import { baseDirFlag, DurationFromString } from "./config.ts";
 import { hostShellWord, resolveHostCliCommand } from "./invocation.ts";
 
 const WELL_KNOWN_ENVIRONMENT_PATH = "/.well-known/t3/environment";
+const encodePairResult = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      credential: Schema.String,
+      expiresAt: Schema.String,
+      httpBaseUrl: Schema.String,
+    }),
+  ),
+);
 const PAIR_PROBE_TIMEOUT = Duration.millis(2_500);
 // Tailscale's first HTTPS request may take seconds to provision a certificate.
 const TAILSCALE_PROBE_ATTEMPTS = 5;
@@ -530,6 +539,7 @@ const tailscaleServePortFlag = Flag.Int("tailscale-serve-port").pipe(
 
 export const pairCommand = Command.make("pair", {
   baseDir: baseDirFlag,
+  json: Flag.Boolean("json").pipe(Flag.withDefault(false)),
   scopes: authScopesFlag(AuthStandardClientScopes),
   ttl: ttlFlag,
   label: labelFlag,
@@ -605,6 +615,16 @@ export const pairCommand = Command.make("pair", {
         ttl: flags.ttl,
         label: flags.label,
       });
+      if (flags.json) {
+        yield* Console.log(
+          yield* encodePairResult({
+            credential: issued.credential,
+            expiresAt: DateTime.formatIso(issued.expiresAt),
+            httpBaseUrl: target.state.origin,
+          }),
+        );
+        return;
+      }
       const pairingUrl = buildPairingUrl(pairingBaseUrl, issued.credential);
 
       yield* Console.log(
