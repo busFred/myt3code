@@ -1,4 +1,5 @@
 import * as NodeModule from "node:module";
+import type * as Electron from "electron";
 
 import { assert, describe, it } from "@effect/vitest";
 import { DESKTOP_UPDATE_RESTART_MARKER_FILE, DesktopUpdateStateSchema } from "@t3tools/contracts";
@@ -705,6 +706,274 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
+  it.effect.each([
+    {
+      label: "updates before installing",
+      responses: [0],
+      exits: [0],
+      version: "1.2.3",
+      updates: 1,
+      installs: 1,
+    },
+    {
+      label: "skips the matching version",
+      responses: [],
+      exits: [],
+      version: "1.2.4",
+      updates: 0,
+      installs: 1,
+    },
+    {
+      label: "retries a CLI failure",
+      responses: [0, 0],
+      exits: [1, 0],
+      version: "1.2.3",
+      updates: 2,
+      installs: 1,
+    },
+    {
+      label: "allows app only after failure",
+      responses: [0, 1],
+      exits: [1],
+      version: "1.2.3",
+      updates: 1,
+      installs: 1,
+    },
+    {
+      label: "cancels after failure",
+      responses: [0, 2],
+      exits: [1],
+      version: "1.2.3",
+      updates: 1,
+      installs: 0,
+    },
+    {
+      label: "cancels confirmation",
+      responses: [1],
+      exits: [],
+      version: "1.2.3",
+      updates: 0,
+      installs: 0,
+    },
+    {
+      label: "keeps owned backend behavior",
+      responses: [],
+      exits: [],
+      version: null,
+      updates: 0,
+      installs: 1,
+    },
+  ])("attached install: $label", (input) => {
+    let attempt = 0;
+    let serviceVersion = input.version;
+    let title = "T3 Code";
+    let revealed = false;
+    const progress: number[] = [];
+    const previousRecord =
+      input.installs === 0
+        ? JSON.stringify({ fromVersion: "1.2.3", targetVersion: "1.2.4" })
+        : undefined;
+    const harness = makeHarness({
+      installRecord: previousRecord,
+      mainWindow: {
+        isDestroyed: () => false,
+        getTitle: () => title,
+        setTitle: (value: string) => {
+          title = value;
+        },
+        setProgressBar: (value: number) => {
+          progress.push(value);
+        },
+        show: () => {
+          revealed = true;
+        },
+      } as Electron.BrowserWindow,
+      dialogResponses: input.responses,
+      serviceUpdateExitCode: Effect.sync(() => {
+        const code = input.exits[attempt++] ?? 1;
+        if (code === 0) serviceVersion = "1.2.4";
+        return code;
+      }),
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const state = yield* DesktopState.DesktopState;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        if (input.version !== null) {
+          const owner = {
+            pid: 123,
+            port: 3773,
+            serviceManaged: true,
+            serverVersion: input.version,
+          };
+          yield* Ref.set(
+            state.localBackendAttachment,
+            Option.some({
+              owner,
+              readOwner: Effect.sync(() =>
+                Option.some({ ...owner, serverVersion: serviceVersion ?? "" }),
+              ),
+              getBearerToken: Effect.succeed("bearer"),
+              confirmQuit: () => Effect.die("update must not ask to stop the service"),
+            }),
+          );
+        }
+        yield* updates.configure;
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        const result = yield* updates.install;
+        assert.equal(harness.serviceUpdateArgs.length, input.updates);
+        assert.equal(harness.quitAndInstalls(), input.installs);
+        assert.equal(harness.dialogs.length, input.responses.length);
+        assert.equal(title, "T3 Code");
+        assert.equal(revealed, input.updates > 0);
+        assert.deepEqual(progress, input.updates > 0 ? [2, -1] : []);
+        if (input.exits.some((code) => code === 1))
+          assert.include(harness.dialogs[1]?.detail, "download failed");
+        if (input.updates > 0 && input.installs > 0) {
+          assert.equal(harness.installSteps[0], "updateService");
+          assert.equal(harness.installSteps.at(-1), "quitAndInstall");
+          assert.deepEqual(harness.serviceUpdateArgs[0]?.slice(1, 4), ["update", "1.2.4", "--yes"]);
+        }
+        assert.equal(yield* Ref.get(state.quitting), input.installs > 0);
+        assert.equal(yield* Ref.get(state.quitReason), input.installs > 0 ? "update" : "user");
+        if (input.installs === 0) {
+          assert.isFalse(result.accepted);
+          assert.equal((yield* updates.getState).status, "downloaded");
+          assert.equal(harness.installRecords.size, 0);
+          assert.equal(harness.previousInstallRecord(), previousRecord);
+          assert.deepEqual(harness.installSteps, input.updates ? ["updateService"] : []);
+          assert.isFalse(yield* updates.isInstallActive);
+        }
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("waits for the service-managed target owner before installing", () =>
+    Effect.gen(function* () {
+      const waiting = yield* Deferred.make<void>();
+      const rejectedOwner = yield* Deferred.make<void>();
+      const harness = makeHarness({ dialogResponses: [0] });
+      let owner = { pid: 123, port: 3773, serviceManaged: true, serverVersion: "1.2.3" };
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const state = yield* DesktopState.DesktopState;
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* Ref.set(
+            state.localBackendAttachment,
+            Option.some({
+              owner,
+              readOwner: Effect.suspend(() => {
+                const signal = !owner.serviceManaged ? rejectedOwner : waiting;
+                return (
+                  harness.serviceUpdateArgs.length > 0
+                    ? Deferred.succeed(signal, undefined)
+                    : Effect.void
+                ).pipe(Effect.as(Option.some(owner)));
+              }),
+              getBearerToken: Effect.succeed("bearer"),
+              confirmQuit: () => Effect.die("must not ask to stop the service"),
+            }),
+          );
+          yield* updates.configure;
+          harness.emit("update-downloaded", { version: "1.2.4" });
+          yield* flushCallbacks;
+          const install = yield* updates.installPrepared("1.2.4").pipe(Effect.forkChild);
+          yield* Deferred.await(waiting);
+          assert.equal(harness.quitAndInstalls(), 0);
+          owner = { ...owner, serverVersion: "1.2.4", serviceManaged: false };
+          yield* TestClock.adjust(Duration.millis(250));
+          yield* Deferred.await(rejectedOwner);
+          assert.equal(harness.quitAndInstalls(), 0);
+          owner = { ...owner, serviceManaged: true };
+          yield* TestClock.adjust(Duration.millis(250));
+          assert.isTrue((yield* Fiber.join(install)).accepted);
+          assert.equal(harness.quitAndInstalls(), 1);
+        }),
+      ).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("offers recovery when the target service never returns", () =>
+    Effect.gen(function* () {
+      const waiting = yield* Deferred.make<void>();
+      const harness = makeHarness({ dialogResponses: [0, 2] });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const state = yield* DesktopState.DesktopState;
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          const owner = { pid: 123, port: 3773, serviceManaged: true, serverVersion: "1.2.3" };
+          yield* Ref.set(
+            state.localBackendAttachment,
+            Option.some({
+              owner,
+              readOwner: Effect.suspend(() =>
+                (harness.serviceUpdateArgs.length > 0
+                  ? Deferred.succeed(waiting, undefined)
+                  : Effect.void
+                ).pipe(Effect.as(Option.some(owner))),
+              ),
+              getBearerToken: Effect.succeed("bearer"),
+              confirmQuit: () => Effect.die("must not ask to stop the service"),
+            }),
+          );
+          yield* updates.configure;
+          harness.emit("update-downloaded", { version: "1.2.4" });
+          yield* flushCallbacks;
+          const install = yield* updates.install.pipe(Effect.forkChild);
+          yield* Deferred.await(waiting);
+          yield* TestClock.adjust(Duration.minutes(2));
+          assert.isFalse((yield* Fiber.join(install)).accepted);
+          assert.equal(harness.quitAndInstalls(), 0);
+          assert.include(harness.dialogs[1]?.detail, "Timed out waiting");
+          assert.isFalse(yield* Ref.get(state.quitting));
+          assert.isFalse(yield* updates.isInstallActive);
+        }),
+      ).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("allows several minutes for the CLI and releases the install on interruption", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        dialogResponses: [0],
+        serviceUpdateExitCode: Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Effect.never),
+        ),
+      });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const state = yield* DesktopState.DesktopState;
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          const owner = { pid: 123, port: 3773, serviceManaged: true, serverVersion: "1.2.3" };
+          yield* Ref.set(
+            state.localBackendAttachment,
+            Option.some({
+              owner,
+              readOwner: Effect.succeedSome(owner),
+              getBearerToken: Effect.succeed("bearer"),
+              confirmQuit: () => Effect.die("must not ask to stop the service"),
+            }),
+          );
+          yield* updates.configure;
+          harness.emit("update-downloaded", { version: "1.2.4" });
+          yield* flushCallbacks;
+          const install = yield* updates.install.pipe(Effect.forkChild);
+          yield* Deferred.await(started);
+          yield* TestClock.adjust(Duration.minutes(3));
+          assert.equal(harness.dialogs.length, 1);
+          assert.equal(harness.quitAndInstalls(), 0);
+          assert.isTrue(yield* updates.isInstallActive);
+          yield* Fiber.interrupt(install);
+          assert.isFalse(yield* updates.isInstallActive);
+          assert.isFalse(yield* Ref.get(state.quitting));
+          assert.equal(yield* Ref.get(state.quitReason), "user");
+        }),
+      ).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
   it.effect.each([false, true])(
     "marks only an owned backend stop as an update restart, attached=%s",
     (attached) => {
@@ -727,7 +996,7 @@ describe("DesktopUpdates", () => {
             yield* Ref.set(
               state.localBackendAttachment,
               Option.some({
-                owner: { pid: 123, port: 3773, serviceManaged: true },
+                owner: { pid: 123, port: 3773, serviceManaged: true, serverVersion: "1.2.4" },
                 readOwner: Effect.succeedNone,
                 getBearerToken: Effect.succeed("bearer"),
                 confirmQuit: () => Effect.die("updater must not prompt"),

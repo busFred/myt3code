@@ -98,6 +98,8 @@ function layerDesktopWindow(
     activate: input.activate ?? Effect.void,
     createMainIfBackendReady: Effect.void,
     showConnectingSplash: Effect.void,
+    showConnectingServiceSplash: Effect.void,
+    showUpdatingServiceSplash: Effect.void,
     handleBackendReady: () => Effect.void,
     handleBackendNotReady: Effect.void,
     flushMainWindowBounds: input.flushMainWindowBounds ?? Effect.void,

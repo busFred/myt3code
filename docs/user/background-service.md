@@ -16,6 +16,8 @@ run these commands on the machine that will host T3 Code:
 | Inspect status and log location       | `t3 service status`    |
 | Move to a newer release               | `t3 update`            |
 | Restart                               | `t3 service restart`   |
+| Stop without removing it              | `t3 service stop`      |
+| Start it again                        | `t3 service start`     |
 | Stop and remove from startup          | `t3 service uninstall` |
 
 Uninstalling the service leaves your projects, threads, and settings intact.
@@ -41,6 +43,28 @@ installing one.
 downloaded versions after showing you the list and asking once. Your projects,
 threads, and settings under `~/.t3/userdata` are kept, along with `service.env`
 under T3 home. Pass `--yes` from a script.
+
+A stopped service stays installed. On Linux and macOS it starts again at the
+next boot or sign-in; on Windows it stays stopped until `t3 service start`.
+
+## Use the desktop app with the service
+
+When the service runs for the same T3 home as the desktop app (normally
+`~/.t3`), the app connects to it instead of starting its own server. The first
+time, it asks before connecting; after that it connects on its own. If the
+service is installed but stopped, the app offers to start it or to use its own
+server for that session.
+
+When you quit the app while it is connected, it asks whether to quit the app
+only or also stop the service. Check **Remember my decision** to stop asking;
+change the choice later in **Settings → Environments**. If you chose to stop
+the service on quit, the app starts it again the next time it opens.
+
+Updating the app from inside it also updates the service to the same version.
+That restarts the service, which interrupts its running agent turns and
+terminals, so the app asks first. If you update the app another way, such as
+with your package manager, the app offers to update an older service when it
+next opens.
 
 ## Local network access
 

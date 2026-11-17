@@ -40,6 +40,7 @@ it.layer(NodeServices.layer)("desktop service connection", (it) => {
               baseDir,
               stateDir,
               serverRoot: "/bundled",
+              appVersion: "1.2.3",
               platform: "linux",
               homeDirectory: baseDir,
             } as DesktopEnvironment.DesktopEnvironment["Service"]),
@@ -180,6 +181,7 @@ it.layer(NodeServices.layer)("desktop service connection", (it) => {
           baseDir,
           stateDir,
           serverRoot: "/bundled",
+          appVersion: "1.2.3",
         } as DesktopEnvironment.DesktopEnvironment["Service"]),
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.mock(ElectronDialog.ElectronDialog, {
@@ -248,6 +250,131 @@ it.layer(NodeServices.layer)("desktop service connection", (it) => {
         );
         assert.equal(errors.length, input.stopFails ? 1 : 0);
       }).pipe(Effect.provide(layer));
+    }),
+  );
+});
+
+it.layer(NodeServices.layer)("service version on attach", (it) => {
+  it.effect.each([
+    { version: "1.2.3", responses: [0], exits: [0], updates: 1, expectedVersion: "1.2.4" },
+    { version: "1.2.3", responses: [1], exits: [], updates: 0, expectedVersion: "1.2.3" },
+    { version: "1.2.3", responses: [0, 0], exits: [1, 0], updates: 2, expectedVersion: "1.2.4" },
+    { version: "1.2.3", responses: [0, 1], exits: [1], updates: 1, expectedVersion: "1.2.3" },
+    { version: "1.2.4", responses: [], exits: [], updates: 0, expectedVersion: "1.2.4" },
+    { version: "1.2.5", responses: [], exits: [], updates: 0, expectedVersion: "1.2.5" },
+  ])("v$version, responses=$responses", (input) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-desktop-service-update-" });
+      const stateDir = path.join(baseDir, "userdata");
+      yield* fs.makeDirectory(stateDir);
+      const runtimePath = path.join(stateDir, "server-runtime.json");
+      const owner = {
+        pid: process.pid,
+        port: 3773,
+        serviceManaged: true,
+        serverVersion: input.version,
+      };
+      yield* fs.writeFileString(runtimePath, JSON.stringify(owner));
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const db = new NodeSqlite.DatabaseSync(path.join(stateDir, "server-owner.sqlite"));
+          db.exec("BEGIN EXCLUSIVE");
+          return db;
+        }),
+        (db) => Effect.sync(() => db.close()),
+      );
+      let updates = 0;
+      let dialogs = 0;
+      let splashes = 0;
+      const spawner = ChildProcessSpawner.make((command) => {
+        if (command._tag !== "StandardCommand") return Effect.die("expected bundled CLI");
+        const updating = command.args.includes("update");
+        const code = updating ? (input.exits[updates++] ?? 1) : 0;
+        if (updating) assert.deepEqual(command.args.slice(1, 4), ["update", "1.2.4", "--yes"]);
+        return Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(456),
+            exitCode: (updating && code === 0
+              ? fs.writeFileString(
+                  runtimePath,
+                  JSON.stringify({ ...owner, serverVersion: "1.2.4", port: 4773 }),
+                )
+              : Effect.void
+            ).pipe(Effect.orDie, Effect.as(ChildProcessSpawner.ExitCode(code))),
+            isRunning: Effect.succeed(false),
+            kill: () => Effect.die("must not signal the service"),
+            unref: Effect.succeed(Effect.void),
+            stdin: Sink.drain,
+            stdout: Stream.make(
+              new TextEncoder().encode(
+                JSON.stringify({
+                  installed: true,
+                  running: true,
+                  current: true,
+                  problems: [],
+                }),
+              ),
+            ),
+            stderr: Stream.make(new TextEncoder().encode("fixture download failed")),
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          }),
+        );
+      });
+      yield* Effect.gen(function* () {
+        assert.equal(yield* prepareLocalBackend(), "attach");
+        const state = yield* DesktopState.DesktopState;
+        const attachment = Option.getOrThrow(yield* Ref.get(state.localBackendAttachment));
+        assert.equal(attachment.owner.serverVersion, input.expectedVersion);
+        assert.equal(attachment.owner.port, input.exits.at(-1) === 0 ? 4773 : 3773);
+        assert.equal(updates, input.updates);
+        assert.equal(dialogs, input.responses.length);
+        assert.equal(splashes, input.updates > 0 ? 1 : 0);
+        assert.equal(
+          (yield* (yield* DesktopAppSettings.DesktopAppSettings).get).serviceQuitBehavior,
+          "ask",
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            DesktopState.layer,
+            DesktopAppSettings.layerTest({
+              ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+              serviceConnectionRemembered: true,
+            }),
+            Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+              path,
+              baseDir,
+              stateDir,
+              serverRoot: "/bundled",
+              appVersion: "1.2.4",
+            } as DesktopEnvironment.DesktopEnvironment["Service"]),
+            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Layer.mock(ElectronDialog.ElectronDialog, {
+              showMessageBox: (options) =>
+                Effect.sync(() => {
+                  if (dialogs === 0)
+                    assert.include(options.message, "older than this app (v1.2.4)");
+                  else assert.include(options.detail, "fixture download failed");
+                  return { response: input.responses[dialogs++] ?? 99, checkboxChecked: false };
+                }),
+            }),
+            Layer.mock(ElectronWindow.ElectronWindow, { currentMainOrFirst: Effect.succeedNone }),
+            Layer.mock(DesktopWindow.DesktopWindow, {
+              showUpdatingServiceSplash: Effect.sync(() => {
+                splashes++;
+              }),
+            }),
+            Layer.succeed(
+              HttpClient.HttpClient,
+              HttpClient.make(() => Effect.die("pairing is deferred")),
+            ),
+          ),
+        ),
+      );
     }),
   );
 });

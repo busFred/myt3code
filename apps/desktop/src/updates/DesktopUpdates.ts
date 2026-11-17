@@ -29,6 +29,9 @@ import * as Stream from "effect/Stream";
 
 import * as DesktopBackendManager from "../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
+import * as DesktopServiceConnection from "../backend/DesktopServiceConnection.ts";
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import { ChildProcessSpawner } from "effect/process";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
@@ -381,6 +384,12 @@ export const make = Effect.gen(function* () {
   const electronUpdater = yield* ElectronUpdater.ElectronUpdater;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const serviceUpdateContext = yield* Effect.context<
+    | DesktopEnvironment.DesktopEnvironment
+    | ElectronWindow.ElectronWindow
+    | ElectronDialog.ElectronDialog
+    | ChildProcessSpawner.ChildProcessSpawner
+  >();
   const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
   const policy = yield* DesktopUpdatePolicy.DesktopUpdatePolicy;
@@ -825,17 +834,21 @@ export const make = Effect.gen(function* () {
       })),
     );
 
-  const resetInstallAction = Effect.all(
+  const cancelInstallAction = Effect.all(
     [
       finishUpdateAction("install"),
       Ref.set(desktopState.quitting, false),
       Ref.set(desktopState.quitReason, "user"),
       Ref.set(installRunningBackendsRef, []),
-      removeUpdateRestartMarker,
-      removeUpdateInProgressMarker,
-      removeInstallRecord,
     ],
     { discard: true },
+  );
+  const resetInstallAction = cancelInstallAction.pipe(
+    Effect.andThen(
+      Effect.all([removeUpdateRestartMarker, removeUpdateInProgressMarker, removeInstallRecord], {
+        discard: true,
+      }),
+    ),
   );
 
   const recoverFailedInstall = Effect.fn("desktop.updates.recoverFailedInstall")(function* (
@@ -849,6 +862,7 @@ export const make = Effect.gen(function* () {
     if (!ownsRecovery) return;
 
     yield* Ref.set(desktopState.quitting, false);
+    yield* Ref.set(desktopState.quitReason, "user");
     yield* removeUpdateRestartMarker;
     yield* removeUpdateInProgressMarker;
     yield* removeInstallRecord;
@@ -912,14 +926,25 @@ export const make = Effect.gen(function* () {
         yield* Ref.set(desktopState.quitReason, "update");
         yield* Ref.set(desktopState.quitting, true);
         yield* Ref.set(installRunningBackendsRef, []);
-
         return yield* Effect.gen(function* () {
-          // Attached services own their lifecycle; part 2 coordinates their updates separately.
-          if (Option.isNone(yield* Ref.get(desktopState.localBackendAttachment))) {
+          const attachment = yield* Ref.get(desktopState.localBackendAttachment);
+          const { downloadedVersion } = yield* Ref.get(updateStateRef);
+          if (Option.isSome(attachment) && downloadedVersion !== null) {
+            const decision = yield* DesktopServiceConnection.coordinateServiceUpdate({
+              trigger: "install",
+              version: downloadedVersion,
+              owner: attachment.value.owner,
+              readOwner: attachment.value.readOwner,
+            }).pipe(Effect.provide(serviceUpdateContext));
+            if (decision === "cancel") {
+              yield* cancelInstallAction;
+              return { accepted: false, completed: false, failed: false };
+            }
+          }
+          if (Option.isNone(attachment)) {
             yield* writeUpdateRestartMarker;
             yield* writeUpdateInProgressMarker;
           }
-          const { downloadedVersion } = yield* Ref.get(updateStateRef);
           if (downloadedVersion !== null) yield* writeInstallRecord(downloadedVersion);
           // Stop pooled backends and SSH tunnels before quitAndInstall can outrun their scope finalizers.
           const instances = yield* pool.list;
@@ -965,7 +990,7 @@ export const make = Effect.gen(function* () {
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
               if (Cause.hasInterruptsOnly(cause)) {
-                return yield* Effect.failCause(cause);
+                return yield* Effect.interrupt;
               }
               const error = new DesktopUpdateUnexpectedActionError({ action: "install", cause });
               yield* recoverFailedInstall(error.message);
