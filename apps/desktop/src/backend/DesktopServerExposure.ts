@@ -18,10 +18,15 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
+import type { HomeOwner } from "./DesktopHomeOwner.ts";
+import * as DesktopState from "../app/DesktopState.ts";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { DesktopServiceConnectionError, runBundledCli } from "./DesktopServiceConnection.ts";
 import * as DesktopManagedPolicy from "../app/DesktopManagedPolicy.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -60,6 +65,18 @@ const DESKTOP_MANUAL_ENDPOINT_PROVIDER: AdvertisedEndpointProvider = {
   label: "Manual",
   kind: "manual",
   isAddon: false,
+};
+
+const serviceExposureMode = (owner: HomeOwner): DesktopServerExposureMode => {
+  const host = owner.host?.trim().toLowerCase();
+  return !host ||
+    host === "localhost" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host.startsWith("127.") ||
+    host.startsWith("::ffff:127.")
+    ? "local-only"
+    : "network-accessible";
 };
 
 const normalizeOptionalHost = (value: string | undefined): string | undefined => {
@@ -246,12 +263,14 @@ export class DesktopTailscaleServePersistenceError extends Schema.TaggedError<De
 }
 
 export const DesktopServerExposureSetModeError = Schema.Union([
+  DesktopServiceConnectionError,
   DesktopServerExposureNoNetworkAddressError,
   DesktopServerExposureModePersistenceError,
 ]);
 export type DesktopServerExposureSetModeError = typeof DesktopServerExposureSetModeError.Type;
 
 export const DesktopServerExposureError = Schema.Union([
+  DesktopServiceConnectionError,
   DesktopServerExposureNoNetworkAddressError,
   DesktopServerExposureModePersistenceError,
   DesktopTailscaleServePersistenceError,
@@ -285,12 +304,16 @@ export class DesktopServerExposure extends Context.Service<
     readonly setTailscaleServeEnabled: (input: {
       readonly enabled: boolean;
       readonly port?: number;
-    }) => Effect.Effect<DesktopServerExposureChange, DesktopTailscaleServePersistenceError>;
+    }) => Effect.Effect<
+      DesktopServerExposureChange,
+      DesktopTailscaleServePersistenceError | DesktopServiceConnectionError
+    >;
     readonly getAdvertisedEndpoints: Effect.Effect<readonly AdvertisedEndpoint[]>;
   }
 >()("@t3tools/desktop/backend/DesktopServerExposure") {}
 
 interface RuntimeState {
+  readonly attachedToService?: boolean;
   readonly requestedMode: DesktopServerExposureMode;
   readonly mode: DesktopServerExposureMode;
   readonly port: number;
@@ -322,6 +345,7 @@ const initialRuntimeState = (): RuntimeState =>
   });
 
 const toContractState = (state: RuntimeState): DesktopServerExposureState => ({
+  ...(state.attachedToService ? { attachedToService: true } : {}),
   mode: state.mode,
   endpointUrl: Option.getOrNull(state.endpointUrl),
   advertisedHost: Option.getOrNull(state.advertisedHost),
@@ -461,6 +485,10 @@ const requiresBackendRelaunch = (previous: RuntimeState, next: RuntimeState): bo
 /** @public */
 export const make = Effect.gen(function* () {
   const config = yield* DesktopConfig.DesktopConfig;
+  const { localBackendAttachment } = yield* DesktopState.DesktopState;
+  const cliContext = yield* Effect.context<
+    DesktopEnvironment.DesktopEnvironment | ChildProcessSpawner.ChildProcessSpawner
+  >();
   const networkInterfaces = yield* DesktopNetworkInterfaces.DesktopNetworkInterfaces;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
@@ -495,12 +523,43 @@ export const make = Effect.gen(function* () {
       ? settings
       : { ...settings, serverExposureMode: "local-only" as const, tailscaleServeEnabled: false };
 
-  const readCurrentState = (currentNetworkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces) =>
-    Ref.get(stateRef).pipe(
-      Effect.map((state) =>
-        withCurrentAdvertisedHost(state, currentNetworkInterfaces, config.desktopLanHostOverride),
-      ),
+  const serviceAttachment = Ref.get(localBackendAttachment).pipe(
+    Effect.map(Option.filter((attachment) => attachment.owner.serviceManaged === true)),
+  );
+  const readCurrentState = Effect.fn("desktop.serverExposure.readCurrentState")(function* (
+    currentNetworkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces,
+  ) {
+    const attachment = yield* serviceAttachment;
+    if (Option.isSome(attachment)) {
+      const owner = Option.getOrElse(
+        yield* attachment.value.readOwner,
+        () => attachment.value.owner,
+      );
+      const mode = serviceExposureMode(owner);
+      const settings = yield* desktopSettings.get;
+      return {
+        ...runtimeStateFromResolvedExposure({
+          requestedMode: mode,
+          settings: { ...settings, tailscaleServeEnabled: false },
+          exposure: resolveDesktopServerExposure({
+            mode,
+            port: owner.port,
+            networkInterfaces: currentNetworkInterfaces,
+            ...(Option.isSome(config.desktopLanHostOverride)
+              ? { advertisedHostOverride: config.desktopLanHostOverride.value }
+              : {}),
+          }),
+          port: owner.port,
+        }),
+        attachedToService: true,
+      };
+    }
+    return withCurrentAdvertisedHost(
+      yield* Ref.get(stateRef),
+      currentNetworkInterfaces,
+      config.desktopLanHostOverride,
     );
+  });
 
   const getState = readNetworkInterfaces.pipe(
     Effect.flatMap(readCurrentState),
@@ -529,6 +588,40 @@ export const make = Effect.gen(function* () {
     mode: DesktopServerExposureMode,
   ) {
     yield* Effect.annotateCurrentSpan({ mode });
+    const attachment = yield* serviceAttachment;
+    if (Option.isSome(attachment)) {
+      yield* runBundledCli("configure", [
+        "up",
+        mode === "network-accessible" ? "--lan" : "--no-lan",
+        "--yes",
+      ]).pipe(Effect.provide(cliContext));
+      yield* desktopSettings
+        .setServerExposureMode(mode)
+        .pipe(
+          Effect.mapError(
+            (cause) => new DesktopServerExposureModePersistenceError({ mode, cause }),
+          ),
+        );
+      yield* attachment.value.readOwner.pipe(
+        Effect.repeat({
+          until: (owner) =>
+            Option.isSome(owner) &&
+            owner.value.serviceManaged === true &&
+            serviceExposureMode(owner.value) === mode,
+          schedule: Schedule.spaced(Duration.millis(250)),
+        }),
+        Effect.timeout(Duration.minutes(2)),
+        Effect.mapError(
+          () =>
+            new DesktopServiceConnectionError({
+              operation: "configure",
+              cause:
+                "Timed out waiting for the background service to apply network access. Check for a T3CODE_HOST override in service.env.",
+            }),
+        ),
+      );
+      return { state: yield* getState, requiresRelaunch: false };
+    }
     const previous = yield* Ref.get(stateRef);
     const currentSettings = yield* desktopSettings.get;
     const nextSettings = {
@@ -571,6 +664,12 @@ export const make = Effect.gen(function* () {
         enabled: input.enabled,
         ...(input.port === undefined ? {} : { port: input.port }),
       });
+      if (Option.isSome(yield* serviceAttachment))
+        return yield* new DesktopServiceConnectionError({
+          operation: "configure",
+          cause:
+            "Tailscale Serve is managed by the background service. Run t3 up on this computer to change it.",
+        });
       const result = yield* desktopSettings
         .setTailscaleServe({
           enabled: input.enabled,
@@ -609,6 +708,8 @@ export const make = Effect.gen(function* () {
       exposure: toResolvedExposure(state),
       customHttpsEndpointUrls: config.desktopHttpsEndpointUrls,
     });
+
+    if (state.attachedToService) return coreEndpoints;
 
     // Spawning Mac App Store Tailscale can prompt for TCC access even when exposure is disabled.
     if (state.mode !== "network-accessible" && !state.tailscaleServeEnabled) {

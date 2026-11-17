@@ -17,6 +17,7 @@ import { BACKEND_QUIT_STOP_TIMEOUT } from "./DesktopBackendManager.ts";
 const HomeOwnerRuntimeState = Schema.Struct({
   pid: Schema.Int,
   port: Schema.Int,
+  host: Schema.optional(Schema.String),
   origin: Schema.optional(Schema.String),
   serviceManaged: Schema.optional(Schema.Boolean),
   serverVersion: Schema.optional(Schema.String),

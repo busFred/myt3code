@@ -32,13 +32,21 @@ import {
 export class DesktopServiceConnectionError extends Schema.TaggedError<DesktopServiceConnectionError>()(
   "DesktopServiceConnectionError",
   {
-    operation: Schema.Literals(["status", "start", "stop", "pair", "connect", "update"]),
+    operation: Schema.Literals([
+      "status",
+      "start",
+      "stop",
+      "pair",
+      "connect",
+      "update",
+      "configure",
+    ]),
     cause: Schema.Defect(),
   },
 ) {
   override get message() {
     const detail =
-      this.operation === "update"
+      this.operation === "update" || this.operation === "configure"
         ? ` ${this.cause instanceof Error ? this.cause.message : String(this.cause)}`
         : "";
     return `Could not ${this.operation} the local T3 Code server.${detail}`;
@@ -71,7 +79,7 @@ const isServiceConnectionError = Schema.is(DesktopServiceConnectionError);
 const decodeServiceStatus = Schema.decodeUnknownEffect(Schema.fromJsonString(ServiceStatus));
 const decodePairResult = Schema.decodeUnknownEffect(Schema.fromJsonString(PairResult));
 
-const runBundledCli = Effect.fn("DesktopServiceConnection.runBundledCli")(function* (
+export const runBundledCli = Effect.fn("DesktopServiceConnection.runBundledCli")(function* (
   operation: DesktopServiceConnectionError["operation"],
   args: ReadonlyArray<string>,
 ) {

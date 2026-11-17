@@ -3,7 +3,6 @@ import * as Effect from "effect/Effect";
 import * as FiberHandle from "effect/FiberHandle";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient } from "effect/http";
@@ -26,7 +25,8 @@ export const make = Effect.fn("DesktopAttachedBackend.make")(function* (input: {
   const config = yield* Ref.make(Option.none<DesktopBackendManager.DesktopBackendStartConfig>());
   let lastOwner: string | undefined;
   let wasReady = false;
-  const check = Effect.fn("DesktopAttachedBackend.check")(function* () {
+  // Health checks run continuously; per-tick spans flood desktop traces.
+  const check = Effect.fnUntraced(function* () {
     const attachment = yield* Ref.get(localBackendAttachment);
     if (Option.isNone(attachment)) return;
     const owner = yield* attachment.value.readOwner;
@@ -95,7 +95,12 @@ export const make = Effect.fn("DesktopAttachedBackend.make")(function* (input: {
       yield* check();
       yield* FiberHandle.run(
         monitor,
-        check().pipe(Effect.repeat(Schedule.spaced(Duration.seconds(1)))),
+        Effect.gen(function* () {
+          while (true) {
+            yield* Effect.sleep(Duration.seconds((yield* SubscriptionRef.get(ready)) ? 5 : 1));
+            yield* check();
+          }
+        }),
         { onlyIfMissing: true },
       );
     }),

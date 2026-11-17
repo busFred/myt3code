@@ -379,6 +379,9 @@ describe("DesktopBackendPool", () => {
             assert.equal(yield* Queue.take(events), "ready");
             assert.isTrue((yield* primary.snapshot).ready);
             assert.isTrue(Option.isNone((yield* primary.snapshot).activePid));
+            const readsWhileReady = yield* Ref.get(reads);
+            yield* TestClock.adjust("4 seconds");
+            assert.equal(yield* Ref.get(reads), readsWhileReady);
             yield* Ref.set(owner, Option.none());
             yield* TestClock.adjust("1 second");
             assert.equal(yield* Queue.take(events), "not-ready");
@@ -392,7 +395,10 @@ describe("DesktopBackendPool", () => {
                 origin: "http://127.0.0.1:3775",
               }),
             );
-            yield* TestClock.adjust("1 second");
+            const readsWhileUnavailable = yield* Ref.get(reads);
+            yield* TestClock.adjust("999 millis");
+            assert.equal(yield* Ref.get(reads), readsWhileUnavailable);
+            yield* TestClock.adjust("1 millis");
             assert.equal(yield* Queue.take(events), "ready");
             assert.equal(yield* Queue.take(events), "reload");
             assert.equal(
