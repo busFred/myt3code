@@ -336,7 +336,7 @@ export const prepareLocalBackend = Effect.fn("DesktopServiceConnection.prepareLo
         title: "Connect to the local server",
         message: connectedOwner.serviceManaged
           ? `A T3 Code background service (v${connectedOwner.serverVersion ?? status.installedVersion ?? "unknown"}, port ${connectedOwner.port}) is running for this data folder. Connect to it?`
-          : DesktopHomeOwner.homeOwnedMessage(owner),
+          : `Another T3 Code server, such as \`t3 serve\` or one started over SSH (${connectedOwner.serverVersion === undefined ? "" : `v${connectedOwner.serverVersion}, `}port ${connectedOwner.port}), is using this data folder. Connect to it? Quitting the app leaves that server running.`,
         buttons: ["Connect", "Quit"],
         defaultId: 0,
         cancelId: 1,
