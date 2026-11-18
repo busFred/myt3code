@@ -81,6 +81,11 @@ A service installed before `T3CODE_LAN` existed keeps listening on the local
 network. `t3 status` says so, and `t3 up --no-lan` turns it off. Any
 `T3CODE_HOST` value replaces this setting.
 
+Enable Tailscale HTTPS with `t3 up --tailscale`, or use **Tailscale HTTPS** in
+**Settings → Sharing & access** while the desktop app is connected to the service.
+Turn it off with `t3 up --no-tailscale` or the same switch. A changed setting
+restarts the service and interrupts running turns. `t3 status` shows the saved choice.
+
 ## Configure the service environment
 
 Put custom environment variables in `service.env` under the service's T3 home
