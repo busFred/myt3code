@@ -29,6 +29,7 @@ import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import {
   repointLauncher,
+  repointRecordedLaunchers,
   resolveMirrorVersion,
   resolveNewestVersion,
   runUpdate,
@@ -199,6 +200,50 @@ it.layer(NodeServices.layer)("t3 update under a managed policy", (it) => {
 });
 
 it.layer(NodeServices.layer)("t3 update launcher", (it) => {
+  it.effect.each(["linux", "win32"] as const)(
+    "repoints only owned recorded launchers on %s",
+    (platform) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+        const oldExe = path.join(root, "runtime/versions/1.0.0/t3");
+        const newExe = path.join(root, "runtime/versions/2.0.0/t3");
+        const launcher = path.join(root, "launch/t3");
+        const foreign = path.join(root, "foreign/t3");
+        const desktop = path.join(root, "bin/t3");
+        const missing = path.join(root, "missing/t3");
+        for (const file of [oldExe, newExe, launcher, foreign, desktop]) {
+          yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+        }
+        yield* fs.writeFileString(oldExe, "");
+        yield* fs.writeFileString(newExe, "");
+        const desktopContents =
+          platform === "win32" ? `"${root}/app/cli" %*` : "#!/bin/sh\nexec app\n";
+        yield* fs.writeFileString(desktop, desktopContents);
+        if (platform === "win32") {
+          yield* fs.writeFileString(launcher, `"${oldExe}" %*`);
+          yield* fs.writeFileString(foreign, `"${root}/other/t3" %*`);
+        } else {
+          yield* fs.symlink(oldExe, launcher);
+          yield* fs.symlink(path.join(root, "other/t3"), foreign);
+        }
+        yield* fs.writeFileString(
+          path.join(root, "runtime/launchers"),
+          [launcher, launcher, foreign, desktop, missing].join("\n"),
+        );
+        assert.isTrue(yield* repointRecordedLaunchers({ baseDir: root, targetEntryPath: newExe }));
+        assert.equal(
+          yield* fs.readFileString(launcher),
+          platform === "win32" ? `@echo off\r\n"${newExe}" %*` : posixLauncherScript(newExe),
+        );
+        assert.equal(yield* fs.readFileString(desktop), desktopContents);
+        if (platform === "win32")
+          assert.equal(yield* fs.readFileString(foreign), `"${root}/other/t3" %*`);
+        else assert.equal(yield* fs.readLink(foreign), path.join(root, "other/t3"));
+      }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, platform)),
+  );
+
   it.effect("replaces a legacy symlink with a script that execs the new version", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
