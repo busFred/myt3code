@@ -1,3 +1,4 @@
+import * as Tailscale from "@t3tools/tailscale";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -51,6 +52,12 @@ it.each([
     label: "a route flag asks nothing and keeps the other route",
     setup: { installed: true, connect: true, lan: true },
     flags: { connect: none, lan: Option.some(false) },
+    expected: { routes: { connect: true, lan: false }, ask: [] },
+  },
+  {
+    label: "Tailscale keeps existing LAN and Connect choices without asking",
+    setup: { installed: true, connect: true, lan: false },
+    flags: { connect: none, lan: none, tailscale: Option.some(true) },
     expected: { routes: { connect: true, lan: false }, ask: [] },
   },
 ])("$label", ({ setup, flags, expected }) => {
@@ -162,12 +169,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
     readonly status?: Partial<BootService.BootServiceStatus>;
     readonly installFails?: boolean;
     readonly restartFails?: boolean;
+    readonly holder?: "ours" | "other" | "none";
+    readonly oldDnsName?: boolean;
+    readonly tailscaleFails?: boolean;
+    readonly disables?: number;
     readonly fails?: boolean;
     readonly reportStatus?: boolean;
     /** Runs as if in a terminal, answering each question with this text. */
     readonly answer?: string;
     /** Lines the run prints, with `<baseDir>` standing for the test's home. */
     readonly prints?: ReadonlyArray<string>;
+    readonly errorMessage?: string;
     readonly omits?: string;
     readonly json?: object;
     readonly env: string;
@@ -176,6 +188,135 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
     readonly restarts: number;
     readonly envAfter: string;
   }>([
+    {
+      label: "OFF removes only our current root (ours, old DNS False)",
+      installed: true,
+      env: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=false\n",
+      args: ["--no-tailscale"],
+      holder: "ours",
+      oldDnsName: false,
+      disables: 1,
+      installs: 0,
+      restarts: 0,
+      envAfter: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=false\n",
+    },
+    {
+      label: "OFF removes only our current root (other, old DNS False)",
+      installed: true,
+      env: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=false\n",
+      args: ["--no-tailscale"],
+      holder: "other",
+      oldDnsName: false,
+      disables: 0,
+      installs: 0,
+      restarts: 0,
+      envAfter: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=false\n",
+    },
+    {
+      label: "OFF removes only our current root (ours, old DNS True)",
+      installed: true,
+      env: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=false\n",
+      args: ["--no-tailscale"],
+      holder: "ours",
+      oldDnsName: true,
+      disables: 0,
+      installs: 0,
+      restarts: 0,
+      envAfter: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=false\n",
+    },
+    {
+      label: "OFF removes only our current root (none, old DNS False)",
+      installed: true,
+      env: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=false\n",
+      args: ["--no-tailscale"],
+      holder: "none",
+      oldDnsName: false,
+      disables: 0,
+      installs: 0,
+      restarts: 0,
+      envAfter: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=false\n",
+    },
+    {
+      label: "HTTPS failure rolls back service settings",
+      installed: true,
+      env: "T3CODE_LAN=false\n",
+      args: ["--tailscale"],
+      tailscaleFails: true,
+      fails: true,
+      installs: 0,
+      restarts: 2,
+      envAfter: "T3CODE_LAN=false\n",
+      errorMessage: "HTTPS enabled on the tailnet",
+    },
+    {
+      label: "status shows saved Tailscale HTTPS",
+      installed: true,
+      reportStatus: true,
+      env: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=true\n",
+      args: ["--json"],
+      installs: 0,
+      restarts: 0,
+      envAfter: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=true\n",
+      json: { tailscale: { enabled: true, port: 443 } },
+    },
+    {
+      label: "Tailscale alone keeps implicit LAN setting",
+      installed: true,
+      env: "",
+      args: ["--tailscale"],
+      installs: 0,
+      restarts: 1,
+      envAfter: "T3CODE_TAILSCALE_SERVE=true\n",
+    },
+    {
+      label: "OFF does not install a service",
+      installed: false,
+      env: "T3CODE_LAN=false\n",
+      args: ["--no-tailscale"],
+      installs: 0,
+      restarts: 0,
+      envAfter: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=false\n",
+    },
+    {
+      label: "Tailscale opens without changing LAN or Connect",
+      installed: true,
+      env: "T3CODE_LAN=false\n",
+      args: ["--tailscale"],
+      installs: 0,
+      restarts: 1,
+      envAfter: "T3CODE_LAN=false\nT3CODE_TAILSCALE_SERVE=true\n",
+      restartFails: false,
+    },
+    {
+      label: "Tailscale already on does not restart",
+      installed: true,
+      env: "T3CODE_LAN=true\nT3CODE_TAILSCALE_SERVE=true\n",
+      args: ["--tailscale"],
+      installs: 0,
+      restarts: 0,
+      envAfter: "T3CODE_LAN=true\nT3CODE_TAILSCALE_SERVE=true\n",
+      restartFails: false,
+    },
+    {
+      label: "Tailscale turns off",
+      installed: true,
+      env: "T3CODE_LAN=true\nT3CODE_TAILSCALE_SERVE=true\n",
+      args: ["--no-tailscale"],
+      installs: 0,
+      restarts: 1,
+      envAfter: "T3CODE_LAN=true\nT3CODE_TAILSCALE_SERVE=false\n",
+      restartFails: false,
+    },
+    {
+      label: "failed Tailscale restart restores the old settings",
+      installed: true,
+      env: "T3CODE_LAN=false\n",
+      args: ["--tailscale"],
+      installs: 0,
+      restarts: 2,
+      envAfter: "T3CODE_LAN=false\n",
+      restartFails: true,
+    },
     {
       label: "nothing changed",
       installed: true,
@@ -332,9 +473,44 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
     },
   ])("keeps service changes and access settings consistent: $label", (input) =>
     Effect.gen(function* () {
+      vi.spyOn(Tailscale, "readTailscaleServeRootHolder").mockImplementation(() =>
+        Effect.succeed(input.holder ?? "ours"),
+      );
+      vi.spyOn(Tailscale, "ensureTailscaleServe").mockImplementation(() =>
+        input.tailscaleFails
+          ? Effect.fail(new Tailscale.TailscaleServeHttpsDisabledError())
+          : Effect.void,
+      );
+      vi.spyOn(Tailscale, "readTailscaleServeRoutesTo").mockImplementation(() =>
+        Effect.succeed([
+          { servePort: 443, mount: "/", host: input.oldDnsName ? "old.ts.net" : "test.ts.net" },
+        ]),
+      );
+      vi.spyOn(Tailscale, "readTailscaleStatus", "get").mockReturnValue(
+        Effect.succeed({
+          running: true,
+          magicDnsName: "test.ts.net",
+          tailnetIpv4Addresses: [],
+          httpsServeEnabled: true,
+        }),
+      );
+      vi.spyOn(Tailscale, "disableTailscaleServe").mockImplementation(() => Effect.void);
       const fs = yield* FileSystem.FileSystem;
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-up-test-" });
       yield* fs.writeFileString(`${baseDir}/service.env`, input.env);
+      yield* fs.makeDirectory(`${baseDir}/userdata`, { recursive: true });
+      yield* fs.writeFileString(
+        `${baseDir}/userdata/server-runtime.json`,
+        JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          port: 3773,
+          host: "127.0.0.1",
+          origin: "http://127.0.0.1:3773",
+          startedAt: "2026-11-17T00:00:00.000Z",
+          serviceManaged: true,
+        }),
+      );
       let installs = 0;
       let restarts = 0;
       const status = {
@@ -407,6 +583,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
       for (const line of input.prints ?? []) {
         expect(lines.join("\n")).toContain(line.replace("<baseDir>", baseDir));
       }
+      if (input.errorMessage !== undefined && exit._tag === "Failure") {
+        expect(Cause.pretty(exit.cause)).toContain(input.errorMessage);
+      }
       if (input.omits !== undefined) {
         expect(lines.join("\n")).not.toContain(input.omits);
       }
@@ -416,6 +595,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
       expect(exit._tag).toBe(
         input.restartFails === true || input.fails === true ? "Failure" : "Success",
       );
+      if (input.disables !== undefined)
+        expect(Tailscale.disableTailscaleServe).toHaveBeenCalledTimes(input.disables);
       expect({ installs, restarts }).toEqual({
         installs: input.installs,
         restarts: input.restarts,

@@ -377,6 +377,7 @@ function ConnectionsSettingsContent({
     | { readonly kind: "wsl-only"; readonly nextValue: boolean };
   const [pendingWslChange, setPendingWslChange] = useState<PendingWslChange | null>(null);
   const isWslConfirmDialogOpen = pendingWslChange !== null;
+  const [attachedTailscaleSetupOpen, setAttachedTailscaleSetupOpen] = useState(false);
   const [pendingTailscaleServeEndpoint, setPendingTailscaleServeEndpoint] =
     useState<AdvertisedEndpoint | null>(null);
   const [disableTailscaleServeDialogOpen, setDisableTailscaleServeDialogOpen] = useState(false);
@@ -541,6 +542,7 @@ function ConnectionsSettingsContent({
       });
       refreshDesktopNetworkAccessState();
       setPendingTailscaleServeEndpoint(null);
+      setAttachedTailscaleSetupOpen(false);
     });
     if (settled._tag === "Failure") {
       const error = Cause.squash(settled.cause);
@@ -1121,7 +1123,9 @@ function ConnectionsSettingsContent({
       title={searchableSetting("tailscale-https").title}
       description={
         attachedToService
-          ? gt("Managed by the background service. Run `t3 up` on this computer to change it.")
+          ? gt(
+              "Changing Tailscale HTTPS restarts the background service. The app reconnects automatically.",
+            )
           : tailscaleHttpsEndpoint
             ? tailscaleHttpsEndpoint.status === "available"
               ? tailscaleHttpsEndpoint.httpBaseUrl
@@ -1130,7 +1134,21 @@ function ConnectionsSettingsContent({
       }
       control={
         attachedToService ? (
-          <Switch checked={false} disabled aria-label="Enable Tailscale HTTPS" />
+          <Switch
+            checked={desktopServerExposureState?.tailscaleServeEnabled ?? false}
+            disabled={isUpdatingTailscaleServe}
+            onCheckedChange={(checked) => {
+              if (checked) {
+                setTailscaleServePortInput(
+                  String(
+                    desktopServerExposureState?.tailscaleServePort ?? DEFAULT_TAILSCALE_SERVE_PORT,
+                  ),
+                );
+                setAttachedTailscaleSetupOpen(true);
+              } else setDisableTailscaleServeDialogOpen(true);
+            }}
+            aria-label={gt("Enable Tailscale HTTPS")}
+          />
         ) : tailscaleHttpsEndpoint ? (
           <Switch
             checked={tailscaleHttpsEndpoint.status === "available"}
@@ -1684,7 +1702,14 @@ function ConnectionsSettingsContent({
                   <T>Disable Tailscale HTTPS?</T>
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  <T>T3 Code will restart the local backend without Tailscale Serve.</T>
+                  {attachedToService ? (
+                    <T>
+                      Changing Tailscale HTTPS restarts the background service, interrupting its
+                      running agent turns and connections. The app will reconnect automatically.
+                    </T>
+                  ) : (
+                    <T>T3 Code will restart the local backend without Tailscale Serve.</T>
+                  )}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -1712,10 +1737,13 @@ function ConnectionsSettingsContent({
             </AlertDialogPopup>
           </AlertDialog>
           <Dialog
-            open={pendingTailscaleServeEndpoint !== null}
+            open={pendingTailscaleServeEndpoint !== null || attachedTailscaleSetupOpen}
             onOpenChange={(open) => {
               if (isUpdatingTailscaleServe) return;
-              if (!open) setPendingTailscaleServeEndpoint(null);
+              if (!open) {
+                setPendingTailscaleServeEndpoint(null);
+                setAttachedTailscaleSetupOpen(false);
+              }
             }}
           >
             <DialogPopup className="max-w-md">
@@ -1724,10 +1752,17 @@ function ConnectionsSettingsContent({
                   <T>Set up Tailscale HTTPS?</T>
                 </DialogTitle>
                 <DialogDescription>
-                  <T>
-                    T3 Code will restart the local backend with Tailscale Serve enabled and ask
-                    Tailscale to proxy HTTPS traffic to this backend.
-                  </T>
+                  {attachedToService ? (
+                    <T>
+                      Changing Tailscale HTTPS restarts the background service, interrupting its
+                      running agent turns and connections. The app will reconnect automatically.
+                    </T>
+                  ) : (
+                    <T>
+                      T3 Code will restart the local backend with Tailscale Serve enabled and ask
+                      Tailscale to proxy HTTPS traffic to this backend.
+                    </T>
+                  )}
                 </DialogDescription>
               </DialogHeader>
               <DialogPanel>
@@ -1744,7 +1779,7 @@ function ConnectionsSettingsContent({
                     step={1}
                     value={tailscaleServePortInput}
                     onChange={(event) => setTailscaleServePortInput(event.target.value)}
-                    disabled={isUpdatingTailscaleServe}
+                    disabled={isUpdatingTailscaleServe || attachedToService}
                   />
                 </label>
                 {!isTailscaleServePortValid ? (

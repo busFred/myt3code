@@ -1,3 +1,7 @@
+import * as NodeUtil from "node:util";
+import * as FileSystem from "effect/FileSystem";
+import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
 import {
   createAdvertisedEndpoint,
   type CreateAdvertisedEndpointInput,
@@ -485,6 +489,8 @@ const requiresBackendRelaunch = (previous: RuntimeState, next: RuntimeState): bo
 /** @public */
 export const make = Effect.gen(function* () {
   const config = yield* DesktopConfig.DesktopConfig;
+  const fs = yield* FileSystem.FileSystem;
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const { localBackendAttachment } = yield* DesktopState.DesktopState;
   const cliContext = yield* Effect.context<
     DesktopEnvironment.DesktopEnvironment | ChildProcessSpawner.ChildProcessSpawner
@@ -526,6 +532,30 @@ export const make = Effect.gen(function* () {
   const serviceAttachment = Ref.get(localBackendAttachment).pipe(
     Effect.map(Option.filter((attachment) => attachment.owner.serviceManaged === true)),
   );
+  const readServiceTailscale = Effect.fn("desktop.serverExposure.readServiceTailscale")(
+    function* () {
+      const contents = yield* fs
+        .readFileString(environment.path.join(environment.baseDir, "service.env"))
+        .pipe(Effect.orElseSucceed(() => ""));
+      const provider = ConfigProvider.fromEnv({
+        env: Object.fromEntries(
+          Object.entries(NodeUtil.parseEnv(contents)).flatMap(([key, value]) =>
+            value === undefined ? [] : [[key, value]],
+          ),
+        ),
+      });
+      return {
+        enabled: yield* Config.Boolean("T3CODE_TAILSCALE_SERVE")
+          .pipe(Config.withDefault(false))
+          .parse(provider)
+          .pipe(Effect.orElseSucceed(() => false)),
+        port: yield* Config.Int("T3CODE_TAILSCALE_SERVE_PORT")
+          .pipe(Config.withDefault(443))
+          .parse(provider)
+          .pipe(Effect.orElseSucceed(() => 443)),
+      };
+    },
+  );
   const readCurrentState = Effect.fn("desktop.serverExposure.readCurrentState")(function* (
     currentNetworkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces,
   ) {
@@ -536,11 +566,16 @@ export const make = Effect.gen(function* () {
         () => attachment.value.owner,
       );
       const mode = serviceExposureMode(owner);
+      const tailscale = yield* readServiceTailscale();
       const settings = yield* desktopSettings.get;
       return {
         ...runtimeStateFromResolvedExposure({
           requestedMode: mode,
-          settings: { ...settings, tailscaleServeEnabled: false },
+          settings: {
+            ...settings,
+            tailscaleServeEnabled: tailscale.enabled,
+            tailscaleServePort: tailscale.port,
+          },
           exposure: resolveDesktopServerExposure({
             mode,
             port: owner.port,
@@ -664,12 +699,36 @@ export const make = Effect.gen(function* () {
         enabled: input.enabled,
         ...(input.port === undefined ? {} : { port: input.port }),
       });
-      if (Option.isSome(yield* serviceAttachment))
-        return yield* new DesktopServiceConnectionError({
-          operation: "configure",
-          cause:
-            "Tailscale Serve is managed by the background service. Run t3 up on this computer to change it.",
-        });
+      const attachment = yield* serviceAttachment;
+      if (Option.isSome(attachment)) {
+        yield* runBundledCli("configure", [
+          "up",
+          input.enabled ? "--tailscale" : "--no-tailscale",
+          "--yes",
+        ]).pipe(Effect.provide(cliContext));
+        yield* attachment.value.readOwner.pipe(
+          Effect.repeat({
+            until: (owner) => Option.isSome(owner) && owner.value.serviceManaged === true,
+            schedule: Schedule.spaced(Duration.millis(250)),
+          }),
+          Effect.timeout(Duration.minutes(2)),
+          Effect.mapError(
+            () =>
+              new DesktopServiceConnectionError({
+                operation: "configure",
+                cause: "Timed out waiting for the background service to apply Tailscale HTTPS.",
+              }),
+          ),
+        );
+        const state = yield* getState;
+        if (state.tailscaleServeEnabled !== input.enabled)
+          return yield* new DesktopServiceConnectionError({
+            operation: "configure",
+            cause:
+              "The background service did not apply Tailscale HTTPS. Check t3 service status and try again.",
+          });
+        return { state, requiresRelaunch: false };
+      }
       const result = yield* desktopSettings
         .setTailscaleServe({
           enabled: input.enabled,
@@ -709,8 +768,6 @@ export const make = Effect.gen(function* () {
       customHttpsEndpointUrls: config.desktopHttpsEndpointUrls,
     });
 
-    if (state.attachedToService) return coreEndpoints;
-
     // Spawning Mac App Store Tailscale can prompt for TCC access even when exposure is disabled.
     if (state.mode !== "network-accessible" && !state.tailscaleServeEnabled) {
       return coreEndpoints;
@@ -720,7 +777,8 @@ export const make = Effect.gen(function* () {
       port: state.port,
       serveEnabled: state.tailscaleServeEnabled,
       servePort: state.tailscaleServePort,
-      networkInterfaces: currentNetworkInterfaces,
+      networkInterfaces:
+        state.attachedToService && state.mode === "local-only" ? {} : currentNetworkInterfaces,
       readStatus: Cache.get(
         tailscaleStatusCache,
         tailscaleIpv4AddressKey(currentNetworkInterfaces),
