@@ -32,6 +32,7 @@ import {
   pinnedRuntimeVersionsDir,
   prunePinnedRuntimes,
   recordPinnedRuntimeLauncher,
+  readPosixLauncherTarget,
   resolveLauncherPath,
   windowsShimTarget,
   writePosixLauncher,
@@ -202,6 +203,59 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   );
   return Option.some(launcher);
 });
+
+export const repointRecordedLaunchers = Effect.fn("cli.update.repoint_recorded_launchers")(
+  function* (input: { readonly baseDir: string; readonly targetEntryPath: string }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const platform = yield* HostProcess.Platform;
+    const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
+    const records = yield* fs
+      .readFileString(path.join(input.baseDir, "runtime", "launchers"))
+      .pipe(
+        Effect.catch((error) =>
+          error.reason._tag === "NotFound"
+            ? Effect.succeed("")
+            : Console.warn(`Could not read recorded t3 launchers: ${error}`).pipe(Effect.as("")),
+        ),
+      );
+    let repointed = false;
+    for (const launcher of new Set(
+      records.split(/\r?\n/).filter((entry) => path.isAbsolute(entry)),
+    )) {
+      const result = yield* Effect.gen(function* () {
+        if (platform === "win32") {
+          const contents = yield* fs.readFileString(launcher).pipe(Effect.option);
+          const target = Option.isSome(contents) ? windowsShimTarget(contents.value) : undefined;
+          if (target === undefined || !launcherOwnsVersionsDir(path, versionsDir, target))
+            return false;
+          yield* fs.writeFileString(launcher, `@echo off\r\n"${input.targetEntryPath}" %*`);
+        } else {
+          const link = yield* fs.readLink(launcher).pipe(Effect.option);
+          const target = Option.isSome(link)
+            ? path.resolve(path.dirname(launcher), link.value)
+            : yield* readPosixLauncherTarget(launcher);
+          if (target === undefined || !launcherOwnsVersionsDir(path, versionsDir, target))
+            return false;
+          yield* writePosixLauncher({
+            launcher,
+            executable: input.targetEntryPath,
+            exclusive: false,
+          });
+        }
+        return true;
+      }).pipe(
+        Effect.catch((error) =>
+          Console.warn(`Could not repoint the t3 launcher at ${launcher}: ${error}`).pipe(
+            Effect.as(false),
+          ),
+        ),
+      );
+      repointed ||= result;
+    }
+    return repointed;
+  },
+);
 
 /** Windows executables see their own path, so find the installer shim by matching t3.cmd targets on PATH. */
 export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(function* (
@@ -543,6 +597,13 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     targetEntryPath: runtime.entryPath,
   });
 
+  const recordedRepointed = Option.isNone(repointed)
+    ? yield* repointRecordedLaunchers({
+        baseDir: input.baseDir,
+        targetEntryPath: runtime.entryPath,
+      })
+    : false;
+
   // Use today's service manager for the target version. Inside the service it hands off to
   // the target CLI, so stopping this process cannot interrupt the switch.
   let servicePlan: BootService.BootServicePlan | undefined;
@@ -586,7 +647,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   }
 
   progress.success(`Installed T3 Code ${targetVersion}`);
-  if (Option.isSome(repointed)) {
+  if (Option.isSome(repointed) || recordedRepointed) {
     yield* Console.log("  Run t3 to get started.\n");
   } else {
     yield* Console.log(`  Run ${runtime.entryPath}\n`);
