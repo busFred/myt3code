@@ -220,11 +220,13 @@ describe("DesktopServerExposure", () => {
               ? ["http://127.0.0.1:5888/", "http://192.168.1.20:5888/"]
               : ["http://127.0.0.1:5888/"],
           );
-          assert.isTrue(
-            Result.isFailure(
-              yield* exposure.setTailscaleServeEnabled({ enabled: true }).pipe(Effect.result),
-            ),
+          yield* fs.writeFileString(
+            `${environment.baseDir}/service.env`,
+            "T3CODE_TAILSCALE_SERVE=true\nT3CODE_TAILSCALE_SERVE_PORT=8443\n",
           );
+          const serviceState = yield* exposure.getState;
+          assert.isTrue(serviceState.tailscaleServeEnabled);
+          assert.equal(serviceState.tailscaleServePort, 8443);
         }),
       ),
   );
@@ -296,6 +298,85 @@ describe("DesktopServerExposure", () => {
             [
               ["up", "--lan", "--yes", "--base-dir", environment.baseDir],
               ["up", "--no-lan", "--yes", "--base-dir", environment.baseDir],
+            ],
+          );
+        }),
+        {},
+        layerMockSpawner("", undefined, { exitCode, onCommand: (command) => onCommand(command) }),
+      );
+    },
+  );
+
+  it.effect.each([0, 1])(
+    "changes attached service Tailscale HTTPS through the CLI (exit %s)",
+    (exitCode) => {
+      let onCommand: (command: ChildProcess.Command) => Effect.Effect<void> = () =>
+        Effect.die("fixture not initialized");
+      const commands: ReadonlyArray<string>[] = [];
+      return withHarness(
+        lanNetworkInterfaces,
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const environment = yield* DesktopEnvironment.DesktopEnvironment;
+          const owner = { pid: process.pid, port: 5888, serviceManaged: true };
+          yield* fs.makeDirectory(environment.stateDir, { recursive: true });
+          const writeRuntime = Effect.fn("test.writeRuntime")((host: string) =>
+            fs.writeFileString(
+              `${environment.stateDir}/server-runtime.json`,
+              JSON.stringify({ ...owner, host }),
+            ),
+          );
+          yield* writeRuntime("127.0.0.1");
+          const readOwner = DesktopHomeOwner.readLiveHomeOwner().pipe(
+            Effect.provide(
+              yield* Effect.context<
+                DesktopEnvironment.DesktopEnvironment | FileSystem.FileSystem | Path.Path
+              >(),
+            ),
+          );
+          yield* Ref.set(
+            (yield* DesktopState.DesktopState).localBackendAttachment,
+            Option.some({
+              owner,
+              readOwner,
+              getBearerToken: Effect.succeed("bearer"),
+              confirmQuit: () => Effect.succeed(true),
+            }),
+          );
+          onCommand = Effect.fn("test.onCommand")(function* (command: ChildProcess.Command) {
+            if (command._tag !== "StandardCommand") return;
+            commands.push(command.args.map(String));
+            if (exitCode === 0)
+              yield* fs
+                .writeFileString(
+                  `${environment.baseDir}/service.env`,
+                  `T3CODE_TAILSCALE_SERVE=${command.args.includes("--tailscale")}\n`,
+                )
+                .pipe(Effect.orDie);
+          });
+          const exposure = yield* DesktopServerExposure.DesktopServerExposure;
+          for (const enabled of [true, false]) {
+            const result = yield* exposure
+              .setTailscaleServeEnabled({ enabled })
+              .pipe(Effect.result);
+            if (exitCode !== 0) {
+              assert.isTrue(Result.isFailure(result));
+              if (Result.isFailure(result)) assert.include(result.failure.message, "exit 1");
+              assert.isFalse((yield* exposure.getState).tailscaleServeEnabled);
+            } else {
+              const change = Result.getOrThrow(result);
+              assert.equal(change.requiresRelaunch, false);
+              assert.equal(change.state.tailscaleServeEnabled, enabled);
+              assert.isFalse(
+                (yield* (yield* DesktopAppSettings.DesktopAppSettings).get).tailscaleServeEnabled,
+              );
+            }
+          }
+          assert.deepEqual(
+            commands.map((args) => args.slice(1)),
+            [
+              ["up", "--tailscale", "--yes", "--base-dir", environment.baseDir],
+              ["up", "--no-tailscale", "--yes", "--base-dir", environment.baseDir],
             ],
           );
         }),

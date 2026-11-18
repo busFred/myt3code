@@ -205,6 +205,10 @@ On Linux, T3 Code also needs permission to manage Tailscale; see
 for non-root users. If any of these is missing, T3 Code still starts but can't
 add the HTTPS route.
 
+For the background service, run `t3 up --tailscale` (turn it off with
+`t3 up --no-tailscale`), or use the desktop switch while connected to the
+service. Changing this setting restarts the service and interrupts running turns.
+
 To start a command-line server with Tailscale HTTPS:
 
 ```bash

@@ -1,8 +1,20 @@
+import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
+import * as NetService from "@t3tools/shared/Net";
+import {
+  disableTailscaleServe,
+  ensureTailscaleServe,
+  readTailscaleServeRootHolder,
+  readTailscaleServeRoutesTo,
+  readTailscaleStatus,
+} from "@t3tools/tailscale";
+import { formatHostForUrl, isWildcardHost } from "@t3tools/shared/hostClassification";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
+import * as Duration from "effect/Duration";
+import * as Schedule from "effect/Schedule";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
@@ -16,6 +28,7 @@ import { CLOUD_ENDPOINT_RUNTIME_CONFIG, CLOUD_LINK_REVOKED } from "../cloud/conf
 import { hasCloudPublicConfig } from "../cloud/publicConfig.ts";
 import { compareExactServiceVersions } from "../cloud/serviceProtocol.ts";
 import * as ServerConfig from "../config.ts";
+import { readLiveServerRuntimeState } from "../serverRuntimeState.ts";
 import * as ManagedLimits from "../policy/managedLimits.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
@@ -42,6 +55,8 @@ interface Setup {
   /** T3 Connect revoked the link; `t3 connect` links again. */
   readonly connectRevoked: boolean;
   readonly lan: boolean;
+  readonly tailscale: boolean;
+  readonly tailscalePort: number;
   /** An installed service with no T3CODE_LAN or T3CODE_HOST keeps the old default: on. */
   readonly lanFromOldDefault: boolean;
   readonly host: string | undefined;
@@ -68,6 +83,12 @@ const readSetup = Effect.fn("cli.up.read_setup")(function* () {
   const lan = yield* Config.Boolean("T3CODE_LAN")
     .pipe(Config.option)
     .parse(ConfigProvider.fromEnv({ env: entries }));
+  const tailscale = yield* Config.Boolean("T3CODE_TAILSCALE_SERVE")
+    .pipe(Config.withDefault(false))
+    .parse(ConfigProvider.fromEnv({ env: entries }));
+  const tailscalePort = yield* Config.Int("T3CODE_TAILSCALE_SERVE_PORT")
+    .pipe(Config.withDefault(443))
+    .parse(ConfigProvider.fromEnv({ env: entries }));
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const connectRevoked =
     hasCloudPublicConfig && Option.isSome(yield* secrets.get(CLOUD_LINK_REVOKED));
@@ -83,6 +104,8 @@ const readSetup = Effect.fn("cli.up.read_setup")(function* () {
   const servesThisHome = service.installed && service.otherBaseDir === undefined;
   return {
     service,
+    tailscale,
+    tailscalePort,
     connect,
     connectRevoked,
     lan: Option.getOrElse(lan, () => servesThisHome),
@@ -98,9 +121,16 @@ const readSetup = Effect.fn("cli.up.read_setup")(function* () {
  */
 export const planRoutes = (
   setup: { readonly installed: boolean; readonly connect: boolean | null; readonly lan: boolean },
-  flags: { readonly connect: Option.Option<boolean>; readonly lan: Option.Option<boolean> },
+  flags: {
+    readonly connect: Option.Option<boolean>;
+    readonly lan: Option.Option<boolean>;
+    readonly tailscale?: Option.Option<boolean>;
+  },
 ) => {
-  const ask = Option.isNone(flags.connect) && Option.isNone(flags.lan);
+  const ask =
+    Option.isNone(flags.connect) &&
+    Option.isNone(flags.lan) &&
+    Option.isNone(flags.tailscale ?? Option.none());
   const start = {
     connect: setup.connect === true || (ask && !setup.installed && setup.connect !== null),
     lan: setup.lan,
@@ -174,6 +204,7 @@ const formatSetup = (setup: Setup, hints: Hints) => {
                 : "off",
           ] as const,
         ]),
+    ["Tailscale HTTPS", setup.tailscale ? `on · port ${setup.tailscalePort}` : "off"],
     [
       "Local network",
       setup.host !== undefined
@@ -199,13 +230,19 @@ const formatSetup = (setup: Setup, hints: Hints) => {
   ].join("\n");
 };
 
-const formatNextSteps = (routes: Routes, serviceInstalled: boolean, hints: Hints) =>
+const formatNextSteps = (
+  routes: Routes & { readonly tailscale?: boolean },
+  serviceInstalled: boolean,
+  hints: Hints,
+) =>
   [
     ...(routes.connect
       ? ["On your other device, sign in to T3 Connect with the same account."]
       : []),
-    ...(routes.lan ? [`Run \`${hints.pair}\`. Use the code on your other device.`] : []),
-    ...(routes.connect || routes.lan
+    ...(routes.lan || routes.tailscale
+      ? [`Run \`${hints.pair}\`. Use the code on your other device.`]
+      : []),
+    ...(routes.connect || routes.lan || routes.tailscale
       ? []
       : [
           serviceInstalled
@@ -220,10 +257,12 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
   readonly baseDir: Option.Option<string>;
   readonly connect: Option.Option<boolean>;
   readonly lan: Option.Option<boolean>;
+  readonly tailscale?: Option.Option<boolean>;
   readonly yes: boolean;
   readonly headless: boolean;
 }) {
-  const { baseDir } = yield* ServerConfig.ServerConfig;
+  const serverConfig = yield* ServerConfig.ServerConfig;
+  const { baseDir } = serverConfig;
   const service = yield* BootService.BootService;
   const baseDirArgs = Option.match(flags.baseDir, {
     onNone: () => [],
@@ -245,6 +284,15 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
     });
   }
 
+  const tailscale = Option.getOrElse(flags.tailscale ?? Option.none(), () => before.tailscale);
+  const tailscaleChanged = tailscale !== before.tailscale;
+  if (tailscale && !before.service.supported && Option.isSome(flags.tailscale ?? Option.none())) {
+    return yield* new CliError.UserError({
+      cause: "tailscale",
+      userMessage:
+        "The background service is unavailable on this system. Use t3 serve --tailscale-serve instead.",
+    });
+  }
   const current = { connect: before.connect === true, lan: before.lan };
   // A publish-only link is not "on", but a rollback must put it back.
   const priorPublishOnly =
@@ -281,14 +329,20 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
     });
   }
   if (routes.connect && !current.connect) yield* requireConnectAllowed;
-  if (routes.lan && !current.lan) {
+  if ((routes.lan && !current.lan) || (tailscale && !before.tailscale)) {
     const policy = yield* ManagedPolicy.ManagedPolicy;
     if (!ManagedLimits.allowsRemoteClients(policy)) {
       return yield* ManagedLimits.refuseRemoteClients(policy);
     }
   }
   // Nothing to run in the background, but a route left on still gets turned off.
-  if (!before.service.installed && !routes.connect && !routes.lan) {
+  if (
+    !before.service.installed &&
+    !routes.connect &&
+    !routes.lan &&
+    !tailscale &&
+    Option.isNone(flags.tailscale ?? Option.none())
+  ) {
     if (current.connect || before.connectRevoked) {
       yield* disconnectCloud({ clearAuthorization: false });
     }
@@ -307,7 +361,7 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
   const restart =
     before.service.installed &&
     (before.service.current || newer) &&
-    (needsRestart(current, routes) || stopped);
+    (needsRestart(current, routes) || tailscaleChanged || stopped);
   // An older or broken service is reinstalled, which restarts it too.
   const update = before.service.installed && !before.service.current && !newer && !stopped;
   if ((restart || update) && interactive && !stopped) {
@@ -337,15 +391,32 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
     !routes.connect && (current.connect || before.connectRevoked)
       ? (yield* disconnectCloud({ clearAuthorization: false })).status === "failed"
       : false;
-  const previousLan = (yield* CliService.readServiceEnv(baseDir)).entries.T3CODE_LAN;
+  const previousEnv = (yield* CliService.readServiceEnv(baseDir)).entries;
+  const previousLan = previousEnv.T3CODE_LAN;
+  const tailscaleOnly =
+    Option.isSome(flags.tailscale ?? Option.none()) &&
+    Option.isNone(flags.lan) &&
+    Option.isNone(flags.connect);
+  const tailscaleEnv = Option.isSome(flags.tailscale ?? Option.none())
+    ? { T3CODE_TAILSCALE_SERVE: String(tailscale) }
+    : {};
+  const previousRuntime = yield* readLiveServerRuntimeState(serverConfig.serverRuntimeStatePath);
   // Also with no service manager: the file records the choice that `t3 status` shows.
-  yield* CliService.writeServiceEnv(baseDir, { T3CODE_LAN: String(routes.lan) });
+  yield* CliService.writeServiceEnv(baseDir, {
+    ...(tailscaleOnly ? {} : { T3CODE_LAN: String(routes.lan) }),
+    ...tailscaleEnv,
+  });
   // When the service step fails, an installed service still runs with the old
   // value, so the file goes back to match it.
   // A new T3 Connect link is undone too, with any tunnel the failed start saved, so a
   // rerun sees it as a change and restarts. The sign-in stays.
   const restoreServiceEnv = before.service.installed
-    ? CliService.writeServiceEnv(baseDir, { T3CODE_LAN: previousLan }).pipe(
+    ? CliService.writeServiceEnv(baseDir, {
+        T3CODE_LAN: previousLan,
+        ...(Option.isSome(flags.tailscale ?? Option.none())
+          ? { T3CODE_TAILSCALE_SERVE: previousEnv.T3CODE_TAILSCALE_SERVE }
+          : {}),
+      }).pipe(
         Effect.andThen(
           !routes.connect || current.connect
             ? Effect.void
@@ -381,10 +452,12 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
       );
     }
   });
+  const noServiceNeeded = !before.service.installed && !routes.connect && !routes.lan && !tailscale;
   let started = false;
+  let serviceFailed = false;
   if (!before.service.supported) {
     yield* printServeCommand("Background service unavailable.");
-  } else {
+  } else if (!noServiceNeeded) {
     if (newer) {
       yield* Console.log(`Keeping installed service version t3@${installedVersion}.`);
     }
@@ -402,11 +475,13 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
         );
     if ("failed" in result && before.service.installed) {
       // The old service still runs, so a foreground server would clash with it.
+      serviceFailed = true;
       yield* restoreServiceEnv;
       yield* Console.log(
         `Service setup failed: ${result.failed} Fix that, then run \`${hints.up}\` again.`,
       );
     } else if ("failed" in result) {
+      serviceFailed = true;
       yield* printServeCommand(`Service setup failed: ${result.failed}`);
     } else if (result.changed) {
       yield* Console.log(CliService.formatServiceChange(result));
@@ -442,13 +517,85 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
       }
     }
   }
+  if (!serviceFailed && Option.isSome(flags.tailscale ?? Option.none())) {
+    yield* Effect.gen(function* () {
+      const runtime = yield* readLiveServerRuntimeState(serverConfig.serverRuntimeStatePath).pipe(
+        Effect.repeat({
+          until: (value) => !tailscale || Option.isSome(value),
+          schedule: Schedule.spaced(Duration.millis(250)),
+        }),
+        Effect.timeout(Duration.seconds(90)),
+      );
+      const owner = Option.getOrElse(tailscale ? runtime : previousRuntime, () =>
+        Option.getOrUndefined(runtime),
+      );
+      if (owner?.serviceManaged !== true) {
+        if (!tailscale) return;
+        return yield* new CliError.UserError({
+          cause: "tailscale",
+          userMessage:
+            "The background service is not ready. Check t3 service status and try again.",
+        });
+      }
+      const host = owner.host;
+      const localHost = host && !isWildcardHost(host) ? formatHostForUrl(host) : "127.0.0.1";
+      const localPort = owner.port;
+      const holder = yield* readTailscaleServeRootHolder(before.tailscalePort, {
+        host: localHost.replace(/^\[|\]$/gu, ""),
+        port: localPort,
+      });
+      if (tailscale) {
+        if (holder === "other")
+          return yield* new CliError.UserError({
+            cause: "tailscale",
+            userMessage:
+              "Tailscale HTTPS already serves another app. Its mapping was left unchanged.",
+          });
+        yield* ensureTailscaleServe({ localHost, localPort, servePort: before.tailscalePort });
+      } else if (holder === "ours") {
+        const [routes, status] = yield* Effect.all(
+          [
+            readTailscaleServeRoutesTo({
+              host: localHost.replace(/^\[|\]$/gu, ""),
+              port: localPort,
+            }),
+            readTailscaleStatus,
+          ],
+          { concurrency: 2 },
+        );
+        const ours = routes.some(
+          (route) =>
+            route.servePort === before.tailscalePort &&
+            route.mount === "/" &&
+            route.owner === undefined &&
+            route.ambiguous === undefined &&
+            route.host?.toLowerCase() === status.magicDnsName?.toLowerCase(),
+        );
+        if (ours) yield* disableTailscaleServe({ servePort: before.tailscalePort });
+      }
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new CliError.UserError({
+            cause,
+            userMessage:
+              cause._tag === "TailscaleCommandExitError" &&
+              cause.stderrDiagnostic === "permission-denied"
+                ? "Tailscale denied permission. On Linux, configure Tailscale operator permission for the service user."
+                : cause.message,
+          }),
+      ),
+      Effect.tapError(() => (tailscaleChanged || started ? rollBack : Effect.void)),
+      Effect.provide(Layer.mergeAll(NodeChildProcessSpawner.layer, NetService.layer)),
+    );
+  }
   if (started && routes.connect && !current.connect) yield* waitForReachability();
 
   const after = yield* readSetup();
   yield* Console.log(
     // From what took effect: a failed service step can undo a choice.
     `\nThis machine\n${formatSetup(after, hints)}\n\n${formatNextSteps(
-      { connect: after.connect === true, lan: after.lan },
+      { connect: after.connect === true, lan: after.lan, tailscale: after.tailscale },
       after.service.installed,
       hints,
     )}`,
@@ -466,6 +613,12 @@ export const upCommand = Command.make("up", {
   lan: Flag.Boolean("lan").pipe(
     Flag.withDescription(
       "Allow LAN and tailnet connections. Anyone there can reach the port; a pairing code is the only lock. Turn off with --no-lan.",
+    ),
+    Flag.optional,
+  ),
+  tailscale: Flag.Boolean("tailscale").pipe(
+    Flag.withDescription(
+      "Enable Tailscale HTTPS for the background service. Turn off with --no-tailscale.",
     ),
     Flag.optional,
   ),
@@ -519,6 +672,7 @@ const setupJson = (setup: Setup) =>
       },
       connect:
         setup.connect === null ? null : { enabled: setup.connect, revoked: setup.connectRevoked },
+      tailscale: { enabled: setup.tailscale, port: setup.tailscalePort },
       lan: {
         enabled: setup.lan,
         inheritedDefault: setup.lanFromOldDefault,
