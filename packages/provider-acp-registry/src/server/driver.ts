@@ -27,7 +27,11 @@ import * as Semaphore from "effect/Semaphore";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
-import { AcpRegistryAdapterV2Driver, type AcpRegistryAdapterV2DriverEnv } from "./adapter.ts";
+import {
+  AcpRegistryAdapterV2Driver,
+  isCopilotAcpRegistrySettings,
+  type AcpRegistryAdapterV2DriverEnv,
+} from "./adapter.ts";
 import { makeAcpRegistryTextGeneration } from "./textGeneration.ts";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
@@ -71,6 +75,7 @@ import {
   makeAcpRegistryLearnedModelOptionsStore,
   withAcpRegistryLearnedModelOptions,
 } from "./learnedModelOptions.ts";
+import { readCopilotUsageLimits } from "./copilotUsageLimits.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
@@ -610,6 +615,8 @@ export const checkAcpRegistryProviderReadiness = Effect.fn(
 export type AcpRegistryDriverEnv =
   | AcpRegistryAdapterV2DriverEnv
   | Digest.Digest
+  | FileSystem.FileSystem
+  | Path.Path
   | ProviderHost.ProviderHost;
 
 export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryDriverEnv> = {
@@ -780,7 +787,13 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     });
     // A local executable's version comes only from probing it, so readiness checks reuse the last report.
     const reportedLocalVersion = yield* Ref.make<string | null>(null);
-    const checkProvider = checkAcpRegistryProviderReadiness(readinessInput).pipe(
+    const checkUsageLimits = isCopilotAcpRegistrySettings(effectiveConfig)
+      ? readCopilotUsageLimits(processEnvironment).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        )
+      : undefined;
+    const checkProviderReadiness = checkAcpRegistryProviderReadiness(readinessInput).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.flatMap((provider) =>
         Ref.get(reportedLocalVersion).pipe(
@@ -792,6 +805,14 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         ),
       ),
       Effect.flatMap(withLiveRuntimeState),
+    );
+    const checkProvider = Effect.all({
+      provider: checkProviderReadiness,
+      usageLimits: checkUsageLimits ?? Effect.undefined,
+    }).pipe(
+      Effect.map(({ provider, usageLimits }) =>
+        usageLimits === undefined ? provider : { ...provider, usageLimits },
+      ),
     );
     const modelsToDiscover = Effect.fn("AcpRegistryDriver.modelsToDiscover")(function* (
       provider: ServerProvider,
@@ -995,6 +1016,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       // Inspection may fetch the registry when its disk cache is missing; creation must not wait on that.
       initialSnapshot: () => buildInitialAcpRegistrySnapshot(readinessInput),
       checkProvider,
+      ...(checkUsageLimits === undefined ? {} : { checkUsageLimits }),
       enrichSnapshot: Effect.fn("enrichSnapshot")(function* ({
         snapshot,
         getSnapshot,

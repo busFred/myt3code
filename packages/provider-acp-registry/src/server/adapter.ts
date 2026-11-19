@@ -73,6 +73,16 @@ export const ACP_REGISTRY_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(ACP_R
 const DEFAULT_ACP_REGISTRY_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({});
 const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
 
+export function isCopilotAcpRegistrySettings(
+  settings: Pick<AcpRegistrySettings, "source" | "agentId" | "commandPath">,
+): boolean {
+  return (
+    (settings.source !== "local" && settings.agentId === "github-copilot-cli") ||
+    (settings.source === "local" &&
+      /^copilot(\.exe|\.cmd)?$/i.test(settings.commandPath.split(/[\\/]/).pop() ?? ""))
+  );
+}
+
 export interface AcpRegistryAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: AcpRegistrySettings;
@@ -211,11 +221,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       /^opencode(?:-v2)?(\.exe|\.cmd)?$/i.test(
         options.settings.commandPath.split(/[\\/]/).pop() ?? "",
       ));
-  // Local installs launch the `copilot` binary directly with no registry id.
-  const isCopilot =
-    registryAgentId === "github-copilot-cli" ||
-    (options.settings.source === "local" &&
-      /^copilot(\.exe|\.cmd)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? ""));
+  const isCopilot = isCopilotAcpRegistrySettings(options.settings);
   const isKimi =
     registryAgentId === "kimi-code" ||
     (options.settings.source === "local" &&
