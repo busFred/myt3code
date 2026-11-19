@@ -29,6 +29,7 @@ import {
   antigravityUserAgent,
 } from "../provider/antigravityUsageLimits.ts";
 import {
+  clampPercent,
   makeUnavailableUsageLimits,
   makeUsageLimits,
 } from "@t3tools/provider-core/server/usageLimits";
@@ -46,6 +47,7 @@ const AuthFile = Schema.Struct({
   email: Schema.optional(Schema.String),
   disabled: Schema.optional(Schema.Boolean),
   project_id: Schema.optional(Schema.String),
+  cpamc_subscription_usage: Schema.optional(Schema.Unknown),
   id_token: Schema.optional(
     Schema.Struct({
       chatgpt_account_id: Schema.optional(Schema.String),
@@ -119,9 +121,26 @@ const CreditList = Schema.Struct({
     }),
   ),
 });
+const CpamcMuseWindow = Schema.Struct({
+  used_percent: Schema.Number,
+  resets_at: Schema.Number,
+});
+const CpamcMuseUsage = Schema.Struct({
+  observed_at: Schema.Number,
+  window: Schema.optional(
+    Schema.Struct({
+      used_percent: Schema.Number,
+      resets_at: Schema.Number,
+      window_duration_mins: Schema.Number,
+    }),
+  ),
+  weekly: Schema.optional(CpamcMuseWindow),
+  plan: Schema.optional(Schema.String),
+});
 
 const decodeAuthFiles = Schema.decodeUnknownEffect(AuthFiles);
 const decodeAuthFileModels = Schema.decodeUnknownEffect(AuthFileModels);
+const decodeCpamcMuseUsage = Schema.decodeUnknownEffect(CpamcMuseUsage);
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeApiResponse = Schema.decodeUnknownEffect(ApiResponse);
 const decodeCreditList = Schema.decodeUnknownEffect(Schema.fromJsonString(CreditList));
@@ -224,6 +243,46 @@ const listedIdentity = (account: AuthFile) => ({
     ? { workspaceId: account.id_token.chatgpt_account_id.trim() }
     : {}),
 });
+
+const unixSecondsIso = (seconds: number) => {
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  return Option.getOrUndefined(Option.map(DateTime.make(seconds * 1000), DateTime.formatIso));
+};
+
+const cpamcMuseSessionWindow = (window: typeof CpamcMuseUsage.Type.window) => {
+  if (window === undefined) return undefined;
+  const resetsAt = unixSecondsIso(window.resets_at);
+  if (
+    resetsAt === undefined ||
+    !Number.isFinite(window.used_percent) ||
+    !Number.isFinite(window.window_duration_mins) ||
+    window.window_duration_mins <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    id: "session" as const,
+    kind: "session" as const,
+    label: "Session",
+    usedPercent: clampPercent(window.used_percent),
+    resetsAt,
+    windowDurationMins: window.window_duration_mins,
+  };
+};
+
+const cpamcMuseWeeklyWindow = (window: typeof CpamcMuseUsage.Type.weekly) => {
+  if (window === undefined) return undefined;
+  const resetsAt = unixSecondsIso(window.resets_at);
+  if (resetsAt === undefined || !Number.isFinite(window.used_percent)) return undefined;
+  return {
+    id: "weekly" as const,
+    kind: "weekly" as const,
+    label: "Weekly",
+    usedPercent: clampPercent(window.used_percent),
+    resetsAt,
+    windowDurationMins: 7 * 24 * 60,
+  };
+};
 
 const credits = Effect.fn("CliproxyApi.credits")(function* (call: HubCall) {
   const response = yield* decodeCreditList(yield* call(CREDIT_URL));
@@ -397,6 +456,31 @@ const HUB_PROVIDERS = new Map<string, HubProvider>([
             usageLimits: { ...usageLimits, credentialFingerprint },
           }),
         });
+      }),
+    },
+  ],
+  [
+    "meta",
+    {
+      driver: ProviderDriverKind.make("muse"),
+      header: () => ({}),
+      read: Effect.fnUntraced(function* ({ account }) {
+        const noUsage = () => new UsageLimitSourceError({ detail: "No Muse usage reported yet." });
+        if (account.cpamc_subscription_usage === undefined) return yield* noUsage();
+        const usage = yield* decodeCpamcMuseUsage(account.cpamc_subscription_usage).pipe(
+          Effect.mapError(noUsage),
+        );
+        const checkedAt = unixSecondsIso(usage.observed_at);
+        if (checkedAt === undefined) return yield* noUsage();
+        const windows = [
+          cpamcMuseSessionWindow(usage.window),
+          cpamcMuseWeeklyWindow(usage.weekly),
+        ].flatMap((window) => (window === undefined ? [] : [window]));
+        return {
+          ...listedIdentity(account),
+          ...(usage.plan === undefined ? {} : { plan: usage.plan }),
+          usageLimits: makeUsageLimits({ checkedAt, windows }),
+        };
       }),
     },
   ],
