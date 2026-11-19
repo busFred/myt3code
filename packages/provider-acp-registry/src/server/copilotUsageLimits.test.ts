@@ -1,8 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import { copilotUsageEntryToLimits, readCopilotUsageLimits } from "./copilotUsageLimits.ts";
@@ -148,6 +150,7 @@ describe("copilotUsageEntryToLimits", () => {
   it.effect.each([
     ["overage billing", { percentRemaining: 0, overagePermitted: true }],
     ["a missing reset", { percentRemaining: 0, resetDate: undefined }],
+    ["request-based billing", { percentRemaining: 0, tokenBasedBilling: false }],
   ] as const)("caps exhausted usage with %s at 99.9 percent", ([, input]) =>
     Effect.sync(() => {
       expect(copilotUsageEntryToLimits(entry(input), now).windows[0]?.usedPercent).toBe(99.9);
@@ -155,7 +158,7 @@ describe("copilotUsageEntryToLimits", () => {
   );
 });
 
-it.layer(NodeServices.layer)("readCopilotUsageLimits", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("readCopilotUsageLimits", (it) => {
   it.effect("parses comments and selects the newest cache entry", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -238,34 +241,85 @@ it.layer(NodeServices.layer)("readCopilotUsageLimits", (it) => {
   );
 
   it.effect.each([
-    ["the matching account", true, 80],
-    ["probe failure when the matching account is absent", false, undefined],
-  ] as const)("selects %s from a known login", ([, includesMatch, usedPercent]) =>
+    [
+      "the matching account",
+      true,
+      "github.com",
+      80,
+      "fb663581dffce250eee23b116c52d607d5fab7d12751855db2a87838ec6ca76c",
+    ],
+    [
+      "probe failure when the matching account is absent",
+      false,
+      undefined,
+      undefined,
+      "957e1cab4f5f825285e53b8f339926a4c9bae075936e9fc2680c8f0924d2cf19",
+    ],
+  ] as const)(
+    "selects %s from a known login",
+    ([, includesMatch, host, usedPercent, credentialFingerprint]) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cacheHome = yield* fileSystem.makeTempDirectoryScoped();
+        const copilotHome = yield* fileSystem.makeTempDirectoryScoped();
+        yield* fileSystem.writeFileString(
+          path.join(copilotHome, "config.json"),
+          [
+            "// Copilot config",
+            JSON.stringify({
+              lastLoggedInUser: { ...(host === undefined ? {} : { host }), login: "Ada" },
+            }),
+          ].join("\n"),
+        );
+        yield* fileSystem.writeFileString(
+          path.join(cacheHome, "copilot-user-cache.json"),
+          JSON.stringify({
+            copilotUserCache: {
+              match: entry({
+                retrievedAt: "2026-11-17T12:00:00.000Z",
+                login: includesMatch ? "ada" : "grace",
+                percentRemaining: 20,
+              }),
+              other: entry({
+                login: "other",
+                percentRemaining: 10,
+              }),
+            },
+          }),
+        );
+
+        const limits = yield* readCopilotUsageLimits({
+          COPILOT_CACHE_HOME: cacheHome,
+          COPILOT_HOME: copilotHome,
+        });
+
+        expect(limits.windows[0]?.usedPercent).toBe(usedPercent);
+        expect(limits.credentialFingerprint).toBe(credentialFingerprint);
+        expect(JSON.stringify(limits).toLowerCase()).not.toContain("ada");
+        if (usedPercent === undefined) expect(limits.unavailable?.reason).toBe("probeFailed");
+      }),
+  );
+
+  it.effect.each([
+    ["the same login", ["ada", "Ada"], 75],
+    ["different logins", ["ada", "grace"], undefined],
+  ] as const)("with an unknown login, accepts only caches containing %s", ([, logins, used]) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const cacheHome = yield* fileSystem.makeTempDirectoryScoped();
       const copilotHome = yield* fileSystem.makeTempDirectoryScoped();
       yield* fileSystem.writeFileString(
-        path.join(copilotHome, "config.json"),
-        [
-          "// Copilot config",
-          JSON.stringify({ lastLoggedInUser: { host: "github.com", login: "Ada" } }),
-        ].join("\n"),
-      );
-      yield* fileSystem.writeFileString(
         path.join(cacheHome, "copilot-user-cache.json"),
         JSON.stringify({
           copilotUserCache: {
-            match: entry({
+            older: entry({
               retrievedAt: "2026-11-17T12:00:00.000Z",
-              login: includesMatch ? "ada" : "grace",
-              percentRemaining: 20,
+              login: logins[0],
+              percentRemaining: 50,
             }),
-            other: entry({
-              login: "other",
-              percentRemaining: 10,
-            }),
+            newer: entry({ login: logins[1], percentRemaining: 25 }),
           },
         }),
       );
@@ -275,8 +329,9 @@ it.layer(NodeServices.layer)("readCopilotUsageLimits", (it) => {
         COPILOT_HOME: copilotHome,
       });
 
-      expect(limits.windows[0]?.usedPercent).toBe(usedPercent);
-      if (usedPercent === undefined) expect(limits.unavailable?.reason).toBe("probeFailed");
+      expect(limits.windows[0]?.usedPercent).toBe(used);
+      expect(limits.credentialFingerprint).toBeUndefined();
+      if (used === undefined) expect(limits.unavailable?.reason).toBe("probeFailed");
     }),
   );
 
