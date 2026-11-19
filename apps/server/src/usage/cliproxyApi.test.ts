@@ -57,6 +57,7 @@ function fixture(
       disabled?: boolean;
       project_id?: string;
       id_token?: { chatgpt_account_id: string; plan_type?: string; chatgpt_plan_type?: string };
+      cpamc_subscription_usage?: unknown;
     }>;
     upstream?: (request: RequestBody) => { status: number; body: unknown };
     cooldownStatus?: number;
@@ -265,6 +266,94 @@ describe("CLIProxyAPI built-in management API", () => {
           ["ChatGPT Free Subscription", "monthly"],
         ],
       );
+    }),
+  );
+
+  it.effect("reads cpamc Muse subscription usage without an upstream api-call", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [
+          {
+            id: "muse.json",
+            auth_index: "m",
+            provider: "meta",
+            email: "muse@example.com",
+            cpamc_subscription_usage: {
+              observed_at: 1763510400,
+              window: {
+                used_percent: 42.5,
+                resets_at: 1763514000,
+                window_duration_mins: 300,
+              },
+              weekly: { used_percent: 17, resets_at: 1763769600 },
+              plan: "Muse Code Power Usage",
+            },
+          },
+        ],
+      });
+      const [account] = yield* (yield* test.api).readAccounts(config);
+      expect(account).toMatchObject({
+        driver: "muse",
+        email: "muse@example.com",
+        plan: "Muse Code Power Usage",
+        usageLimits: {
+          checkedAt: "2025-11-19T00:00:00.000Z",
+          windows: [
+            {
+              id: "session",
+              kind: "session",
+              label: "Session",
+              usedPercent: 42.5,
+              resetsAt: "2025-11-19T01:00:00.000Z",
+              windowDurationMins: 300,
+            },
+            {
+              id: "weekly",
+              kind: "weekly",
+              label: "Weekly",
+              usedPercent: 17,
+              resetsAt: "2025-11-22T00:00:00.000Z",
+              windowDurationMins: 10080,
+            },
+          ],
+        },
+      });
+      expect(test.requests.map((request) => request.path)).toEqual(["/v0/management/auth-files"]);
+    }),
+  );
+
+  it.effect("reads cpamc Muse weekly usage when no session was observed", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [
+          {
+            id: "muse-weekly.json",
+            auth_index: "m",
+            provider: "meta",
+            email: "muse@example.com",
+            cpamc_subscription_usage: {
+              observed_at: 1795053687,
+              weekly: { used_percent: 50, resets_at: 1795392000 },
+              plan: "Muse Code Power Usage",
+            },
+          },
+        ],
+      });
+      const [account] = yield* (yield* test.api).readAccounts(config);
+      expect(account?.usageLimits).toMatchObject({
+        checkedAt: "2026-11-19T02:01:27.000Z",
+        windows: [
+          {
+            id: "weekly",
+            kind: "weekly",
+            label: "Weekly",
+            usedPercent: 50,
+            resetsAt: "2026-11-23T00:00:00.000Z",
+            windowDurationMins: 10080,
+          },
+        ],
+      });
+      expect(test.requests.map((request) => request.path)).toEqual(["/v0/management/auth-files"]);
     }),
   );
 
@@ -590,6 +679,7 @@ describe("CLIProxyAPI built-in management API", () => {
   it.effect.each([
     { name: "a refused xAI call", provider: "xai", status: 403, body: { error: "denied" } },
     { name: "a malformed xAI answer", provider: "xai", status: 200, body: { config: "x" } },
+    { name: "an absent Muse observation", provider: "meta", status: 200, body: {} },
     { name: "a refused Antigravity call", provider: "antigravity", status: 401, body: {} },
     { name: "a malformed Antigravity answer", provider: "antigravity", status: 200, body: [] },
     { name: "an empty Antigravity summary", provider: "antigravity", status: 200, body: {} },
@@ -601,6 +691,37 @@ describe("CLIProxyAPI built-in management API", () => {
       });
       const [account] = yield* (yield* test.api).readAccounts(config);
       expect(account?.usageLimits.unavailable?.reason).toBe("probeFailed");
+      if (provider === "meta") {
+        expect(test.requests.map((request) => request.path)).toEqual(["/v0/management/auth-files"]);
+      }
+    }),
+  );
+
+  it.effect("isolates malformed cpamc Muse usage from working accounts", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [
+          {
+            id: "muse.json",
+            auth_index: "m",
+            provider: "meta",
+            email: "muse@example.com",
+            cpamc_subscription_usage: { observed_at: "invalid" },
+          },
+          accounts[0]!,
+        ],
+        upstream: () => ({
+          status: 200,
+          body: { rate_limit: { primary_window: { used_percent: 12 } } },
+        }),
+      });
+      const result = yield* (yield* test.api).readAccounts(config);
+      expect(result[0]?.usageLimits.unavailable?.reason).toBe("probeFailed");
+      expect(result[1]?.usageLimits.windows[0]?.usedPercent).toBe(12);
+      expect(test.requests.map((request) => request.body?.auth_index).filter(Boolean)).toEqual([
+        "a",
+        "a",
+      ]);
     }),
   );
 
