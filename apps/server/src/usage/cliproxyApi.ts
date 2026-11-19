@@ -125,22 +125,23 @@ const CpamcMuseWindow = Schema.Struct({
   used_percent: Schema.Number,
   resets_at: Schema.Number,
 });
+const CpamcMuseSessionWindow = Schema.Struct({
+  used_percent: Schema.Number,
+  resets_at: Schema.Number,
+  window_duration_mins: Schema.optional(Schema.Number),
+});
 const CpamcMuseUsage = Schema.Struct({
   observed_at: Schema.Number,
-  window: Schema.optional(
-    Schema.Struct({
-      used_percent: Schema.Number,
-      resets_at: Schema.Number,
-      window_duration_mins: Schema.Number,
-    }),
-  ),
-  weekly: Schema.optional(CpamcMuseWindow),
-  plan: Schema.optional(Schema.String),
+  window: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  weekly: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  plan: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const decodeAuthFiles = Schema.decodeUnknownEffect(AuthFiles);
 const decodeAuthFileModels = Schema.decodeUnknownEffect(AuthFileModels);
 const decodeCpamcMuseUsage = Schema.decodeUnknownEffect(CpamcMuseUsage);
+const decodeCpamcMuseSessionWindow = Schema.decodeUnknownEffect(CpamcMuseSessionWindow);
+const decodeCpamcMuseWeeklyWindow = Schema.decodeUnknownEffect(CpamcMuseWindow);
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeApiResponse = Schema.decodeUnknownEffect(ApiResponse);
 const decodeCreditList = Schema.decodeUnknownEffect(Schema.fromJsonString(CreditList));
@@ -249,29 +250,26 @@ const unixSecondsIso = (seconds: number) => {
   return Option.getOrUndefined(Option.map(DateTime.make(seconds * 1000), DateTime.formatIso));
 };
 
-const cpamcMuseSessionWindow = (window: typeof CpamcMuseUsage.Type.window) => {
-  if (window === undefined) return undefined;
+const cpamcMuseSessionWindow = (window: typeof CpamcMuseSessionWindow.Type) => {
   const resetsAt = unixSecondsIso(window.resets_at);
-  if (
-    resetsAt === undefined ||
-    !Number.isFinite(window.used_percent) ||
-    !Number.isFinite(window.window_duration_mins) ||
-    window.window_duration_mins <= 0
-  ) {
-    return undefined;
-  }
+  if (resetsAt === undefined || !Number.isFinite(window.used_percent)) return undefined;
+  const roundedDuration =
+    window.window_duration_mins === undefined ? undefined : Math.round(window.window_duration_mins);
+  const windowDurationMins =
+    roundedDuration !== undefined && Number.isFinite(roundedDuration) && roundedDuration > 0
+      ? roundedDuration
+      : undefined;
   return {
     id: "session" as const,
     kind: "session" as const,
     label: "Session",
     usedPercent: clampPercent(window.used_percent),
     resetsAt,
-    windowDurationMins: window.window_duration_mins,
+    ...(windowDurationMins === undefined ? {} : { windowDurationMins }),
   };
 };
 
-const cpamcMuseWeeklyWindow = (window: typeof CpamcMuseUsage.Type.weekly) => {
-  if (window === undefined) return undefined;
+const cpamcMuseWeeklyWindow = (window: typeof CpamcMuseWindow.Type) => {
   const resetsAt = unixSecondsIso(window.resets_at);
   if (resetsAt === undefined || !Number.isFinite(window.used_percent)) return undefined;
   return {
@@ -472,13 +470,23 @@ const HUB_PROVIDERS = new Map<string, HubProvider>([
         );
         const checkedAt = unixSecondsIso(usage.observed_at);
         if (checkedAt === undefined) return yield* noUsage();
+        const sessionWindow = yield* decodeCpamcMuseSessionWindow(usage.window).pipe(
+          Effect.map(cpamcMuseSessionWindow),
+          Effect.option,
+        );
+        const weeklyWindow = yield* decodeCpamcMuseWeeklyWindow(usage.weekly).pipe(
+          Effect.map(cpamcMuseWeeklyWindow),
+          Effect.option,
+        );
         const windows = [
-          cpamcMuseSessionWindow(usage.window),
-          cpamcMuseWeeklyWindow(usage.weekly),
+          Option.getOrUndefined(sessionWindow),
+          Option.getOrUndefined(weeklyWindow),
         ].flatMap((window) => (window === undefined ? [] : [window]));
+        if (windows.length === 0) return yield* noUsage();
+        const plan = usage.plan?.trim();
         return {
           ...listedIdentity(account),
-          ...(usage.plan === undefined ? {} : { plan: usage.plan }),
+          ...(plan ? { plan } : {}),
           usageLimits: makeUsageLimits({ checkedAt, windows }),
         };
       }),
