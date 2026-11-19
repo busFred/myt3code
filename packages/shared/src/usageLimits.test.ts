@@ -300,6 +300,30 @@ describe("pools", () => {
       label: "ACP Registry",
       acpRegistryIconUrl: "https://example.com/copilot.svg",
     });
+
+    const partiallyMissingIcon = collectLimitPools(
+      collectLimitAccounts(
+        new Map([
+          [
+            EnvironmentId.make("env-a"),
+            {
+              ...laptop,
+              serverConfig: {
+                providers: [
+                  copilot("copilot-one", "GitHub Copilot", "https://example.com/copilot.svg"),
+                  copilot("copilot-two", "GitHub Copilot"),
+                ],
+              },
+            },
+          ],
+        ]),
+      ),
+      now,
+    )[0]!;
+    expect(limitPoolHeader(partiallyMissingIcon, "ACP Registry")).toEqual({
+      label: "GitHub Copilot",
+      acpRegistryIconUrl: undefined,
+    });
   });
 
   it("merges one account reported natively on two environments and by a hub into one entry", () => {
