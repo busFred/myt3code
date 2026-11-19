@@ -7,6 +7,7 @@ import {
   collectLimitAccounts,
   collectLimitPools,
   displayLimitWindows,
+  limitPoolHeader,
   paceRemainingPercent,
   remainingPercent,
   type LimitAccount,
@@ -500,14 +501,18 @@ export function UsageLimitsSection({
       ) : null}
       {pools.map((pool) => {
         const windows = displayLimitWindows(pool);
+        const fallbackLabel = providerClients.get(pool.driver)?.label ?? pool.driver;
+        const header = limitPoolHeader(pool, fallbackLabel);
         return (
           <Fragment key={pool.driver}>
             <View className="gap-3">
               <View className="flex-row items-center gap-2 px-1">
-                <ProviderIcon provider={pool.driver} size={18} />
-                <Text className="text-base font-t3-medium text-foreground">
-                  {providerClients.get(pool.driver)?.label ?? pool.driver}
-                </Text>
+                <ProviderIcon
+                  provider={pool.driver}
+                  iconUrl={header.acpRegistryIconUrl}
+                  size={18}
+                />
+                <Text className="text-base font-t3-medium text-foreground">{header.label}</Text>
               </View>
               {windows.map((window) => {
                 const details =

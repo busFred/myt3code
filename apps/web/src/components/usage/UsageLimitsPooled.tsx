@@ -3,6 +3,7 @@ import {
   collectLimitAccounts,
   collectLimitPools,
   displayLimitWindows,
+  limitPoolHeader,
   type LimitAccount,
   type LimitPool,
   type LimitPoolMember,
@@ -636,7 +637,11 @@ function PoolWindowCard({
 
 function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
   const color = barColor(pool.driver);
-  const label = providerClients.get(pool.driver)?.label ?? String(pool.driver);
+  const header = limitPoolHeader(
+    pool,
+    providerClients.get(pool.driver)?.label ?? String(pool.driver),
+  );
+  const label = header.label;
   const windows = displayLimitWindows(pool);
   const m = useMessages();
   return (
@@ -645,6 +650,7 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
         <ProviderInstanceIcon
           driverKind={pool.driver}
           displayName={label}
+          acpRegistryIconUrl={header.acpRegistryIconUrl}
           indicatorBackground="var(--background)"
           className="size-5"
           iconClassName="size-4 text-foreground/80"

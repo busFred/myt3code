@@ -18,6 +18,7 @@ import {
   collectLimitAccounts,
   collectExternalUsageLinks,
   collectLimitPools,
+  limitPoolHeader,
   elapsedShare,
   exhaustedUsageWindow,
   paceOf,
@@ -237,6 +238,69 @@ describe("pools", () => {
     checkedAt,
   };
   const laptop = { entry: { target: { label: "Laptop" } } };
+
+  it("uses one shared ACP registry name and icon for its limits pool", () => {
+    const acp = ProviderDriverKind.make("acpRegistry");
+    const copilot = (instanceId: string, displayName: string, iconUrl?: string) =>
+      provider({
+        driver: acp,
+        instanceId: ProviderInstanceId.make(instanceId),
+        displayName,
+        iconUrl,
+        usageLimits: {
+          checkedAt,
+          credentialFingerprint: instanceId,
+          windows: [{ ...window, usedPercent: 40 }],
+        },
+      });
+    const sameName = collectLimitPools(
+      collectLimitAccounts(
+        new Map([
+          [
+            EnvironmentId.make("env-a"),
+            {
+              ...laptop,
+              serverConfig: {
+                providers: [
+                  copilot("copilot-one", "GitHub Copilot", "https://example.com/copilot.svg"),
+                  copilot("copilot-two", "GitHub Copilot", "https://example.com/copilot.svg"),
+                ],
+              },
+            },
+          ],
+        ]),
+      ),
+      now,
+    )[0]!;
+    expect(limitPoolHeader(sameName, "ACP Registry")).toEqual({
+      label: "GitHub Copilot",
+      acpRegistryIconUrl: "https://example.com/copilot.svg",
+    });
+
+    const mixedName = collectLimitPools(
+      collectLimitAccounts(
+        new Map([
+          [
+            EnvironmentId.make("env-a"),
+            {
+              ...laptop,
+              serverConfig: {
+                providers: [
+                  copilot("copilot-one", "GitHub Copilot", "https://example.com/copilot.svg"),
+                  copilot("copilot-two", "Copilot Work", "https://example.com/copilot.svg"),
+                ],
+              },
+            },
+          ],
+        ]),
+      ),
+      now,
+    )[0]!;
+    expect(limitPoolHeader(mixedName, "ACP Registry")).toEqual({
+      label: "ACP Registry",
+      acpRegistryIconUrl: "https://example.com/copilot.svg",
+    });
+  });
 
   it("merges one account reported natively on two environments and by a hub into one entry", () => {
     const native = provider({
