@@ -5,12 +5,14 @@ import { MuseSettings } from "../settings.ts";
 import { createModelCapabilities, getProviderOptionDescriptors } from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import {
   createMuseSdkHost,
   createMuseSdkHostEffect,
   MuseSdkError,
   type MuseSdkHost,
 } from "./sdk.ts";
+import { MuseSubscriptionUsage } from "./protocol.ts";
 
 export const resolveMuseStartupTimeoutMs = (environment?: NodeJS.ProcessEnv) =>
   resolveProviderProbeTimeoutMs("muse", 8_000, environment);
@@ -50,6 +52,10 @@ const ModelCatalogEntry = Schema.Struct({
 const decodeModelList = Schema.decodeUnknownEffect(
   Schema.Struct({ providerId: Schema.String, models: Schema.Array(ModelCatalogEntry) }),
 );
+const decodeUsage = Schema.decodeUnknownEffect(
+  Schema.Struct({ usage: Schema.optional(MuseSubscriptionUsage) }),
+);
+const USAGE_READ_TIMEOUT_MS = 2_000;
 
 export function museModelCapabilities(
   model?: Pick<
@@ -122,16 +128,32 @@ export const discoverMuseModels = Effect.fn("discoverMuseModels")(function* (
     (host: MuseSdkHost) => Effect.promise(() => host.close()),
     { interruptible: true },
   );
-  const result = yield* Effect.tryPromise({
-    try: () => host.connection.request("model/list", {}),
-    catch: (cause) => new MuseSdkError({ operation: "model/list", cause }),
-  });
-  const catalog = yield* decodeModelList(result);
+  const result = yield* Effect.all(
+    {
+      catalog: Effect.tryPromise({
+        try: () => host.connection.request("model/list", {}),
+        catch: (cause) => new MuseSdkError({ operation: "model/list", cause }),
+      }).pipe(Effect.flatMap(decodeModelList)),
+      usage: Effect.tryPromise({
+        try: () => host.connection.request("usage/read", {}),
+        catch: (cause) => new MuseSdkError({ operation: "usage/read", cause }),
+      }).pipe(
+        Effect.flatMap(decodeUsage),
+        Effect.map((result) => result.usage),
+        Effect.timeoutOption(USAGE_READ_TIMEOUT_MS),
+        Effect.option,
+        Effect.map(Option.flatten),
+        Effect.map(Option.getOrUndefined),
+      ),
+    },
+    { concurrency: "unbounded" },
+  );
+  const catalog = result.catalog;
   if (catalog.providerId !== "meta") {
     return yield* new MuseCatalogError({ detail: "Muse returned a catalog for another provider." });
   }
   const seen = new Set<string>();
-  return catalog.models.flatMap((model): ServerProviderModel[] => {
+  const models = catalog.models.flatMap((model): ServerProviderModel[] => {
     if (model.providerId !== "meta" || seen.has(model.modelId)) return [];
     seen.add(model.modelId);
     const label = model.displayLabel.trim() || model.modelId;
@@ -149,4 +171,5 @@ export const discoverMuseModels = Effect.fn("discoverMuseModels")(function* (
       },
     ];
   });
+  return { models, usage: result.usage };
 });

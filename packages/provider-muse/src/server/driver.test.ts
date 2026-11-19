@@ -9,6 +9,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import * as Sink from "effect/Sink";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -47,7 +48,16 @@ const layerTest = TestProviderHost.layer({
   ),
 );
 
-function nativeHost() {
+const reading = (observedAtMs: number, usedPercent: number, tier: string) => ({
+  window: { usedPercent, windowDurationMins: 300, resetsAtMs: 1791465557000 },
+  weekly: { usedPercent: 50, resetsAtMs: 1791763200000 },
+  observedAtMs,
+  tier,
+});
+
+type ReadUsage = () => Record<string, unknown> | Promise<Record<string, unknown>>;
+
+function nativeHost(readUsage: ReadUsage = () => ({})) {
   let notify: Parameters<sdk.MuseSdkHost["connection"]["onNotification"]>[0] = () => {};
   let close!: () => void;
   const closed = new Promise<void>((resolve) => {
@@ -74,7 +84,9 @@ function nativeHost() {
                   },
                 ],
               }
-            : {},
+            : method === "usage/read"
+              ? await readUsage()
+              : {},
       command: async (_method, params) => ({
         session: { sessionId: params.sessionId, modelId: "muse-wonder-1.0", activeTurnId: null },
         history: { items: [] },
@@ -101,10 +113,13 @@ function nativeHost() {
 
 it.layer(layerTest)("MuseDriver usage", (it) => {
   it.effect(
-    "keeps the newest complete account report across late reports and refresh without probing for usage",
+    "keeps the newest complete account report across status reads and late notifications",
     () =>
       Effect.gen(function* () {
         const hosts: ReturnType<typeof nativeHost>[] = [];
+        let readUsage: ReadUsage = () => ({
+          usage: reading(1791447760610, 30, "tier-0"),
+        });
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         using spawn = vi.spyOn(spawner, "spawn").mockImplementation(() =>
           Effect.succeed(
@@ -124,7 +139,7 @@ it.layer(layerTest)("MuseDriver usage", (it) => {
           ),
         );
         const createHost: typeof sdk.createMuseSdkHost = async () => {
-          const fake = nativeHost();
+          const fake = nativeHost(() => readUsage());
           hosts.push(fake);
           return fake.host;
         };
@@ -144,7 +159,16 @@ it.layer(layerTest)("MuseDriver usage", (it) => {
         });
         yield* Stream.take(instance.snapshot.streamChanges, 1).pipe(Stream.runDrain);
         expect((yield* instance.snapshot.getSnapshot).status).toBe("ready");
-        expect((yield* instance.snapshot.getSnapshot).usageLimits).toBeUndefined();
+        expect(
+          (yield* instance.snapshot.getSnapshot).usageLimits?.windows.map((window) => [
+            window.kind,
+            window.usedPercent,
+          ]),
+        ).toEqual([
+          ["session", 30],
+          ["weekly", 50],
+        ]);
+        expect((yield* instance.snapshot.getSnapshot).auth.label).toBe("tier-0");
         const policy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
           runtimeMode: "full-access",
           interactionMode: "default",
@@ -172,12 +196,6 @@ it.layer(layerTest)("MuseDriver usage", (it) => {
             return { fake: hosts.at(-1)!, events };
           }),
         );
-        const reading = (observedAtMs: number, usedPercent: number, tier: string) => ({
-          window: { usedPercent, windowDurationMins: 300, resetsAtMs: 1791465557000 },
-          weekly: { usedPercent: 50, resetsAtMs: 1791763200000 },
-          observedAtMs,
-          tier,
-        });
         const publish = Effect.fnUntraced(function* (
           index: number,
           report: ReturnType<typeof reading>,
@@ -208,7 +226,16 @@ it.layer(layerTest)("MuseDriver usage", (it) => {
         const callsBeforeUsageRefresh = spawn.mock.calls.length;
         yield* instance.snapshot.refreshUsage!;
         expect(spawn.mock.calls.length).toBe(callsBeforeUsageRefresh);
-        const refreshed = yield* instance.snapshot.refresh;
+        const usageStarted = Promise.withResolvers<void>();
+        const pendingUsage = Promise.withResolvers<Record<string, unknown>>();
+        readUsage = () => {
+          usageStarted.resolve();
+          return pendingUsage.promise;
+        };
+        const refreshing = yield* Effect.forkScoped(instance.snapshot.refresh);
+        yield* Effect.promise(() => usageStarted.promise);
+        pendingUsage.resolve({ usage: reading(1791447760610, 10, "tier-0") });
+        const refreshed = yield* Fiber.join(refreshing);
         expect(refreshed.usageLimits).toEqual(latest.usageLimits);
         expect(refreshed.auth.label).toBe("tier-2");
       }),

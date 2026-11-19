@@ -64,7 +64,9 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
   cwd?: string,
   createHost: typeof createMuseSdkHost = createMuseSdkHost,
 ) {
-  if (!settings.enabled) return yield* makePendingMuseProvider(settings);
+  if (!settings.enabled) {
+    return { snapshot: yield* makePendingMuseProvider(settings) };
+  }
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const museEnvironment = providerProbeEnvironment(environment ?? makeMuseEnvironment());
   const snapshot = (probe: ProviderProbeResult, models: ReadonlyArray<ServerProviderModel> = []) =>
@@ -97,39 +99,45 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
 
   if (Result.isFailure(versionResult)) {
     const missing = isCommandMissingCause(versionResult.failure);
-    return snapshot({
-      installed: !missing,
-      version: null,
-      status: "error",
-      auth: { status: "unknown" },
-      message: missing
-        ? "Muse Code CLI (`muse`) was not found. Install Muse Code and run `muse login` on this T3 server host."
-        : "Failed to execute Muse Code CLI. Check its binary path on this T3 server host.",
-    });
+    return {
+      snapshot: snapshot({
+        installed: !missing,
+        version: null,
+        status: "error",
+        auth: { status: "unknown" },
+        message: missing
+          ? "Muse Code CLI (`muse`) was not found. Install Muse Code and run `muse login` on this T3 server host."
+          : "Failed to execute Muse Code CLI. Check its binary path on this T3 server host.",
+      }),
+    };
   }
   if (Option.isNone(versionResult.success)) {
-    return snapshot({
-      installed: true,
-      version: null,
-      status: "error",
-      auth: { status: "unknown" },
-      message: "Muse Code CLI version check timed out.",
-    });
+    return {
+      snapshot: snapshot({
+        installed: true,
+        version: null,
+        status: "error",
+        auth: { status: "unknown" },
+        message: "Muse Code CLI version check timed out.",
+      }),
+    };
   }
   const versionOutput = versionResult.success.value;
   const version = parseCliVersionResult(versionOutput, parseMuseVersion);
   if (versionOutput.code !== 0) {
-    return snapshot({
-      installed: true,
-      version,
-      status: "error",
-      auth: { status: "unknown" },
-      // T3 runs Muse with MUSE_NO_AUTO_UPDATE=1, so a launcher whose runtime was never fetched
-      // (common after a mise upgrade) refuses to install it; a manual run completes setup.
-      message: versionOutput.stderr.includes("installed binary is missing")
-        ? "Muse Code has not finished installing. Run `muse --version` on this T3 server host, then refresh its status."
-        : "Muse Code CLI is installed but failed to run.",
-    });
+    return {
+      snapshot: snapshot({
+        installed: true,
+        version,
+        status: "error",
+        auth: { status: "unknown" },
+        // T3 runs Muse with MUSE_NO_AUTO_UPDATE=1, so a launcher whose runtime was never fetched
+        // (common after a mise upgrade) refuses to install it; a manual run completes setup.
+        message: versionOutput.stderr.includes("installed binary is missing")
+          ? "Muse Code has not finished installing. Run `muse --version` on this T3 server host, then refresh its status."
+          : "Muse Code CLI is installed but failed to run.",
+      }),
+    };
   }
 
   const catalog = yield* discoverMuseModels(settings, museEnvironment, cwd, createHost).pipe(
@@ -139,30 +147,35 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
     Effect.result,
   );
   if (Result.isFailure(catalog) || Option.isNone(catalog.success)) {
-    return snapshot({
-      installed: true,
-      version,
-      status: "error",
-      auth: { status: "unknown" },
-      message:
-        "Muse Code SDK could not read the model catalog. Check your Muse installation and run `muse login` on this T3 server host.",
-    });
+    return {
+      snapshot: snapshot({
+        installed: true,
+        version,
+        status: "error",
+        auth: { status: "unknown" },
+        message:
+          "Muse Code SDK could not read the model catalog. Check your Muse installation and run `muse login` on this T3 server host.",
+      }),
+    };
   }
-  const models = catalog.success.value;
+  const { models, usage } = catalog.success.value;
   // MSP has no auth signal and serves cached models while logged out; failures surface on first turn.
-  return snapshot(
-    {
-      installed: true,
-      version,
-      auth: { status: "unknown" },
-      ...(models.length > 0
-        ? { status: "ready" }
-        : {
-            status: "warning",
-            message:
-              "Muse Code returned no models. Run `muse login` on this T3 server host and refresh its status.",
-          }),
-    },
-    models,
-  );
+  return {
+    snapshot: snapshot(
+      {
+        installed: true,
+        version,
+        auth: { status: "unknown" },
+        ...(models.length > 0
+          ? { status: "ready" }
+          : {
+              status: "warning",
+              message:
+                "Muse Code returned no models. Run `muse login` on this T3 server host and refresh its status.",
+            }),
+      },
+      models,
+    ),
+    ...(usage ? { usage } : {}),
+  };
 });
