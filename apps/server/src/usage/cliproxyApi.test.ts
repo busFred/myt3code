@@ -357,6 +357,103 @@ describe("CLIProxyAPI built-in management API", () => {
     }),
   );
 
+  const museSessionWindow = {
+    id: "session",
+    kind: "session",
+    label: "Session",
+    usedPercent: 42.5,
+    resetsAt: "2025-11-19T01:00:00.000Z",
+  };
+  const museWeeklyWindow = {
+    id: "weekly",
+    kind: "weekly",
+    label: "Weekly",
+    usedPercent: 17,
+    resetsAt: "2025-11-22T00:00:00.000Z",
+    windowDurationMins: 10080,
+  };
+  it.effect.each([
+    {
+      name: "rounds a fractional duration",
+      usage: {
+        observed_at: 1763510400,
+        window: {
+          used_percent: 42.5,
+          resets_at: 1763514000,
+          window_duration_mins: 300.6,
+        },
+      },
+      windows: [{ ...museSessionWindow, windowDurationMins: 301 }],
+    },
+    {
+      name: "keeps a session window without a duration",
+      usage: {
+        observed_at: 1763510400,
+        window: { used_percent: 42.5, resets_at: 1763514000 },
+      },
+      windows: [museSessionWindow],
+    },
+    {
+      name: "keeps weekly usage when the session window is null",
+      usage: {
+        observed_at: 1763510400,
+        window: null,
+        weekly: { used_percent: 17, resets_at: 1763769600 },
+      },
+      windows: [museWeeklyWindow],
+    },
+    {
+      name: "keeps weekly usage when the session window is malformed",
+      usage: {
+        observed_at: 1763510400,
+        window: { used_percent: "invalid", resets_at: 1763514000 },
+        weekly: { used_percent: 17, resets_at: 1763769600 },
+      },
+      windows: [museWeeklyWindow],
+    },
+    {
+      name: "omits a blank plan",
+      usage: {
+        observed_at: 1763510400,
+        weekly: { used_percent: 17, resets_at: 1763769600 },
+        plan: " \t ",
+      },
+      windows: [museWeeklyWindow],
+    },
+    {
+      name: "reports both invalid windows as unavailable",
+      usage: {
+        observed_at: 1763510400,
+        window: { used_percent: 42.5, resets_at: "invalid" },
+        weekly: { used_percent: 17 },
+      },
+      unavailable: true,
+    },
+  ])("handles cpamc Muse usage that $name", ({ usage, windows, unavailable = false }) =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [
+          {
+            id: "muse.json",
+            auth_index: "m",
+            provider: "meta",
+            email: "muse@example.com",
+            cpamc_subscription_usage: usage,
+          },
+        ],
+      });
+      const [account] = yield* (yield* test.api).readAccounts(config);
+      if (unavailable) {
+        expect(account?.usageLimits.unavailable?.reason).toBe("probeFailed");
+      } else {
+        expect(account?.usageLimits.windows).toEqual(windows);
+        expect(account?.usageLimits.unavailable).toBeUndefined();
+      }
+      expect(account).not.toHaveProperty("plan");
+      expect(test.requests.map((request) => request.path)).toEqual(["/v0/management/auth-files"]);
+    }),
+  );
+
   it.effect.each([
     "https://tools.test/cliproxy",
     "https://tools.test/cliproxy/",
