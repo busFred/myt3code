@@ -111,13 +111,14 @@ export const MuseDriver: ProviderDriver<
     });
     const latestUsage = yield* Ref.make<ProviderUsageLimitsReport | undefined>(undefined);
     const usagePermit = yield* Semaphore.make(1);
-    const applyLatestUsage = (report: ProviderUsageLimitsReport) =>
+    const applyLatestUsage = (report: ProviderUsageLimitsReport, publish?: Effect.Effect<void>) =>
       usagePermit.withPermits(1)(
         Effect.gen(function* () {
           const previous = yield* Ref.get(latestUsage);
           if (previous && Date.parse(report.checkedAt) < Date.parse(previous.checkedAt))
             return false;
           yield* Ref.set(latestUsage, report);
+          if (publish) yield* publish;
           return true;
         }),
       );
@@ -225,8 +226,7 @@ export const MuseDriver: ProviderDriver<
       ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       continuationRequests,
       onUsageLimits: Effect.fn("MuseDriver.onUsageLimits")(function* (report) {
-        if (!(yield* applyLatestUsage(report))) return;
-        yield* snapshot.applyUsageLimits({ ...report, complete: true });
+        yield* applyLatestUsage(report, snapshot.applyUsageLimits({ ...report, complete: true }));
       }),
     });
     const textGeneration = yield* makeMuseTextGeneration(effectiveConfig, {

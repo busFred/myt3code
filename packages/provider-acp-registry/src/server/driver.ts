@@ -787,12 +787,6 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     });
     // A local executable's version comes only from probing it, so readiness checks reuse the last report.
     const reportedLocalVersion = yield* Ref.make<string | null>(null);
-    const checkUsageLimits = isCopilotAcpRegistrySettings(effectiveConfig)
-      ? readCopilotUsageLimits(processEnvironment).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        )
-      : undefined;
     const checkProviderReadiness = checkAcpRegistryProviderReadiness(readinessInput).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.flatMap((provider) =>
@@ -806,14 +800,19 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       ),
       Effect.flatMap(withLiveRuntimeState),
     );
-    const checkProvider = Effect.all({
-      provider: checkProviderReadiness,
-      usageLimits: checkUsageLimits ?? Effect.undefined,
-    }).pipe(
-      Effect.map(({ provider, usageLimits }) =>
-        usageLimits === undefined ? provider : { ...provider, usageLimits },
-      ),
-    );
+    const checkUsageLimits = isCopilotAcpRegistrySettings(effectiveConfig)
+      ? readCopilotUsageLimits(processEnvironment).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        )
+      : undefined;
+    const checkProvider = Effect.gen(function* () {
+      const provider = yield* checkProviderReadiness;
+      if (checkUsageLimits === undefined || !provider.enabled || !provider.installed) {
+        return provider;
+      }
+      return { ...provider, usageLimits: yield* checkUsageLimits };
+    });
     const modelsToDiscover = Effect.fn("AcpRegistryDriver.modelsToDiscover")(function* (
       provider: ServerProvider,
     ) {

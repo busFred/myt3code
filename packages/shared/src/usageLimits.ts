@@ -550,16 +550,12 @@ export function limitPoolHeader(
   const names = pool.accounts.map((account) => account.displayName?.trim()).filter((name) => name);
   const label =
     names.length === pool.accounts.length && new Set(names).size === 1 ? names[0]! : fallbackLabel;
-  const iconUrls = [
-    ...new Set(
-      pool.accounts
-        .map((account) => account.acpRegistryIconUrl?.trim())
-        .filter((iconUrl): iconUrl is string => Boolean(iconUrl)),
-    ),
-  ];
+  const icons = pool.accounts.map((account) => account.acpRegistryIconUrl?.trim());
+  const iconUrls = [...new Set(icons.filter((iconUrl): iconUrl is string => Boolean(iconUrl)))];
   return {
     label,
-    acpRegistryIconUrl: iconUrls.length === 1 ? iconUrls[0] : undefined,
+    acpRegistryIconUrl:
+      icons.length > 0 && icons.every(Boolean) && iconUrls.length === 1 ? iconUrls[0] : undefined,
   };
 }
 
