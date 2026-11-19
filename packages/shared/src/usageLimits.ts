@@ -273,6 +273,7 @@ export interface LimitAccount {
   readonly key: string;
   readonly driver: ServerProvider["driver"];
   readonly displayName: string | null;
+  readonly acpRegistryIconUrl?: string | undefined;
   readonly email: string | undefined;
   readonly plan: string | undefined;
   readonly accentColor: string | undefined;
@@ -346,6 +347,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         displayName?.toLowerCase() === PROVIDER_DISPLAY_NAMES[previous.driver]?.toLowerCase()
           ? null
           : displayName,
+      acpRegistryIconUrl: previous.acpRegistryIconUrl ?? next.acpRegistryIconUrl,
       plan: planSources.get(key)?.plan ?? previous.plan ?? next.plan,
       accentColor: previous.accentColor ?? next.accentColor,
       environments,
@@ -377,6 +379,8 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         key: `${environmentId}:${provider.instanceId}`,
         driver: provider.driver,
         displayName: provider.displayName?.trim() || null,
+        acpRegistryIconUrl:
+          provider.driver === "acpRegistry" ? provider.iconUrl?.trim() || undefined : undefined,
         email: provider.auth.email,
         plan: provider.auth.label,
         accentColor: provider.accentColor,
@@ -477,6 +481,32 @@ export interface LimitPool {
   readonly driver: ServerProvider["driver"];
   readonly accounts: readonly LimitAccount[];
   readonly windows: readonly LimitPoolWindow[];
+}
+
+export function limitPoolHeader(
+  pool: LimitPool,
+  fallbackLabel: string,
+): {
+  readonly label: string;
+  readonly acpRegistryIconUrl: string | undefined;
+} {
+  if (pool.driver !== "acpRegistry") {
+    return { label: fallbackLabel, acpRegistryIconUrl: undefined };
+  }
+  const names = pool.accounts.map((account) => account.displayName?.trim()).filter((name) => name);
+  const label =
+    names.length === pool.accounts.length && new Set(names).size === 1 ? names[0]! : fallbackLabel;
+  const iconUrls = [
+    ...new Set(
+      pool.accounts
+        .map((account) => account.acpRegistryIconUrl?.trim())
+        .filter((iconUrl): iconUrl is string => Boolean(iconUrl)),
+    ),
+  ];
+  return {
+    label,
+    acpRegistryIconUrl: iconUrls.length === 1 ? iconUrls[0] : undefined,
+  };
 }
 
 function hasDuplicateCursorTotal(pool: LimitPool): boolean {
