@@ -27,6 +27,7 @@ import { makeUsageLimits } from "@t3tools/provider-core/server/usageLimits";
 import { enrichMuseSnapshot, latestMuseVersion, museMaintenance } from "./maintenance.ts";
 import { makeMuseEnvironment } from "./sdk.ts";
 import { museUsageReader } from "./usage.ts";
+import { museUsageToLimits } from "./usageLimits.ts";
 import type * as MuseUsageHome from "./MuseUsageHome.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -108,9 +109,18 @@ export const MuseDriver: ProviderDriver<
       accentColor,
       continuationGroupKey: continuationIdentity.continuationKey,
     });
-    // Only a running CLI reports usage; status probes cannot fetch it.
     const latestUsage = yield* Ref.make<ProviderUsageLimitsReport | undefined>(undefined);
     const usagePermit = yield* Semaphore.make(1);
+    const applyLatestUsage = (report: ProviderUsageLimitsReport) =>
+      usagePermit.withPermits(1)(
+        Effect.gen(function* () {
+          const previous = yield* Ref.get(latestUsage);
+          if (previous && Date.parse(report.checkedAt) < Date.parse(previous.checkedAt))
+            return false;
+          yield* Ref.set(latestUsage, report);
+          return true;
+        }),
+      );
     const withLatestUsage = (provider: ServerProvider) =>
       Ref.get(latestUsage).pipe(
         Effect.map((report): ServerProvider =>
@@ -171,8 +181,12 @@ export const MuseDriver: ProviderDriver<
       initialSnapshot: (settings) =>
         makePendingMuseProvider(settings.provider).pipe(Effect.map(stampIdentity)),
       checkProvider: checkMuseProviderStatus(effectiveConfig, processEnvironment, cwd).pipe(
-        Effect.map(stampIdentity),
-        Effect.flatMap(withLatestUsage),
+        Effect.flatMap(({ snapshot: currentSnapshot, usage }) =>
+          Effect.gen(function* () {
+            if (usage) yield* applyLatestUsage(museUsageToLimits(usage));
+            return yield* withLatestUsage(stampIdentity(currentSnapshot));
+          }),
+        ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
@@ -210,15 +224,10 @@ export const MuseDriver: ProviderDriver<
       modelCatalog,
       ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       continuationRequests,
-      onUsageLimits: (report) =>
-        usagePermit.withPermits(1)(
-          Effect.gen(function* () {
-            const previous = yield* Ref.get(latestUsage);
-            if (previous && Date.parse(report.checkedAt) < Date.parse(previous.checkedAt)) return;
-            yield* Ref.set(latestUsage, report);
-            yield* snapshot.applyUsageLimits({ ...report, complete: true });
-          }),
-        ),
+      onUsageLimits: Effect.fn("MuseDriver.onUsageLimits")(function* (report) {
+        if (!(yield* applyLatestUsage(report))) return;
+        yield* snapshot.applyUsageLimits({ ...report, complete: true });
+      }),
     });
     const textGeneration = yield* makeMuseTextGeneration(effectiveConfig, {
       environment: processEnvironment,
