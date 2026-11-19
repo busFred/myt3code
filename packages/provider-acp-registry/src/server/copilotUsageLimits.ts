@@ -13,8 +13,8 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 const CopilotQuotaSnapshot = Schema.Struct({
-  percent_remaining: Schema.Number,
-  unlimited: Schema.Boolean,
+  percent_remaining: Schema.optional(Schema.Number),
+  unlimited: Schema.optional(Schema.Boolean),
 });
 const CopilotUserCache = Schema.Struct({
   copilotUserCache: Schema.Record(
@@ -22,11 +22,13 @@ const CopilotUserCache = Schema.Struct({
     Schema.Struct({
       retrievedAt: Schema.String,
       response: Schema.Struct({
-        token_based_billing: Schema.Boolean,
-        quota_reset_date_utc: Schema.String,
-        quota_snapshots: Schema.Struct({
-          premium_interactions: Schema.optional(CopilotQuotaSnapshot),
-        }),
+        token_based_billing: Schema.optional(Schema.Boolean),
+        quota_reset_date_utc: Schema.optional(Schema.String),
+        quota_snapshots: Schema.optional(
+          Schema.Struct({
+            premium_interactions: Schema.optional(CopilotQuotaSnapshot),
+          }),
+        ),
       }),
     }),
   ),
@@ -51,14 +53,27 @@ function monthlyWindowDurationMins(resetsAt: string): number | undefined {
   );
 }
 
+function formatIsoDateTime(value: string): string | undefined {
+  const date = DateTime.make(value);
+  return Option.isNone(date) ? undefined : DateTime.formatIso(date.value);
+}
+
 export function copilotUsageEntryToLimits(entry: CopilotUserCacheEntry): ServerProviderUsageLimits {
-  const checkedAt = entry.retrievedAt;
-  const snapshot = entry.response.quota_snapshots.premium_interactions;
-  if (snapshot === undefined || snapshot.unlimited) {
+  const checkedAt = formatIsoDateTime(entry.retrievedAt) ?? entry.retrievedAt;
+  const snapshot = entry.response.quota_snapshots?.premium_interactions;
+  if (
+    snapshot === undefined ||
+    snapshot.unlimited === true ||
+    snapshot.percent_remaining === undefined ||
+    !Number.isFinite(snapshot.percent_remaining)
+  ) {
     return makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
   }
-  const resetsAt = entry.response.quota_reset_date_utc;
-  const windowDurationMins = monthlyWindowDurationMins(resetsAt);
+  const resetsAt = entry.response.quota_reset_date_utc
+    ? formatIsoDateTime(entry.response.quota_reset_date_utc)
+    : undefined;
+  const windowDurationMins =
+    resetsAt === undefined ? undefined : monthlyWindowDurationMins(resetsAt);
   return makeUsageLimits({
     checkedAt,
     windows: [
@@ -67,7 +82,7 @@ export function copilotUsageEntryToLimits(entry: CopilotUserCacheEntry): ServerP
         kind: "monthly",
         label: entry.response.token_based_billing ? "Monthly credits" : "Premium requests",
         usedPercent: clampPercent(100 - snapshot.percent_remaining),
-        resetsAt,
+        ...(resetsAt === undefined ? {} : { resetsAt }),
         ...(windowDurationMins === undefined ? {} : { windowDurationMins }),
       },
     ],
@@ -78,20 +93,23 @@ function copilotUsageCacheToLimits(
   cache: typeof CopilotUserCache.Type,
 ): ServerProviderUsageLimits | undefined {
   const entries = Object.values(cache.copilotUserCache);
-  const newest = entries.reduce<CopilotUserCacheEntry | undefined>(
-    (current, entry) =>
-      current === undefined || Date.parse(entry.retrievedAt) > Date.parse(current.retrievedAt)
-        ? entry
-        : current,
-    undefined,
-  );
+  const newest = entries.reduce<CopilotUserCacheEntry | undefined>((current, entry) => {
+    const retrievedAt = DateTime.make(entry.retrievedAt);
+    if (Option.isNone(retrievedAt)) return current;
+    const currentRetrievedAt =
+      current === undefined ? Option.none() : DateTime.make(current.retrievedAt);
+    return Option.isNone(currentRetrievedAt) ||
+      DateTime.toEpochMillis(retrievedAt.value) > DateTime.toEpochMillis(currentRetrievedAt.value)
+      ? entry
+      : current;
+  }, undefined);
   return newest === undefined ? undefined : copilotUsageEntryToLimits(newest);
 }
 
 function copilotCacheDirectory(
   environment: NodeJS.ProcessEnv,
   path: Path.Path,
-  platform: string = HostProcess.Platform.defaultValue(),
+  platform: NodeJS.Platform,
 ): string {
   if (environment.COPILOT_CACHE_HOME) return environment.COPILOT_CACHE_HOME;
   const home = environment.HOME ?? environment.USERPROFILE ?? "";
@@ -110,13 +128,16 @@ export const readCopilotUsageLimits = Effect.fn("readCopilotUsageLimits")(functi
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
   const probeFailed = makeUnavailableUsageLimits({
     checkedAt,
     reason: "probeFailed",
     message: "Start a Copilot session to load its quota.",
   });
   return yield* fileSystem
-    .readFileString(path.join(copilotCacheDirectory(environment, path), "copilot-user-cache.json"))
+    .readFileString(
+      path.join(copilotCacheDirectory(environment, path, platform), "copilot-user-cache.json"),
+    )
     .pipe(
       Effect.flatMap((contents) => decodeCopilotUserCache(stripLeadingComments(contents))),
       Effect.map(copilotUsageCacheToLimits),
