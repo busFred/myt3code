@@ -143,4 +143,42 @@ describe("resolveUsageLimitsAfterProbe", () => {
     expect(resolveUsageLimitsAfterProbe({ published, probed: unsupported })).toBe(unsupported);
     expect(resolveUsageLimitsAfterProbe({ published: undefined, probed: failed })).toBe(failed);
   });
+
+  it.each([
+    ["a failed probe", true, false],
+    ["older successful limits", false, false],
+    ["a failed probe from the same account", true, true],
+    ["older successful limits from the same account", false, true],
+  ] as const)("resolves %s using credential fingerprints", (_name, probeFailed, sameAccount) => {
+    const live = {
+      ...published,
+      checkedAt: "2026-09-03T12:00:05.000Z",
+      credentialFingerprint: "account-a",
+    };
+    const probed = probeFailed
+      ? {
+          checkedAt,
+          windows: [],
+          unavailable: { reason: "probeFailed" as const },
+          credentialFingerprint: sameAccount ? "account-a" : "account-b",
+        }
+      : {
+          ...published,
+          windows: [{ ...session, usedPercent: 10 }],
+          credentialFingerprint: sameAccount ? "account-a" : "account-b",
+        };
+
+    const resolved = resolveUsageLimitsAfterProbe({ published: live, probed });
+    if (!sameAccount) {
+      expect(resolved).toBe(probed);
+    } else if (probeFailed) {
+      expect(resolved).toBe(live);
+    } else {
+      expect(resolved).toEqual({
+        ...probed,
+        checkedAt: live.checkedAt,
+        windows: live.windows,
+      });
+    }
+  });
 });

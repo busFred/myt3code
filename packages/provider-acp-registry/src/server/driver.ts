@@ -646,6 +646,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const hostEnvironment = yield* HostProcess.Environment;
     const fileSystem = yield* FileSystem.FileSystem;
+    const digest = yield* Digest.Digest;
     const path = yield* Path.Path;
     const host = yield* ProviderHost.ProviderHost;
     const continuationIdentity = defaultProviderContinuationIdentity({
@@ -762,6 +763,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       ? readCopilotUsageLimits(processEnvironment).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
+          Effect.provideService(Digest.Digest, digest),
         )
       : undefined;
     const checkProvider = Effect.gen(function* () {
@@ -842,7 +844,6 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       // Inspection may fetch the registry when its disk cache is missing; creation must not wait on that.
       initialSnapshot: () => buildInitialAcpRegistrySnapshot(readinessInput),
       checkProvider,
-      ...(checkUsageLimits === undefined ? {} : { checkUsageLimits }),
       enrichSnapshot: Effect.fn("enrichSnapshot")(function ({
         snapshot,
         getSnapshot,

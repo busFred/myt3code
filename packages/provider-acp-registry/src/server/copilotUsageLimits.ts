@@ -5,6 +5,7 @@ import {
   makeUnavailableUsageLimits,
   makeUsageLimits,
 } from "@t3tools/provider-core/server/usageLimits";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -65,12 +66,25 @@ function copilotUserCacheEntries(cache: typeof CopilotUserCache.Type): CopilotUs
   });
 }
 
-function signedInLogin(contents: string): string | undefined {
+function signedInAccount(contents: string): { host: string; login: string } | undefined {
   const config = decodeCopilotConfig(stripLeadingComments(contents));
   if (Option.isNone(config)) return undefined;
   const login = config.value.lastLoggedInUser?.login?.trim();
-  return login || undefined;
+  return login
+    ? {
+        host: config.value.lastLoggedInUser?.host?.trim() || "https://github.com",
+        login,
+      }
+    : undefined;
 }
+
+const copilotAccountFingerprint = Effect.fnUntraced(function* (host: string, login: string) {
+  const digest = yield* (yield* Digest.Digest).digest(
+    Digest.sha256,
+    new TextEncoder().encode(`${host}\n${login.toLowerCase()}`),
+  );
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+});
 
 function monthlyWindowDurationMins(resetsAt: string): number | undefined {
   const reset = DateTime.make(resetsAt);
@@ -125,9 +139,9 @@ export function copilotUsageEntryToLimits(
     windows: [
       {
         ...window,
-        // Copilot remains usable through overage billing, or without a known hard-limit reset.
+        // Per-request allowances are never hard limits; token credits are capped only for overage or an unknown reset.
         usedPercent:
-          snapshot.overage_permitted === true || resetsAt === undefined
+          !tokenBilling || snapshot.overage_permitted === true || resetsAt === undefined
             ? Math.min(usedPercent, 99.9)
             : usedPercent,
         ...(resetsAt === undefined ? {} : { resetsAt }),
@@ -143,9 +157,12 @@ function copilotUsageCacheToLimits(
   now: number,
 ): ServerProviderUsageLimits | undefined {
   const entries = copilotUserCacheEntries(cache);
+  const cachedLogins = new Set(entries.map((entry) => entry.response.login?.trim().toLowerCase()));
   const candidates =
     login === undefined
-      ? entries
+      ? cachedLogins.size <= 1
+        ? entries
+        : []
       : entries.filter((entry) => entry.response.login?.toLowerCase() === login.toLowerCase());
   const newest = candidates.reduce<CopilotUserCacheEntry | undefined>((current, entry) => {
     const retrievedAt = DateTime.make(entry.retrievedAt);
@@ -198,10 +215,16 @@ export const readCopilotUsageLimits = Effect.fn("readCopilotUsageLimits")(functi
     message: "Start a Copilot session to load its quota.",
   });
   const configHome = environment.COPILOT_HOME || path.join(home, ".copilot");
-  const login = yield* fileSystem.readFileString(path.join(configHome, "config.json")).pipe(
-    Effect.map(signedInLogin),
+  const account = yield* fileSystem.readFileString(path.join(configHome, "config.json")).pipe(
+    Effect.map(signedInAccount),
     Effect.orElseSucceed(() => undefined),
   );
+  const credentialFingerprint =
+    account === undefined
+      ? undefined
+      : yield* copilotAccountFingerprint(account.host, account.login);
+  const identify = (limits: ServerProviderUsageLimits) =>
+    credentialFingerprint === undefined ? limits : { ...limits, credentialFingerprint };
   return yield* fileSystem
     .readFileString(
       path.join(
@@ -211,8 +234,9 @@ export const readCopilotUsageLimits = Effect.fn("readCopilotUsageLimits")(functi
     )
     .pipe(
       Effect.flatMap((contents) => decodeCopilotUserCache(stripLeadingComments(contents))),
-      Effect.map((cache) => copilotUsageCacheToLimits(cache, login, now)),
+      Effect.map((cache) => copilotUsageCacheToLimits(cache, account?.login, now)),
       Effect.map((limits) => limits ?? probeFailed),
-      Effect.orElseSucceed(() => probeFailed),
+      Effect.map(identify),
+      Effect.orElseSucceed(() => identify(probeFailed)),
     );
 });
