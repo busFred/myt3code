@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -9,19 +10,28 @@ import { copilotUsageEntryToLimits, readCopilotUsageLimits } from "./copilotUsag
 const retrievedAt = "2026-11-18T23:37:24.815Z";
 const resetsAt = "2026-12-01T00:00:00.000Z";
 const entry = (input: {
-  readonly retrievedAt?: string;
-  readonly tokenBasedBilling?: boolean;
-  readonly percentRemaining?: number;
-  readonly unlimited?: boolean;
+  readonly retrievedAt?: string | undefined;
+  readonly tokenBasedBilling?: boolean | undefined;
+  readonly percentRemaining?: number | undefined;
+  readonly unlimited?: boolean | undefined;
+  readonly resetDate?: string | undefined;
 }) => ({
-  retrievedAt: input.retrievedAt ?? retrievedAt,
+  retrievedAt: Object.hasOwn(input, "retrievedAt") ? input.retrievedAt! : retrievedAt,
   response: {
-    token_based_billing: input.tokenBasedBilling ?? true,
-    quota_reset_date_utc: resetsAt,
+    ...("tokenBasedBilling" in input
+      ? { token_based_billing: input.tokenBasedBilling }
+      : { token_based_billing: true }),
+    ...("resetDate" in input
+      ? { quota_reset_date_utc: input.resetDate }
+      : {
+          quota_reset_date_utc: resetsAt,
+        }),
     quota_snapshots: {
       premium_interactions: {
-        percent_remaining: input.percentRemaining ?? 42,
-        unlimited: input.unlimited ?? false,
+        ...("percentRemaining" in input
+          ? { percent_remaining: input.percentRemaining }
+          : { percent_remaining: 42 }),
+        ...("unlimited" in input ? { unlimited: input.unlimited } : { unlimited: false }),
       },
     },
   },
@@ -31,6 +41,7 @@ describe("copilotUsageEntryToLimits", () => {
   it.effect.each([
     ["Monthly credits", true],
     ["Premium requests", false],
+    ["Premium requests", undefined],
   ] as const)("labels token billing usage as %s", ([label, tokenBasedBilling]) =>
     Effect.sync(() => {
       expect(copilotUsageEntryToLimits(entry({ tokenBasedBilling })).windows[0]).toMatchObject({
@@ -72,6 +83,33 @@ describe("copilotUsageEntryToLimits", () => {
       });
     }),
   );
+
+  it.effect.each([
+    ["missing", undefined],
+    ["non-finite", Number.POSITIVE_INFINITY],
+  ] as const)("reports %s percent remaining as unsupported", ([, percentRemaining]) =>
+    Effect.sync(() => {
+      expect(copilotUsageEntryToLimits(entry({ percentRemaining }))).toEqual({
+        checkedAt: retrievedAt,
+        windows: [],
+        unavailable: { reason: "unsupported" },
+      });
+    }),
+  );
+
+  it.effect.each([
+    ["missing", undefined],
+    ["invalid", "not-a-date"],
+  ] as const)("omits reset information when the reset date is %s", ([, resetDate]) =>
+    Effect.sync(() => {
+      expect(copilotUsageEntryToLimits(entry({ resetDate })).windows[0]).toEqual({
+        id: "premium_interactions",
+        kind: "monthly",
+        label: "Monthly credits",
+        usedPercent: 58,
+      });
+    }),
+  );
 });
 
 it.layer(NodeServices.layer)("readCopilotUsageLimits", (it) => {
@@ -79,7 +117,9 @@ it.layer(NodeServices.layer)("readCopilotUsageLimits", (it) => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const cacheHome = yield* fileSystem.makeTempDirectoryScoped();
+      const home = yield* fileSystem.makeTempDirectoryScoped();
+      const cacheHome = path.join(home, "Library", "Caches", "copilot");
+      yield* fileSystem.makeDirectory(cacheHome, { recursive: true });
       yield* fileSystem.writeFileString(
         path.join(cacheHome, "copilot-user-cache.json"),
         [
@@ -95,12 +135,18 @@ it.layer(NodeServices.layer)("readCopilotUsageLimits", (it) => {
                 ...entry({ percentRemaining: 25 }),
                 ignored: { personal: "not retained" },
               },
+              invalid: entry({
+                retrievedAt: "not-a-date",
+                percentRemaining: 0,
+              }),
             },
           }),
         ].join("\n"),
       );
 
-      const limits = yield* readCopilotUsageLimits({ COPILOT_CACHE_HOME: cacheHome });
+      const limits = yield* readCopilotUsageLimits({ HOME: home }).pipe(
+        Effect.provideService(HostProcess.Platform, "darwin"),
+      );
 
       expect(limits.checkedAt).toBe(retrievedAt);
       expect(limits.windows[0]?.usedPercent).toBe(75);
