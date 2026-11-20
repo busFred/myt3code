@@ -164,6 +164,48 @@ const handleCheckForUpdatesMenuClick = Effect.gen(function* () {
   yield* checkForUpdatesFromMenu;
 }).pipe(Effect.withSpan("desktop.menu.handleCheckForUpdatesClick"));
 
+const reinstallFromMenu = Effect.gen(function* () {
+  const updates = yield* DesktopUpdates.DesktopUpdates;
+  const electronDialog = yield* ElectronDialog.ElectronDialog;
+  const disabledReason = yield* updates.disabledReason;
+  if (Option.isSome(disabledReason)) {
+    yield* electronDialog.showMessageBox({
+      type: "info",
+      title: m(msg("Updates unavailable")),
+      message: m(msg("Automatic updates are not available right now.")),
+      detail: disabledReason.value,
+      buttons: [m(msg("OK"))],
+    });
+    return;
+  }
+  const { response } = yield* electronDialog.showMessageBox({
+    type: "warning",
+    title: m(msg("Reinstall this version")),
+    message: m(msg("Download and reinstall this version of T3 Code?")),
+    detail: m(
+      msg(
+        "This restarts the background service, if there is one, and then relaunches T3 Code. Any running tasks will be interrupted.",
+      ),
+    ),
+    buttons: [m(msg("Reinstall")), m(msg("Cancel"))],
+    defaultId: 1,
+    cancelId: 1,
+  });
+  if (response !== 0) return;
+  yield* updates.reinstallCurrent.pipe(
+    Effect.catchTags({
+      DesktopReinstallError: (error) =>
+        electronDialog.showMessageBox({
+          type: "error",
+          title: m(msg("Reinstall failed")),
+          message: m(msg("T3 Code could not be reinstalled.")),
+          detail: error.reason,
+          buttons: [m(msg("OK"))],
+        }),
+    }),
+  );
+}).pipe(Effect.withSpan("desktop.menu.reinstall"));
+
 /** @public */
 export const make = Effect.gen(function* () {
   const electronMenu = yield* ElectronMenu.ElectronMenu;
@@ -193,6 +235,9 @@ export const make = Effect.gen(function* () {
   const configure = Effect.gen(function* () {
     const checkForUpdatesClick = () => {
       runMenuEffect("check-for-updates", handleCheckForUpdatesMenuClick);
+    };
+    const reinstallClick = () => {
+      runMenuEffect("reinstall-current-version", reinstallFromMenu);
     };
     const settingsClick = () => {
       runMenuEffect("open-settings", dispatchMenuAction("open-settings"));
@@ -399,6 +444,10 @@ export const make = Effect.gen(function* () {
           {
             label: m(msg("Check for Updates...")),
             click: checkForUpdatesClick,
+          },
+          {
+            label: m(msg("Reinstall This Version…")),
+            click: reinstallClick,
           },
         ],
       },

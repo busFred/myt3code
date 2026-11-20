@@ -4,6 +4,7 @@ import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
@@ -520,6 +521,58 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
 
       assert.isFalse(yield* fs.exists(path.join(finalPaths.versionDir, "partial")));
       assert.isTrue(yield* fs.exists(finalPaths.entryPath));
+    }),
+  );
+
+  it.effect.each([
+    { name: "swaps a verified download over the installed runtime", checksum: "valid" },
+    { name: "keeps the installed runtime when the download fails verification", checksum: "bad" },
+  ])("reinstalling $name", ({ checksum }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-reinstall-" });
+      const installed = pinnedRuntimePaths(path, baseDir, version, "linux");
+      yield* fs.makeDirectory(installed.versionDir, { recursive: true });
+      yield* fs.writeFileString(installed.entryPath, "old\n");
+      yield* fs.writeFileString(installed.sentinelPath, `${version}\n`);
+      const requests: string[] = [];
+      let swaps = 0;
+
+      const exit = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: releaseHttpClient(
+          checksum === "valid" ? yield* validChecksums : `${"0".repeat(64)}  ${archiveName}\n`,
+          requests,
+        ),
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.void,
+        replaceExisting: true,
+        aroundReplace: (swap) => Effect.suspend(() => ((swaps += 1), swap)),
+      }).pipe(Effect.exit);
+
+      assert.isTrue(requests.some((url) => url.endsWith(archiveName)));
+      if (checksum === "valid") {
+        assert.isTrue(Exit.isSuccess(exit));
+        assert.equal(swaps, 1);
+        assert.equal(yield* fs.readFileString(installed.entryPath), "#!/bin/sh\n");
+        assert.equal(yield* fs.readFileString(installed.sentinelPath), `${version}\n`);
+        assert.equal(
+          yield* fs.readFileString(
+            path.join(baseDir, "runtime", "versions", `.pruned-${version}`, "t3"),
+          ),
+          "old\n",
+        );
+      } else {
+        assert.isTrue(Exit.isFailure(exit));
+        assert.equal(swaps, 0);
+        assert.equal(yield* fs.readFileString(installed.entryPath), "old\n");
+      }
     }),
   );
 
