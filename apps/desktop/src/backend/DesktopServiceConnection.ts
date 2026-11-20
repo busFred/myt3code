@@ -76,7 +76,7 @@ const PairResult = Schema.Struct({
 });
 
 const isServiceConnectionError = Schema.is(DesktopServiceConnectionError);
-const decodeServiceStatus = Schema.decodeUnknownEffect(Schema.fromJsonString(ServiceStatus));
+export const decodeServiceStatus = Schema.decodeUnknownEffect(Schema.fromJsonString(ServiceStatus));
 const decodePairResult = Schema.decodeUnknownEffect(Schema.fromJsonString(PairResult));
 
 export const runBundledCli = Effect.fn("DesktopServiceConnection.runBundledCli")(function* (

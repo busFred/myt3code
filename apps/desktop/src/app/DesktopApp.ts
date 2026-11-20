@@ -23,6 +23,7 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 import * as DesktopBackendManager from "../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
+import * as DesktopLauncherRefresh from "../backend/DesktopLauncherRefresh.ts";
 import * as DesktopServiceConnection from "../backend/DesktopServiceConnection.ts";
 import * as DesktopLocalEnvironmentAuth from "../backend/DesktopLocalEnvironmentAuth.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -240,6 +241,7 @@ const startLocalBackend = Effect.gen(function* () {
     yield* (yield* ElectronApp.ElectronApp).quit;
     return false;
   }
+  yield* Effect.forkScoped(DesktopLauncherRefresh.refreshInstalledCommand());
   if (localBackend === "attach") {
     yield* (yield* DesktopWindow.DesktopWindow).showConnectingServiceSplash;
     yield* primaryBackend.start;

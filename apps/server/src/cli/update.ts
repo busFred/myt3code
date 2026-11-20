@@ -205,39 +205,82 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   return Option.some(launcher);
 });
 
+const readRecordedLaunchers = Effect.fn("cli.update.read_recorded_launchers")(function* (
+  baseDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const records = yield* fs
+    .readFileString(path.join(baseDir, "runtime", "launchers"))
+    .pipe(
+      Effect.catch((error) =>
+        error.reason._tag === "NotFound"
+          ? Effect.succeed("")
+          : Console.warn(`Could not read recorded t3 launchers: ${error}`).pipe(Effect.as("")),
+      ),
+    );
+  return [...new Set(records.split(/\r?\n/).filter((entry) => path.isAbsolute(entry)))];
+});
+
+/** Where a recorded launcher points, when that is inside this home's `runtime/versions`. */
+const ownedLauncherTarget = Effect.fn("cli.update.owned_launcher_target")(function* (
+  launcher: string,
+  versionsDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  let target: string | undefined;
+  if (platform === "win32") {
+    const contents = yield* fs.readFileString(launcher).pipe(Effect.option);
+    target = Option.isSome(contents) ? windowsShimTarget(contents.value) : undefined;
+  } else {
+    const link = yield* fs.readLink(launcher).pipe(Effect.option);
+    target = Option.isSome(link)
+      ? path.resolve(path.dirname(launcher), link.value)
+      : yield* readPosixLauncherTarget(launcher);
+  }
+  return target !== undefined && launcherOwnsVersionsDir(path, versionsDir, target)
+    ? target
+    : undefined;
+});
+
+/** Whether a recorded launcher of this home points at a runtime version older than `version`. */
+const hasLauncherOnOlderVersion = Effect.fn("cli.update.has_launcher_on_older_version")(
+  function* (input: { readonly baseDir: string; readonly version: string }) {
+    const path = yield* Path.Path;
+    const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
+    for (const launcher of yield* readRecordedLaunchers(input.baseDir)) {
+      const target = yield* ownedLauncherTarget(launcher, versionsDir).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const launcherVersion =
+        target === undefined ? undefined : path.relative(versionsDir, target).split(/[\\/]/)[0];
+      if (
+        launcherVersion !== undefined &&
+        isExactServiceVersion(launcherVersion) &&
+        compareExactServiceVersions(launcherVersion, input.version) < 0
+      ) {
+        return true;
+      }
+    }
+    return false;
+  },
+);
+
 export const repointRecordedLaunchers = Effect.fn("cli.update.repoint_recorded_launchers")(
   function* (input: { readonly baseDir: string; readonly targetEntryPath: string }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const platform = yield* HostProcess.Platform;
     const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
-    const records = yield* fs
-      .readFileString(path.join(input.baseDir, "runtime", "launchers"))
-      .pipe(
-        Effect.catch((error) =>
-          error.reason._tag === "NotFound"
-            ? Effect.succeed("")
-            : Console.warn(`Could not read recorded t3 launchers: ${error}`).pipe(Effect.as("")),
-        ),
-      );
     let repointed = false;
-    for (const launcher of new Set(
-      records.split(/\r?\n/).filter((entry) => path.isAbsolute(entry)),
-    )) {
+    for (const launcher of yield* readRecordedLaunchers(input.baseDir)) {
       const result = yield* Effect.gen(function* () {
+        if ((yield* ownedLauncherTarget(launcher, versionsDir)) === undefined) return false;
         if (platform === "win32") {
-          const contents = yield* fs.readFileString(launcher).pipe(Effect.option);
-          const target = Option.isSome(contents) ? windowsShimTarget(contents.value) : undefined;
-          if (target === undefined || !launcherOwnsVersionsDir(path, versionsDir, target))
-            return false;
           yield* fs.writeFileString(launcher, `@echo off\r\n"${input.targetEntryPath}" %*`);
         } else {
-          const link = yield* fs.readLink(launcher).pipe(Effect.option);
-          const target = Option.isSome(link)
-            ? path.resolve(path.dirname(launcher), link.value)
-            : yield* readPosixLauncherTarget(launcher);
-          if (target === undefined || !launcherOwnsVersionsDir(path, versionsDir, target))
-            return false;
           yield* writePosixLauncher({
             launcher,
             executable: input.targetEntryPath,
@@ -495,7 +538,13 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       ? serviceVersion
       : currentVersion;
 
-  if (executableCurrent && serviceCurrent) {
+  // The desktop app's bundled CLI is always on the app's version, so a stale `t3` launcher
+  // is the only sign that an installed copy still needs to move.
+  const launcherStale =
+    executableCurrent &&
+    serviceCurrent &&
+    (yield* hasLauncherOnOlderVersion({ baseDir: input.baseDir, version: targetVersion }));
+  if (executableCurrent && serviceCurrent && !launcherStale) {
     yield* Console.log(
       serviceVersion !== undefined
         ? `t3 and its background service are already on ${targetVersion} (${targetChannel}).`
@@ -519,7 +568,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   progress.heading(
     executableCurrent && restartPending
       ? `The background service is still running the version before ${targetVersion} (${targetChannel}).`
-      : executableCurrent
+      : executableCurrent && serviceInstalled
         ? `Updating the background service ${serviceVersion ?? "(unknown version)"} -> ${targetVersion} (${targetChannel}).`
         : alreadyOnDisk
           ? "Switching T3 Code"
