@@ -8,6 +8,7 @@ import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -368,6 +369,44 @@ describe("DesktopUpdates", () => {
         }),
       ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
     }),
+  );
+
+  it.effect.each([
+    { feedVersion: "1.2.3", reinstalled: true },
+    { feedVersion: "1.2.4", reinstalled: false },
+  ])(
+    "reinstalling accepts the same version for the reinstall only ($feedVersion offered)",
+    ({ feedVersion, reinstalled }) => {
+      const harness = makeHarness({
+        launchersRecorded: true,
+        checkForUpdates: Effect.suspend(() => {
+          harness.emit("update-available", { version: feedVersion });
+          return flushCallbacks;
+        }),
+        downloadUpdate: Effect.suspend(() => {
+          harness.emit("update-downloaded", { version: feedVersion });
+          return flushCallbacks;
+        }),
+      });
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+
+          const exit = yield* updates.reinstallCurrent.pipe(Effect.exit);
+
+          assert.equal(Exit.isSuccess(exit), reinstalled);
+          assert.deepEqual(harness.acceptSameVersionChanges, [true, false]);
+          assert.deepEqual(
+            harness.serviceUpdateArgs.map((args) => args.slice(args.indexOf("update"), -2)),
+            reinstalled ? [["update", "1.2.3", "--reinstall", "--yes"]] : [],
+          );
+          assert.equal(harness.downloadCount(), reinstalled ? 1 : 0);
+          assert.equal(harness.installSteps.includes("quitAndInstall"), reinstalled);
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    },
   );
 
   it.effect("preserves a queued installer after a background updater error", () => {

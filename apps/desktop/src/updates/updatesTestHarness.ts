@@ -53,6 +53,8 @@ export interface UpdatesHarnessOptions {
   readonly savedChannel?: DesktopAppSettings.DesktopSettings["updateChannel"];
   /** Adds a WSL backend beside the primary, as on a Windows host with WSL enabled. */
   readonly wslBackend?: boolean;
+  /** Whether `runtime/launchers` exists, as after the standalone installer ran. */
+  readonly launchersRecorded?: boolean;
 }
 
 export function makeHarness(options: UpdatesHarnessOptions = {}) {
@@ -61,6 +63,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   let downloadCount = 0;
   let allowDowngrade = false;
   const checkAllowedDowngrade: boolean[] = [];
+  const acceptSameVersionChanges: boolean[] = [];
   let fullChangelog = false;
   const feedUrls: ElectronUpdater.ElectronUpdaterFeedUrl[] = [];
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
@@ -140,6 +143,10 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     setAllowDowngrade: (value) =>
       Effect.sync(() => {
         allowDowngrade = value;
+      }),
+    setAcceptSameVersion: (value) =>
+      Effect.sync(() => {
+        acceptSameVersionChanges.push(value);
       }),
     setFullChangelog: (value) =>
       Effect.sync(() => {
@@ -321,7 +328,12 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
             }),
           );
     },
-    exists: (path) => Effect.succeed(!deletedFiles.has(path)),
+    exists: (path) =>
+      Effect.succeed(
+        path.endsWith("/runtime/launchers")
+          ? options.launchersRecorded === true
+          : !deletedFiles.has(path),
+      ),
     makeDirectory: () => Effect.void,
     writeFileString: (path, data) =>
       Effect.sync(() => {
@@ -388,6 +400,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     fullChangelog: () => fullChangelog,
     /** Whether each feed check could offer an older release, and the flag now. */
     checkAllowedDowngrade,
+    acceptSameVersionChanges,
     allowDowngrade: () => allowDowngrade,
     listenerCount: () =>
       Array.from(listeners.values()).reduce(

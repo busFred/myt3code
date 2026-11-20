@@ -64,20 +64,24 @@ const layerElectronApp = Layer.succeed(ElectronApp.ElectronApp, {
 interface MenuServices {
   readonly checkResult?: DesktopUpdateCheckResult;
   readonly shownMessageBox?: Deferred.Deferred<Electron.MessageBoxOptions>;
+  readonly reinstall?: Effect.Effect<void, DesktopUpdates.DesktopReinstallError>;
+  readonly dialogResponse?: number;
+  readonly boxes?: Electron.MessageBoxOptions[];
 }
 
-const layerElectronDialog = ({ shownMessageBox }: MenuServices) =>
+const layerElectronDialog = ({ shownMessageBox, dialogResponse, boxes }: MenuServices) =>
   Layer.succeed(ElectronDialog.ElectronDialog, {
     pickFolder: () => Effect.succeedNone,
     pickFiles: () => Effect.succeed([]),
     showMessageBox: (options) =>
-      (shownMessageBox ? Deferred.succeed(shownMessageBox, options) : Effect.void).pipe(
-        Effect.as({ response: options.cancelId ?? 0, checkboxChecked: false }),
+      Effect.sync(() => boxes?.push(options)).pipe(
+        Effect.andThen(shownMessageBox ? Deferred.succeed(shownMessageBox, options) : Effect.void),
+        Effect.as({ response: dialogResponse ?? options.cancelId ?? 0, checkboxChecked: false }),
       ),
     showErrorBox: () => Effect.void,
   } satisfies ElectronDialog.ElectronDialog["Service"]);
 
-const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
+const layerDesktopUpdates = ({ checkResult, reinstall }: MenuServices) =>
   Layer.succeed(DesktopUpdates.DesktopUpdates, {
     getState: Effect.die("unexpected getState"),
     isActionActive: Effect.succeed(false),
@@ -91,6 +95,7 @@ const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
     download: Effect.die("unexpected download"),
     install: Effect.die("unexpected install"),
     installPrepared: () => Effect.die("unexpected installPrepared"),
+    reinstallCurrent: reinstall ?? Effect.die("unexpected reinstallCurrent"),
   } satisfies DesktopUpdates.DesktopUpdates["Service"]);
 
 const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
@@ -233,7 +238,52 @@ const pressPasteAsText = (
   };
 };
 
+const clickReinstall = (services: MenuServices) =>
+  Effect.gen(function* () {
+    const applicationMenuTemplate =
+      yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+    yield* configureMenu(yield* Deferred.make<string>(), applicationMenuTemplate, {}, services);
+    const helpMenu = (yield* Deferred.await(applicationMenuTemplate)).find(
+      (item) => item.role === "help",
+    );
+    const item = Array.isArray(helpMenu?.submenu)
+      ? helpMenu.submenu.find((entry) => entry.label === "Reinstall This Version…")
+      : undefined;
+    if (typeof item?.click !== "function") {
+      throw new Error("Expected a Reinstall This Version… Help item with a click handler.");
+    }
+    // Every stub completes synchronously, so the action has finished when click returns.
+    item.click({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
+  });
+
 describe("DesktopApplicationMenu", () => {
+  it.effect("reinstalls only after the user confirms, and reports a failure", () =>
+    Effect.gen(function* () {
+      let reinstalls = 0;
+      const reinstall = Effect.sync(() => {
+        reinstalls += 1;
+      });
+      yield* clickReinstall({ reinstall });
+      assert.equal(reinstalls, 0);
+      yield* clickReinstall({ reinstall, dialogResponse: 0 });
+      assert.equal(reinstalls, 1);
+
+      const boxes: Electron.MessageBoxOptions[] = [];
+      yield* clickReinstall({
+        dialogResponse: 0,
+        reinstall: Effect.fail(new DesktopUpdates.DesktopReinstallError({ reason: "no feed" })),
+        boxes,
+      });
+      assert.deepEqual(
+        boxes.map((box) => [box.title, box.detail?.slice(0, 7)]),
+        [
+          ["Reinstall this version", "This re"],
+          ["Reinstall failed", "no feed"],
+        ],
+      );
+    }),
+  );
+
   it.effect.each(["linux", "win32"] as const)(
     "leaves the %s accelerator to Chromium instead of injecting a paste",
     (platform) =>

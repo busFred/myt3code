@@ -843,6 +843,9 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
   const update = (
     baseDir: string,
     options: {
+      readonly reinstall?: boolean;
+      readonly platform?: NodeJS.Platform;
+      readonly executablePath?: string;
       readonly service?: BootService.BootServiceStatus;
     },
     requests: string[] = [],
@@ -901,6 +904,7 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
         requestedVersion: version,
         allowDowngrade: false,
         assumeYes: true,
+        reinstall: options.reinstall ?? false,
       }).pipe(
         Effect.andThen(TestConsole.logLines),
         Effect.map((lines) => lines.join("\n")),
@@ -924,9 +928,10 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
         ),
       );
     }).pipe(
-      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.Platform, options.platform ?? "linux"),
       Effect.provideService(HostProcess.Architecture, "x64"),
       Effect.provideService(HostProcess.Environment, { PATH: "" }),
+      Effect.provideService(HostProcess.ExecutablePath, options.executablePath ?? "/usr/bin/t3"),
     );
   };
 
@@ -964,4 +969,27 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
     }),
   );
 
+  it.effect("reinstall downloads again, swaps the runtime and repoints launchers", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { baseDir, launcher, currentEntry } = yield* fixture({ launcherVersion: version });
+      const requests: string[] = [];
+      yield* update(baseDir, { reinstall: true }, requests);
+      assert.isTrue(requests.some((url) => url.endsWith(".tar.gz")));
+      assert.equal(yield* fs.readFileString(currentEntry), "new\n");
+      assert.equal(yield* readPosixLauncherTarget(launcher), currentEntry);
+    }),
+  );
+
+  it.effect("reinstall on Windows refuses to replace the runtime it is running from", () =>
+    Effect.gen(function* () {
+      const { baseDir } = yield* fixture({ launcherVersion: version });
+      const error = yield* update(baseDir, {
+        reinstall: true,
+        platform: "win32",
+        executablePath: `${baseDir}/runtime/versions/${version}/t3.exe`,
+      }).pipe(Effect.flip);
+      assert.include(error.message, "being replaced");
+    }),
+  );
 });

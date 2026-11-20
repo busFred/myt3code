@@ -85,6 +85,8 @@ export class ElectronUpdater extends Context.Service<
     readonly setAllowPrerelease: (value: boolean) => Effect.Effect<void>;
     readonly allowDowngrade: Effect.Effect<boolean>;
     readonly setAllowDowngrade: (value: boolean) => Effect.Effect<void>;
+    /** electron-updater treats the running version as no update; a reinstall needs it offered. */
+    readonly setAcceptSameVersion: (value: boolean) => Effect.Effect<void>;
     readonly setFullChangelog: (value: boolean) => Effect.Effect<void>;
     readonly setDisableDifferentialDownload: (value: boolean) => Effect.Effect<void>;
     readonly checkForUpdates: Effect.Effect<void, ElectronUpdaterCheckForUpdatesError>;
@@ -99,6 +101,11 @@ export class ElectronUpdater extends Context.Service<
     ) => Effect.Effect<void, never, Scope.Scope>;
   }
 >()("@t3tools/desktop/electron/ElectronUpdater") {}
+
+type SameVersionPatch = {
+  isUpdateAvailable: (this: unknown, info: { readonly version: string }) => Promise<boolean>;
+};
+let sameVersionActive = false;
 
 /** @public */
 export const make = ElectronUpdater.of({
@@ -137,6 +144,24 @@ export const make = ElectronUpdater.of({
     return Effect.suspend(() => {
       autoUpdater.allowDowngrade = value;
       return Effect.void;
+    });
+  }),
+  setAcceptSameVersion: Effect.fn("ElectronUpdater.setAcceptSameVersion")(function (value) {
+    return Effect.sync(() => {
+      const updater = autoUpdater as unknown as SameVersionPatch;
+      if (!value) {
+        if (sameVersionActive) Reflect.deleteProperty(updater, "isUpdateAvailable");
+        sameVersionActive = false;
+        return;
+      }
+      if (sameVersionActive) return;
+      sameVersionActive = true;
+      const original = updater.isUpdateAvailable;
+      updater.isUpdateAvailable = async function (info) {
+        return (
+          (await original.call(this, info)) || info.version === autoUpdater.currentVersion.version
+        );
+      };
     });
   }),
   setFullChangelog: Effect.fn("ElectronUpdater.setFullChangelog")(function (value) {

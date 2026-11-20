@@ -66,6 +66,10 @@ terminals, so the app asks first. If you update the app another way, such as
 with your package manager, the app offers to update an older service when it
 next opens.
 
+To download and install the current version again, for example after a damaged
+install, run `t3 update --reinstall` or choose **Help → Reinstall This Version…**
+in the app. Both restart the service and ask first; the app also relaunches.
+
 ## Local network access
 
 A new service answers only on this machine. Other devices reach it through

@@ -119,6 +119,14 @@ interface PinnedRuntimeInstallInput {
   /** Reuse a cached runtime only while the release source still lists it, as a policy mirror does. */
   readonly requirePublishedRelease?: boolean;
   readonly onProgress?: (progress: PinnedRuntimeProgress) => void;
+  /** Download and verify again even when this version is installed, then swap it in. */
+  readonly replaceExisting?: boolean;
+  /** Wraps the swap of an existing directory, for a platform that cannot replace one in use. */
+  readonly aroundReplace?:
+    | undefined
+    | (<A>(
+        swap: Effect.Effect<A, PinnedRuntimeInstallError>,
+      ) => Effect.Effect<A, PinnedRuntimeInstallError>);
 }
 
 // GitHub release downloads intermittently answer 5xx during incidents; a retry usually lands.
@@ -383,7 +391,10 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
     ),
   );
   const alreadyPinned =
-    entryExists && Option.isSome(sentinel) && sentinel.value.trim() === input.version;
+    input.replaceExisting !== true &&
+    entryExists &&
+    Option.isSome(sentinel) &&
+    sentinel.value.trim() === input.version;
   if (alreadyPinned) {
     if (input.requirePublishedRelease === true) {
       const platformKey = cliArchivePlatformKey(input.platform, input.arch);
@@ -398,7 +409,7 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
     yield* input.validate(paths);
     return paths;
   }
-  if (versionDirExists) {
+  if (versionDirExists && input.replaceExisting !== true) {
     yield* fs.remove(paths.versionDir, { recursive: true, force: true }).pipe(
       Effect.mapError(
         (cause) =>
@@ -456,35 +467,62 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
             new PinnedRuntimeInstallError({ step: "recording the completed install", cause }),
         ),
       );
-    const published = yield* fs.rename(stagingDir, paths.versionDir).pipe(
-      Effect.as(true),
-      Effect.catch((cause) =>
-        Effect.all([
-          fs.exists(paths.entryPath),
-          fs.readFileString(paths.sentinelPath).pipe(Effect.option),
-        ]).pipe(
-          Effect.mapError(
-            (checkCause) =>
-              new PinnedRuntimeInstallError({
-                step: "checking a concurrently published pinned runtime",
-                cause: checkCause,
-              }),
-          ),
-          Effect.flatMap(([publishedEntryExists, publishedSentinel]) =>
-            publishedEntryExists &&
-            Option.isSome(publishedSentinel) &&
-            publishedSentinel.value.trim() === input.version
-              ? Effect.succeed(false)
-              : Effect.fail(
-                  new PinnedRuntimeInstallError({
-                    step: "publishing the pinned runtime",
-                    cause,
-                  }),
+    const publish = Effect.gen(function* () {
+      const aside = input.path.join(versionsDir, `${PINNED_RUNTIME_PRUNED_PREFIX}${input.version}`);
+      const movedAside =
+        input.replaceExisting === true && versionDirExists
+          ? yield* fs.remove(aside, { recursive: true, force: true }).pipe(
+              Effect.andThen(fs.rename(paths.versionDir, aside)),
+              Effect.mapError(
+                (cause) =>
+                  new PinnedRuntimeInstallError({ step: "setting the old runtime aside", cause }),
+              ),
+              Effect.as(true),
+            )
+          : false;
+      return yield* fs.rename(stagingDir, paths.versionDir).pipe(
+        Effect.as(true),
+        Effect.catch((cause) =>
+          movedAside
+            ? fs.rename(aside, paths.versionDir).pipe(
+                Effect.ignore,
+                Effect.andThen(
+                  Effect.fail(
+                    new PinnedRuntimeInstallError({
+                      step: "publishing the pinned runtime",
+                      cause,
+                    }),
+                  ),
                 ),
-          ),
+              )
+            : Effect.all([
+                fs.exists(paths.entryPath),
+                fs.readFileString(paths.sentinelPath).pipe(Effect.option),
+              ]).pipe(
+                Effect.mapError(
+                  (checkCause) =>
+                    new PinnedRuntimeInstallError({
+                      step: "checking a concurrently published pinned runtime",
+                      cause: checkCause,
+                    }),
+                ),
+                Effect.flatMap(([publishedEntryExists, publishedSentinel]) =>
+                  publishedEntryExists &&
+                  Option.isSome(publishedSentinel) &&
+                  publishedSentinel.value.trim() === input.version
+                    ? Effect.succeed(false)
+                    : Effect.fail(
+                        new PinnedRuntimeInstallError({
+                          step: "publishing the pinned runtime",
+                          cause,
+                        }),
+                      ),
+                ),
+              ),
         ),
-      ),
-    );
+      );
+    });
+    const published = yield* input.aroundReplace?.(publish) ?? publish;
     if (!published) yield* input.validate(paths);
     return paths;
   }).pipe(

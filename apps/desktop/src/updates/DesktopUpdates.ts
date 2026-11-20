@@ -115,6 +115,15 @@ export class DesktopUpdateActionInProgressError extends Schema.TaggedError<Deskt
   }
 }
 
+export class DesktopReinstallError extends Schema.TaggedError<DesktopReinstallError>()(
+  "DesktopReinstallError",
+  { reason: Schema.String },
+) {
+  override get message(): string {
+    return this.reason;
+  }
+}
+
 export class DesktopUpdateChannelPersistenceError extends Schema.TaggedError<DesktopUpdateChannelPersistenceError>()(
   "DesktopUpdateChannelPersistenceError",
   {
@@ -226,6 +235,11 @@ export class DesktopUpdates extends Context.Service<
     readonly installPrepared: (
       expectedVersion: string,
     ) => Effect.Effect<DesktopPreparedUpdateInstallResult>;
+    /**
+     * Reinstalls the running version: the installed `t3` command and background service when
+     * there are any, then this app, which relaunches. Nothing changes if the release is not offered.
+     */
+    readonly reinstallCurrent: Effect.Effect<void, DesktopReinstallError>;
   }
 >()("@t3tools/desktop/updates/DesktopUpdates") {}
 
@@ -1125,6 +1139,73 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  const refreshInstalledCli = Effect.fn("desktop.updates.refreshInstalledCli")(function* () {
+    const hasLauncher = yield* fileSystem
+      .exists(environment.path.join(environment.baseDir, "runtime", "launchers"))
+      .pipe(Effect.orElseSucceed(() => false));
+    const serviceHere =
+      hasLauncher ||
+      (yield* DesktopServiceConnection.runBundledCli("status", [
+        "service",
+        "status",
+        "--json",
+      ]).pipe(
+        Effect.flatMap(DesktopServiceConnection.decodeServiceStatus),
+        Effect.map((status) => status.installed && status.otherBaseDir === undefined),
+        Effect.orElseSucceed(() => false),
+      ));
+    if (!serviceHere) return;
+    yield* DesktopServiceConnection.runBundledCli("update", [
+      "update",
+      environment.appVersion,
+      "--reinstall",
+      "--yes",
+    ]);
+  });
+
+  const reinstallCurrent = Effect.fn("desktop.updates.reinstallCurrent")(function* () {
+    const fail = (reason: string) => Effect.fail(new DesktopReinstallError({ reason }));
+    if (!(yield* Ref.get(updaterConfiguredRef))) {
+      return yield* fail("Updates are not available for this install.");
+    }
+    return yield* Effect.acquireUseRelease(
+      electronUpdater.setAcceptSameVersion(true),
+      () =>
+        Effect.gen(function* () {
+          // Checked first so a release the feed no longer lists changes nothing.
+          const checked = yield* checkForUpdates("reinstall");
+          const offered = yield* Ref.get(updateStateRef);
+          if (!checked || offered.status !== "available") {
+            return yield* fail("This version is not available to download right now.");
+          }
+          if (offered.availableVersion !== environment.appVersion) {
+            return yield* fail(
+              `Version ${offered.availableVersion ?? "unknown"} is available. Install that update instead.`,
+            );
+          }
+          yield* refreshInstalledCli().pipe(
+            Effect.provide(serviceUpdateContext),
+            Effect.mapError((cause) => new DesktopReinstallError({ reason: cause.message })),
+          );
+          const download = yield* downloadAvailableUpdate(false);
+          if (!download.completed) {
+            return yield* fail(
+              (yield* Ref.get(updateStateRef)).message ?? "The download did not complete.",
+            );
+          }
+          const install = yield* installWithExpectedVersion(environment.appVersion);
+          // A started install returns before the app quits, so only a refusal or failure is an error.
+          if (!install.accepted || install.failed) {
+            return yield* fail(install.state.message ?? "The install did not complete.");
+          }
+        }),
+      () => electronUpdater.setAcceptSameVersion(false),
+    ).pipe(
+      // Otherwise the same-version offer stays on screen as an available update.
+      Effect.tapError(() => checkForUpdates("reinstall-failed").pipe(Effect.ignore)),
+    );
+  });
+
   const startUpdatePollers: Effect.Effect<void, never, Scope.Scope> = Effect.gen(function* () {
     yield* Effect.sleep(AUTO_UPDATE_STARTUP_DELAY).pipe(
       Effect.andThen(checkForUpdates("startup")),
@@ -1539,6 +1620,7 @@ export const make = Effect.gen(function* () {
     installPrepared: Effect.fn("DesktopUpdates.installPrepared")(function (expectedVersion) {
       return installWithExpectedVersion(expectedVersion);
     }),
+    reinstallCurrent: reinstallCurrent(),
   });
 });
 

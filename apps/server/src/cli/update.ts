@@ -29,6 +29,7 @@ import {
   launcherOwnsVersionsDir,
   isUnpublishedRelease,
   pinnedRuntimePaths,
+  PinnedRuntimeInstallError,
   PinnedRuntimePreflightBlockedError,
   pinnedRuntimeVersionsDir,
   prunePinnedRuntimes,
@@ -354,6 +355,12 @@ const updateFlags = {
     Flag.withDescription("Allow moving to an older version than the one running."),
     Flag.withDefault(false),
   ),
+  reinstall: Flag.Boolean("reinstall").pipe(
+    Flag.withDescription(
+      "Download and verify the target version again even when it is installed, and replace it.",
+    ),
+    Flag.withDefault(false),
+  ),
   yes: Flag.Boolean("yes").pipe(
     Flag.withAlias("y"),
     Flag.withDescription(
@@ -390,6 +397,7 @@ export const updateCommand = Command.make("update", {
         requestedVersion: Option.getOrUndefined(flags.version),
         allowDowngrade: flags.allowDowngrade,
         assumeYes: flags.yes,
+        reinstall: flags.reinstall,
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -456,7 +464,9 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly requestedVersion: string | undefined;
   readonly allowDowngrade: boolean;
   readonly assumeYes: boolean;
+  readonly reinstall?: boolean;
 }) {
+  const reinstall = input.reinstall === true;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runner = yield* ProcessRunner.ProcessRunner;
@@ -531,7 +541,8 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   const restartPending = status.problems?.includes("restart-pending") === true;
   const serviceCurrent =
     !serviceInstalled ||
-    (serviceVersion === targetVersion &&
+    (!reinstall &&
+      serviceVersion === targetVersion &&
       (executableCurrent ? status.current : (status.problems ?? []).length === 0));
   const newestInstalled =
     serviceVersion !== undefined && compareExactServiceVersions(serviceVersion, currentVersion) > 0
@@ -543,8 +554,9 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   const launcherStale =
     executableCurrent &&
     serviceCurrent &&
+    !reinstall &&
     (yield* hasLauncherOnOlderVersion({ baseDir: input.baseDir, version: targetVersion }));
-  if (executableCurrent && serviceCurrent && !launcherStale) {
+  if (executableCurrent && serviceCurrent && !reinstall && !launcherStale) {
     yield* Console.log(
       serviceVersion !== undefined
         ? `t3 and its background service are already on ${targetVersion} (${targetChannel}).`
@@ -565,15 +577,27 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       Effect.orElseSucceed(() => false),
     );
 
+  if (reinstall && platform === "win32") {
+    const executablePath = yield* HostProcess.ExecutablePath;
+    const versionDir = pinnedRuntimePaths(path, input.baseDir, targetVersion, platform).versionDir;
+    if (launcherOwnsVersionsDir(path, versionDir, executablePath)) {
+      return yield* new CliUpdateError({
+        reason: `This t3 is running from the t3@${targetVersion} runtime being replaced. Run the reinstall from the desktop app or another t3 version.`,
+      });
+    }
+  }
+
   progress.heading(
-    executableCurrent && restartPending
-      ? `The background service is still running the version before ${targetVersion} (${targetChannel}).`
-      : executableCurrent && serviceInstalled
-        ? `Updating the background service ${serviceVersion ?? "(unknown version)"} -> ${targetVersion} (${targetChannel}).`
-        : alreadyOnDisk
-          ? "Switching T3 Code"
-          : "Updating T3 Code",
-    executableCurrent
+    reinstall
+      ? `Reinstalling T3 Code ${targetVersion} (${targetChannel}).`
+      : executableCurrent && restartPending
+        ? `The background service is still running the version before ${targetVersion} (${targetChannel}).`
+        : executableCurrent && serviceInstalled
+          ? `Updating the background service ${serviceVersion ?? "(unknown version)"} -> ${targetVersion} (${targetChannel}).`
+          : alreadyOnDisk
+            ? "Switching T3 Code"
+            : "Updating T3 Code",
+    executableCurrent || reinstall
       ? ""
       : `${currentVersion} → ${targetVersion}${targetChannel === "stable" ? "" : ` (${targetChannel})`}`,
   );
@@ -610,6 +634,21 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     arch,
     releaseBaseUrl: mirror?.feedUrl ?? (environment[CLI_RELEASE_BASE_URL_ENV]?.trim() || undefined),
     requirePublishedRelease: mirror !== undefined,
+    replaceExisting: reinstall,
+    aroundReplace:
+      platform === "win32"
+        ? (swap) =>
+            service.withStopped(swap).pipe(
+              Effect.mapError((error) =>
+                error._tag === "PinnedRuntimeInstallError"
+                  ? error
+                  : new PinnedRuntimeInstallError({
+                      step: "stopping the background service to replace the runtime",
+                      cause: error,
+                    }),
+              ),
+            )
+        : undefined,
     validate: (runtime) =>
       runStagedServicePreflight({
         runner,
