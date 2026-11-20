@@ -793,3 +793,149 @@ it.layer(NodeServices.layer)("t3 update checks the database before switching", (
     ),
   );
 });
+
+it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
+  const version = packageJson.version;
+  const fixture = Effect.fnUntraced(function* (input: { readonly launcherVersion: string }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+    const entries = new Map<string, string>();
+    for (const name of new Set([version, input.launcherVersion])) {
+      const runtime = pinnedRuntimePaths(path, baseDir, name, "linux");
+      yield* fs.makeDirectory(runtime.versionDir, { recursive: true });
+      yield* fs.writeFileString(runtime.entryPath, "old\n");
+      yield* fs.writeFileString(runtime.sentinelPath, `${name}\n`);
+      entries.set(name, runtime.entryPath);
+    }
+    const launcher = path.join(baseDir, "t3");
+    yield* fs.symlink(entries.get(input.launcherVersion)!, launcher);
+    yield* fs.writeFileString(path.join(baseDir, "runtime", "launchers"), `${launcher}\n`);
+    return { baseDir, launcher, currentEntry: entries.get(version)!, runtimeDir: baseDir };
+  });
+
+  const update = (
+    baseDir: string,
+    options: {
+      readonly service?: BootService.BootServiceStatus;
+    },
+    requests: string[] = [],
+  ) => {
+    const path = Path.Path;
+    return Effect.gen(function* () {
+      yield* withoutTerminals;
+      const fs = yield* FileSystem.FileSystem;
+      const unitPath = (yield* path).join(baseDir, "t3code.service");
+      const status: BootService.BootServiceStatus = options.service ?? {
+        supported: true,
+        installed: false,
+        current: false,
+        unitPath,
+        logPath: unitPath,
+      };
+      const service = Layer.mock(BootService.BootService, {
+        status: Effect.succeed(status),
+        withStopped: (operation) => operation,
+      });
+      vi.spyOn(BootService, "layer").mockReturnValue(service);
+      const archiveName = `t3-${version}-linux-x64.tar.gz`;
+      const archive = new TextEncoder().encode("archive");
+      const digest = yield* Effect.promise(() => crypto.subtle.digest("SHA-256", archive));
+      const hex = Array.from(new Uint8Array(digest), (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      ).join("");
+      const runner = ProcessRunner.ProcessRunner.of({
+        run: (input) => {
+          if (input.command === "tar") {
+            const staging = input.args[input.args.indexOf("-C") + 1]!;
+            return fs
+              .writeFileString(`${staging}/t3`, "new\n")
+              .pipe(Effect.orDie, Effect.andThen(unrelatedLsof.run(input)));
+          }
+          return input.args?.includes("__service-preflight") === true
+            ? unrelatedLsof.run(input).pipe(
+                Effect.map((result) => ({
+                  ...result,
+                  stdout: JSON.stringify({
+                    status: "ready",
+                    version,
+                    launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+                  }),
+                })),
+              )
+            : unrelatedLsof.run(input);
+        },
+      });
+      return yield* runUpdate({
+        baseDir,
+        logsDir: baseDir,
+        databasePath: `${baseDir}/statev2.sqlite`,
+        serverRuntimeStatePath: `${baseDir}/server-runtime.json`,
+        channel: undefined,
+        requestedVersion: version,
+        allowDowngrade: false,
+        assumeYes: true,
+      }).pipe(
+        Effect.andThen(TestConsole.logLines),
+        Effect.map((lines) => lines.join("\n")),
+        Effect.provide(
+          Layer.mergeAll(
+            service,
+            Layer.succeed(ProcessRunner.ProcessRunner, runner),
+            ManagedPolicy.layerTest(),
+            Layer.succeed(
+              HttpClient.HttpClient,
+              HttpClient.make((request) => {
+                requests.push(request.url);
+                const body = request.url.endsWith("/SHA256SUMS")
+                  ? `${hex}  ${archiveName}\n`
+                  : archive;
+                return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(body)));
+              }),
+            ),
+            Layer.fresh(TestConsole.layer),
+          ),
+        ),
+      );
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.Architecture, "x64"),
+      Effect.provideService(HostProcess.Environment, { PATH: "" }),
+    );
+  };
+
+  it.effect("moves a stale recorded launcher to the app's version with no service installed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { baseDir, launcher, currentEntry } = yield* fixture({ launcherVersion: "0.0.1" });
+      const output = yield* update(baseDir, {});
+      assert.include(output, "Run t3 to get started.");
+      assert.equal(yield* readPosixLauncherTarget(launcher), currentEntry);
+      assert.equal(yield* fs.readFileString(currentEntry), "old\n");
+    }),
+  );
+
+  it.effect("exits early when the recorded launcher already points at this version", () =>
+    Effect.gen(function* () {
+      const { baseDir, launcher, currentEntry } = yield* fixture({ launcherVersion: version });
+      const output = yield* update(baseDir, {});
+      assert.include(output, "already on");
+      assert.equal(
+        yield* FileSystem.FileSystem.pipe(Effect.flatMap((fs) => fs.readLink(launcher))),
+        currentEntry,
+      );
+    }),
+  );
+
+  it.effect("leaves a recorded launcher on a newer version alone", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { baseDir, launcher } = yield* fixture({ launcherVersion: "99.0.0" });
+      const before = yield* fs.readLink(launcher);
+      const output = yield* update(baseDir, {});
+      assert.include(output, "already on");
+      assert.equal(yield* fs.readLink(launcher), before);
+    }),
+  );
+
+});
