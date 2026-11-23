@@ -2,7 +2,12 @@ import type { AuthPendingAppInvite } from "@t3tools/contracts";
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { type AppInvitePickupDeps, pickUpAppInvites } from "./appInvitePickup";
+import {
+  type AppInvitePickupDeps,
+  appInviteSignal,
+  pickUpAppInvites,
+  shouldTakeAppInvites,
+} from "./appInvitePickup";
 
 const invite = (id: string, urls: ReadonlyArray<string>) =>
   ({
@@ -81,5 +86,27 @@ describe("pickUpAppInvites", () => {
     expect(await pickUpAppInvites(deps)).toBe(1);
     expect(log).toHaveBeenCalledOnce();
     expect(log.mock.calls[0]?.[0]).toContain("Machine a");
+  });
+});
+
+describe("shouldTakeAppInvites", () => {
+  const take = (
+    snapshot: { readonly appInvites?: ReadonlyArray<unknown> } | null,
+    failed: boolean,
+    checkedAtLaunch: boolean,
+  ) => shouldTakeAppInvites(appInviteSignal({ snapshot, failed }), checkedAtLaunch);
+
+  it("takes only when the snapshot lists invites", () => {
+    expect(take({ appInvites: [{}] }, false, true)).toBe(true);
+    expect(take({ appInvites: [] }, false, false)).toBe(false);
+    expect(take(null, false, false)).toBe(false);
+  });
+
+  it("checks once at launch when no snapshot says", () => {
+    // A server that predates invites, or an access stream that failed.
+    expect(take({}, false, false)).toBe(true);
+    expect(take({}, false, true)).toBe(false);
+    expect(take(null, true, false)).toBe(true);
+    expect(take(null, true, true)).toBe(false);
   });
 });

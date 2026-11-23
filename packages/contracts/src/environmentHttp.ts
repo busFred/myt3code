@@ -33,7 +33,7 @@ import {
   AuthRenewClientSessionInput,
   AuthRenewClientSessionResult,
   AuthCreateAppInviteInput,
-  AuthAppInvite,
+  AuthCreateAppInviteResult,
   AuthRevokeAppInviteInput,
   AuthRevokeAppInviteResult,
   AuthTakePendingAppInvitesResult,
@@ -741,7 +741,7 @@ class EnvironmentAccessHttpApi extends HttpApiGroup.make("access")
     HttpApiEndpoint.post("createAppInvite", "/api/app-invites", {
       headers: OptionalBearerHeaders,
       payload: AuthCreateAppInviteInput,
-      success: AuthAppInvite,
+      success: AuthCreateAppInviteResult,
       error: EnvironmentScopedOperationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

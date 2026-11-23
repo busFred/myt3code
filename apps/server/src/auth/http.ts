@@ -575,10 +575,16 @@ export const layer = HttpApiBuilder.group(
         Effect.fn("environment.auth.renewClient")(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
-            yield* requireEnvironmentScope(AuthAccessWriteScope);
+            const session = yield* requireEnvironmentScope(AuthAccessWriteScope);
             const renewed = yield* serverAuth.renewSession(
               args.payload.sessionId,
               args.payload.lifetime,
+              {
+                callerScopes: session.scopes,
+                ...(args.payload.expectedSubject
+                  ? { expectedSubject: args.payload.expectedSubject }
+                  : {}),
+              },
             );
             return Option.match(renewed, {
               onNone: () => ({ renewed: false }),
@@ -588,6 +594,8 @@ export const layer = HttpApiBuilder.group(
           Effect.catchTags({
             ServerAuthSessionNotRenewableError: () =>
               failEnvironmentOperationForbidden("session_not_renewable"),
+            ServerAuthRenewScopeRequiredError: (error) =>
+              failEnvironmentScopeRequired(error.requiredScope),
           }),
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("client_session_renew_failed", error),

@@ -59,20 +59,25 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AppInvites", (it
     }).pipe(Effect.provide(Layer.merge(layerAppInvites, TestClock.layer()))),
   );
 
-  it.effect("ends an invite when its code does, after 7 days, or when replaced or revoked", () =>
+  it.effect("ends an invite when its code does, after a day, or when replaced or revoked", () =>
     Effect.gen(function* () {
       const invites = yield* AppInvites.AppInvites;
       const now = yield* DateTime.now;
       const shortLived = yield* invites.create({
         ...inviteInput("SHORT"),
         credentialExpiresAt: DateTime.add(now, { hours: 1 }),
+        pairingLinkId: "link-short",
       });
       expect(shortLived.expiresAt.epochMilliseconds).toBe(now.epochMilliseconds + 3_600_000);
-      // A newer invite for the same environment replaces it.
-      const replacing = yield* invites.create(inviteInput("REPLACING"));
-      expect(replacing.expiresAt.epochMilliseconds).toBe(
-        now.epochMilliseconds + 7 * 24 * 3_600_000,
-      );
+      expect(shortLived.replacedPairingLinkIds).toEqual([]);
+      expect((yield* invites.list).map((invite) => invite.pairingLinkId)).toEqual(["link-short"]);
+      // A newer invite for the same environment replaces it, and names its code's link.
+      const replacing = yield* invites.create({
+        ...inviteInput("REPLACING"),
+        credentialExpiresAt: DateTime.add(now, { days: 7 }),
+      });
+      expect(replacing.expiresAt.epochMilliseconds).toBe(now.epochMilliseconds + 24 * 3_600_000);
+      expect(replacing.replacedPairingLinkIds).toEqual(["link-short"]);
       const other = yield* invites.create(inviteInput("OTHER", EnvironmentId.make("b")));
       expect((yield* invites.list).map((invite) => invite.id).toSorted()).toEqual(
         [replacing.id, other.id].toSorted(),
@@ -80,7 +85,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AppInvites", (it
 
       expect(yield* invites.revoke(other.id)).toBe(true);
       expect(yield* invites.revoke(other.id)).toBe(false);
-      yield* TestClock.adjust("7 days");
+      yield* TestClock.adjust("1 day");
       expect(yield* invites.takePending).toEqual([]);
     }).pipe(Effect.provide(Layer.merge(layerAppInvites, TestClock.layer()))),
   );

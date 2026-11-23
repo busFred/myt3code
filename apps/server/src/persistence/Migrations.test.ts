@@ -131,8 +131,10 @@ describe("runMigrations", () => {
         SELECT name FROM pragma_table_info('auth_sessions') WHERE name = 'renewal_window_json'
         UNION ALL
         SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'auth_app_invites'
+        UNION ALL
+        SELECT name FROM pragma_table_info('auth_app_invites') WHERE name = 'pairing_link_id'
       `;
-      assert.lengthOf(forkColumns, 3);
+      assert.lengthOf(forkColumns, 4);
 
       // query_only rejects BEGIN IMMEDIATE, which CLI startup would otherwise take on the live database.
       yield* sql`PRAGMA query_only = ON`;

@@ -985,7 +985,7 @@ type PairingClientsListProps = {
   ) => void;
   appInvites: ReadonlyArray<AuthAppInvite>;
   revokingAppInviteId: string | null;
-  onRevokeAppInvite: (id: string) => void;
+  onRevokeAppInvite: (invite: AuthAppInvite) => void;
   canRevoke: boolean;
 };
 
@@ -1073,7 +1073,7 @@ const AppInviteListRow = memo(function AppInviteListRow({
 }: {
   invite: AuthAppInvite;
   revoking: boolean;
-  onRevoke: (id: string) => void;
+  onRevoke: (invite: AuthAppInvite) => void;
   canRevoke: boolean;
 }) {
   const gt = useGT();
@@ -1103,7 +1103,7 @@ const AppInviteListRow = memo(function AppInviteListRow({
             size="xs"
             variant="destructive-outline"
             disabled={!canRevoke || revoking}
-            onClick={() => onRevoke(invite.id)}
+            onClick={() => onRevoke(invite)}
           >
             {revoking ? gt("Revoking…") : gt("Revoke")}
           </Button>

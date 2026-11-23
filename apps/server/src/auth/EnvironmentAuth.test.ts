@@ -3,7 +3,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   authScopeResponse,
   AuthAdministrativeClientScopes,
+  AuthRelayConfigureScope,
+  type AuthSessionLifetime,
+  AuthStandardClientScopes,
   connectDeviceVerificationCode,
+  MCP_CLIENT_SESSION_SUBJECT,
   NEVER_EXPIRES_AT_MILLIS,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
@@ -594,6 +598,44 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
       }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
     );
 
+    it.effect("slides a peer link by the lifetime it was given or renewed to", () =>
+      Effect.gen(function* () {
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const day = 24 * 60 * 60 * 1000;
+        const issue = (lifetime?: AuthSessionLifetime) =>
+          serverAuth.issueMcpClientSession({
+            label: "T3 Code · A",
+            access: "auto",
+            peerLink: true,
+            client: requestMetadata,
+            ...(lifetime ? { lifetime } : {}),
+          });
+        const use = (session: { readonly token: string }) =>
+          serverAuth.authenticateMcpClient(makeBearerRequest(session.token)).pipe(
+            Effect.map((client) => client.linkExpiresAt?.epochMilliseconds ?? null),
+            Effect.catchTags({
+              ServerAuthInvalidCredentialError: () => Effect.succeed("refused" as const),
+            }),
+          );
+        const issuedAt = (yield* DateTime.now).epochMilliseconds;
+        const week = yield* issue({ _tag: "duration", millis: 7 * day });
+        const shortened = yield* issue();
+        const forever = yield* issue({ _tag: "never" });
+        yield* serverAuth.renewSession(shortened.sessionId, { _tag: "duration", millis: day });
+
+        yield* TestClock.adjust("12 hours");
+        expect(yield* use(week)).toBe(issuedAt + 7.5 * day);
+        expect(yield* use(shortened)).toBe(issuedAt + 1.5 * day);
+        expect(yield* use(forever)).toBe(NEVER_EXPIRES_AT_MILLIS);
+
+        // An idle day ends the one-day link; the week link still ends a week after its last use.
+        yield* TestClock.adjust("2 days");
+        expect(yield* use(shortened)).toBe("refused");
+        expect(yield* use(week)).toBe(issuedAt + 9.5 * day);
+        expect(yield* use(forever)).toBe(NEVER_EXPIRES_AT_MILLIS);
+      }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
+    );
+
     it.effect(
       "gives each session a pairing link creates the link's lifetime, but not T3 Connect's",
       () =>
@@ -725,6 +767,30 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
           );
           expect(refused._tag).toBe("ServerAuthSessionNotRenewableError");
         }
+
+        // A caller may shorten a session that holds a scope it lacks, but not lengthen it.
+        const admin = yield* serverAuth.issueSession({ scopes: AuthAdministrativeClientScopes });
+        const callerScopes = new Set(AuthStandardClientScopes);
+        const lengthened = yield* Effect.flip(
+          serverAuth.renewSession(admin.sessionId, { _tag: "never" }, { callerScopes }),
+        );
+        expect(lengthened).toMatchObject({
+          _tag: "ServerAuthRenewScopeRequiredError",
+          requiredScope: AuthRelayConfigureScope,
+        });
+        const shortened = yield* serverAuth.renewSession(
+          admin.sessionId,
+          { _tag: "duration", millis: 60_000 },
+          { callerScopes },
+        );
+        expect(Option.isSome(shortened)).toBe(true);
+        // A renewal meant for a peer link leaves a session with another subject alone.
+        const otherSubject = yield* serverAuth.renewSession(
+          admin.sessionId,
+          { _tag: "never" },
+          { expectedSubject: MCP_CLIENT_SESSION_SUBJECT },
+        );
+        expect(Option.isNone(otherSubject)).toBe(true);
       }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
     );
 

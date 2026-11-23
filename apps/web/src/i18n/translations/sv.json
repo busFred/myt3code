@@ -13017,7 +13017,6 @@
   "78821aeb6235a718": "Redan klart",
   "4832793f4309ff73": "App för {label}",
   "0774359db08acd8f": "Länka åt båda håll",
-  "314d7b467b50ba88": "Länkar även den andra maskinen tillbaka till den här och bjuder in dess skrivbordsapp att ansluta. Slår på Labs → Länkade miljöer på varje maskin där det är avslaget.",
   "419f172a19dc331a": "Det gick inte att förnya klientåtkomsten",
   "069d9205c8700651": "Den sessionen finns inte längre.",
   "a8e9f58d8faf45f0": "Det gick inte att förnya klientåtkomsten.",
@@ -13041,5 +13040,7 @@
   "b6151aba5c92d5d9": "Vid avslut när appen är ansluten till bakgrundstjänsten",
   "0f1aea9181bd9938": "När du stänger fönstret fortsätter T3 Code att köras i systemfältet. Använd ikonen där för att visa det igen eller avsluta. I GNOME kräver ikoner i systemfältet tillägget AppIndicator; att starta T3 Code igen tar också fram fönstret.",
   "dd2e0c88ac9c9641": "Stäng till systemfältet",
-  "57285efd2e1f1c4e": "stäng fönster dölj bakgrund fortsätt köra systemfält meddelandefält avsluta"
+  "57285efd2e1f1c4e": "stäng fönster dölj bakgrund fortsätt köra systemfält meddelandefält avsluta",
+  "ed71095d921c8c1a": "Endast med full åtkomst",
+  "ba479fe77e035abe": "Länkar även den andra maskinen tillbaka till den här och bjuder, med full åtkomst, in dess skrivbordsapp att ansluta inom ett dygn. Slår på Labs → Länkade miljöer på varje maskin där det är avslaget."
 }

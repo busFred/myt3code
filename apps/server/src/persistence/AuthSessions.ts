@@ -42,7 +42,7 @@ export const AuthSessionRecord = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-  /** A renewing device's window; NULL is the server default. Other sessions ignore it. */
+  /** The lifetime it was issued or renewed with, which a sliding session keeps; NULL: default. */
   renewalWindow: Schema.NullOr(AuthSessionLifetime),
 });
 export type AuthSessionRecord = typeof AuthSessionRecord.Type;

@@ -13010,7 +13010,6 @@
   "78821aeb6235a718": "Já concluído",
   "4832793f4309ff73": "App para {label}",
   "0774359db08acd8f": "Vincular nos dois sentidos",
-  "314d7b467b50ba88": "Também vincula a outra máquina a esta e convida o app de desktop dela a se conectar. Ativa Labs → Ambientes vinculados em cada máquina em que estiver desativado.",
   "419f172a19dc331a": "Não foi possível renovar o acesso do cliente",
   "069d9205c8700651": "Essa sessão não existe mais.",
   "a8e9f58d8faf45f0": "Falha ao renovar o acesso do cliente.",
@@ -13034,5 +13033,7 @@
   "b6151aba5c92d5d9": "Ao sair conectado ao serviço em segundo plano",
   "0f1aea9181bd9938": "Fechar a janela mantém o T3 Code em execução na bandeja do sistema. Use o ícone da bandeja para mostrá-lo de novo ou sair. No GNOME, os ícones da bandeja precisam da extensão AppIndicator; abrir o T3 Code novamente também traz a janela de volta.",
   "dd2e0c88ac9c9641": "Fechar para a bandeja do sistema",
-  "57285efd2e1f1c4e": "fechar janela ocultar segundo plano continuar executando bandeja área de notificação sair"
+  "57285efd2e1f1c4e": "fechar janela ocultar segundo plano continuar executando bandeja área de notificação sair",
+  "ed71095d921c8c1a": "Somente com acesso total",
+  "ba479fe77e035abe": "Também vincula a outra máquina a esta e, com acesso total, convida o app de desktop dela a se conectar em até um dia. Ativa Labs → Ambientes vinculados em cada máquina em que estiver desativado."
 }

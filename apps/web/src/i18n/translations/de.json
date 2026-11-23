@@ -13010,7 +13010,6 @@
   "78821aeb6235a718": "Bereits erledigt",
   "4832793f4309ff73": "App für {label}",
   "0774359db08acd8f": "In beide Richtungen verknüpfen",
-  "314d7b467b50ba88": "Verknüpft auch den anderen Rechner mit diesem und lädt dessen Desktop-App zur Verbindung ein. Aktiviert Labs → Verknüpfte Umgebungen auf jedem Rechner, auf dem es aus ist.",
   "419f172a19dc331a": "Clientzugriff konnte nicht verlängert werden",
   "069d9205c8700651": "Diese Sitzung existiert nicht mehr.",
   "a8e9f58d8faf45f0": "Clientzugriff konnte nicht verlängert werden.",
@@ -13034,5 +13033,7 @@
   "b6151aba5c92d5d9": "Beim Beenden, während mit dem Hintergrunddienst verbunden",
   "0f1aea9181bd9938": "Das Schließen des Fensters lässt T3 Code im Infobereich der Taskleiste weiterlaufen. Über das Symbol dort zeigst du es wieder an oder beendest es. Unter GNOME brauchen Symbole im Infobereich die AppIndicator-Erweiterung; ein erneuter Start von T3 Code holt das Fenster ebenfalls zurück.",
   "dd2e0c88ac9c9641": "In Infobereich schließen",
-  "57285efd2e1f1c4e": "fenster schließen ausblenden hintergrund weiterlaufen infobereich tray benachrichtigungsbereich beenden"
+  "57285efd2e1f1c4e": "fenster schließen ausblenden hintergrund weiterlaufen infobereich tray benachrichtigungsbereich beenden",
+  "ed71095d921c8c1a": "Nur mit Vollzugriff",
+  "ba479fe77e035abe": "Verknüpft auch den anderen Rechner mit diesem und lädt bei Vollzugriff dessen Desktop-App ein, sich innerhalb eines Tages zu verbinden. Aktiviert Labs → Verknüpfte Umgebungen auf jedem Rechner, auf dem es aus ist."
 }

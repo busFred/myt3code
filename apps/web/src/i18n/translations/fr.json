@@ -13010,7 +13010,6 @@
   "78821aeb6235a718": "Déjà fait",
   "4832793f4309ff73": "App pour {label}",
   "0774359db08acd8f": "Associer dans les deux sens",
-  "314d7b467b50ba88": "Associe aussi l'autre machine à celle-ci et invite son app de bureau à s'y connecter. Active Labs → Environnements associés sur chaque machine où c'est désactivé.",
   "419f172a19dc331a": "Impossible de renouveler l'accès du client",
   "069d9205c8700651": "Cette session n'existe plus.",
   "a8e9f58d8faf45f0": "Échec du renouvellement de l'accès du client.",
@@ -13034,5 +13033,7 @@
   "b6151aba5c92d5d9": "À la fermeture lorsque l'app est connectée au service en arrière-plan",
   "0f1aea9181bd9938": "Fermer la fenêtre laisse T3 Code actif dans la zone de notification. Utilisez son icône pour le réafficher ou quitter. Sous GNOME, les icônes de la zone de notification nécessitent l'extension AppIndicator ; relancer T3 Code ramène aussi la fenêtre.",
   "dd2e0c88ac9c9641": "Réduire dans la zone de notification à la fermeture",
-  "57285efd2e1f1c4e": "fermer fenêtre masquer arrière-plan rester actif zone de notification barre système quitter"
+  "57285efd2e1f1c4e": "fermer fenêtre masquer arrière-plan rester actif zone de notification barre système quitter",
+  "ed71095d921c8c1a": "Uniquement avec un accès complet",
+  "ba479fe77e035abe": "Associe aussi l'autre machine à celle-ci et, avec un accès complet, invite son app de bureau à s'y connecter dans la journée. Active Labs → Environnements associés sur chaque machine où c'est désactivé."
 }

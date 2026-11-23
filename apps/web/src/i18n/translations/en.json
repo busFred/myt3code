@@ -13019,7 +13019,6 @@
   "78821aeb6235a718": "Already done",
   "4832793f4309ff73": "App for {label}",
   "0774359db08acd8f": "Link both ways",
-  "314d7b467b50ba88": "Also links the other machine back to this one and invites its desktop app to connect. Turns on Labs → Linked environments on either machine where it is off.",
   "419f172a19dc331a": "Could not renew client access",
   "069d9205c8700651": "That session no longer exists.",
   "a8e9f58d8faf45f0": "Failed to renew client access.",
@@ -13043,5 +13042,7 @@
   "b6151aba5c92d5d9": "When quitting while connected to the background service",
   "0f1aea9181bd9938": "Closing the window keeps T3 Code running in the system tray. Use the tray icon to show it again or quit. On GNOME, tray icons need the AppIndicator extension; launching T3 Code again also brings the window back.",
   "dd2e0c88ac9c9641": "Close to system tray",
-  "57285efd2e1f1c4e": "close window hide background keep running tray notification area quit"
+  "57285efd2e1f1c4e": "close window hide background keep running tray notification area quit",
+  "ed71095d921c8c1a": "Only with full access",
+  "ba479fe77e035abe": "Also links the other machine back to this one and, with full access, invites its desktop app to connect within a day. Turns on Labs → Linked environments on either machine where it is off."
 }

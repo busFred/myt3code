@@ -44,11 +44,16 @@ const recordingOps = (fail: Record<string, unknown> = {}, echoLifetime = true) =
       result(`link:${environmentId}->${input.expectedEnvironmentId}:${input.pairingCode}`, {}),
     mintAppCode: (environmentId) =>
       result(`app:${environmentId}`, {
+        id: `app-link-${environmentId}`,
         credential: `app-${environmentId}`,
         expiresAt: DateTime.makeUnsafe(0),
       }),
+    revokeAppCode: (environmentId, id) => result(`revoke:${environmentId}:${id}`, undefined),
     createInvite: (environmentId, input) =>
-      result(`invite:${environmentId}:${input.environmentId}:${input.credential}`, {}),
+      result(
+        `invite:${environmentId}:${input.environmentId}:${input.credential}:${input.pairingLinkId}`,
+        { replacedPairingLinkIds: ["earlier-app-link"] },
+      ),
     isUnsupported: (failure) => failure === NOT_FOUND,
   };
   return { ops, calls };
@@ -60,7 +65,7 @@ describe("runLinkBothWays", () => {
     const outcomes = await runLinkBothWays({
       a: side("a"),
       b: side("b", { linkedEnvironmentsEnabled: false }),
-      access: "auto",
+      access: "full-access",
       lifetime: never,
       invite: true,
       ops,
@@ -77,7 +82,39 @@ describe("runLinkBothWays", () => {
     // Each side links with a code minted on the side it links to.
     expect(calls).toContain("link:environment-a->environment-b:code-environment-b");
     expect(calls).toContain("link:environment-b->environment-a:code-environment-a");
-    expect(calls).toContain("invite:environment-b:environment-a:app-environment-a");
+    expect(calls).toContain(
+      "invite:environment-b:environment-a:app-environment-a:app-link-environment-a",
+    );
+    // The invite it replaced on b can no longer be taken, so its code on a goes too.
+    expect(calls).toContain("revoke:environment-a:earlier-app-link");
+    expect(calls).not.toContain("revoke:environment-a:app-link-environment-a");
+  });
+
+  it("invites only with full access, and revokes the code when the invite fails", async () => {
+    const narrow = recordingOps();
+    const outcomes = await runLinkBothWays({
+      a: side("a"),
+      b: side("b"),
+      access: "auto",
+      invite: true,
+      ops: narrow.ops,
+    });
+    expect(outcomes.get("invite")).toEqual({ kind: "skipped", reason: "not_full_access" });
+    expect(narrow.calls.filter((call) => call.startsWith("app:"))).toEqual([]);
+
+    const refused = recordingOps({
+      "invite:environment-b:environment-a:app-environment-a:app-link-environment-a": new Error(
+        "refused",
+      ),
+    });
+    await runLinkBothWays({
+      a: side("a"),
+      b: side("b"),
+      access: "full-access",
+      invite: true,
+      ops: refused.ops,
+    });
+    expect(refused.calls).toContain("revoke:environment-a:app-link-environment-a");
   });
 
   it("leaves linked directions alone and retries only what failed", async () => {
@@ -124,7 +161,7 @@ describe("runLinkBothWays", () => {
     const outcomes = await runLinkBothWays({
       a: side("a", { linkedEnvironmentsEnabled: false }),
       b: side("b"),
-      access: "auto",
+      access: "full-access",
       invite: true,
       ops,
     });
@@ -144,7 +181,7 @@ describe("runLinkBothWays", () => {
     const outcomes = await runLinkBothWays({
       a: side("a", { urls: [] }),
       b: side("b"),
-      access: "auto",
+      access: "full-access",
       lifetime: never,
       invite: true,
       ops,
@@ -178,16 +215,17 @@ describe("runRenewBothWays", () => {
       },
       lifetime: never,
       ops: {
-        renew: (environmentId, sessionId, lifetime) => {
-          renewed.push(`${environmentId}:${sessionId}:${lifetime._tag}`);
+        renew: (environmentId, sessionId, lifetime, expectedSubject) => {
+          renewed.push(`${environmentId}:${sessionId}:${lifetime._tag}:${expectedSubject}`);
           return Promise.resolve(Result.succeed({ renewed: true }));
         },
       },
     });
+    // Link sessions are renewed only as peer links, so a wrong id cannot reach another session.
     expect(renewed.toSorted()).toEqual([
-      "a:client-on-a:never",
-      "a:link-on-a:never",
-      "b:link-on-b:never",
+      "a:client-on-a:never:undefined",
+      "a:link-on-a:never:mcp-client",
+      "b:link-on-b:never:mcp-client",
     ]);
     expect(Object.fromEntries(outcomes)).toEqual({
       a_to_b: { kind: "done" },

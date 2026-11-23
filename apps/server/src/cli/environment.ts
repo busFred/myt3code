@@ -252,13 +252,19 @@ const environmentLinkCommand = Command.make("link", {
   ),
   bothWays: Flag.Boolean("both-ways").pipe(
     Flag.withDescription(
-      "Also link the other environment to this one, turn on Linked environments on both, and invite its desktop app to connect here. The pairing code must be a standard one from `t3 pair` there.",
+      "Also link the other environment to this one, turn on Linked environments on both, and, with full-access, invite its desktop app to connect here. The pairing code must be a standard one from `t3 pair` there.",
     ),
     Flag.withDefault(false),
   ),
+  inviteApp: Flag.Boolean("invite-app").pipe(
+    Flag.withDescription(
+      "With --both-ways and --access full-access: leave the other side's desktop app a one-day invite to connect here. --no-invite-app skips it.",
+    ),
+    Flag.withDefault(true),
+  ),
   expire: expireFlag.pipe(
     Flag.withDescription(
-      "With --both-ways: how long both links and the desktop app invite last, `never` or a duration such as `90d`. Defaults to 30 days.",
+      "With --both-ways: how long both links and the desktop app's session last, `never` or a duration such as `90d`. Defaults to 30 days.",
     ),
   ),
   selfUrl: Flag.String("self-url").pipe(
@@ -304,6 +310,7 @@ const environmentLinkCommand = Command.make("link", {
             access: flags.access,
             lifetime: flags.expire,
             selfUrls: flags.selfUrl,
+            inviteApp: flags.inviteApp,
           }),
         );
       }
