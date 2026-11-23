@@ -61,6 +61,12 @@ In web or desktop provider settings, choose **Update Antigravity** when an updat
 is available. T3 checks Google's CLI release channel while provider update checks
 are enabled. Installing or reinstalling also checks that channel. Updates keep
 your profile and existing runtime available if the new release fails validation.
+**Update now** and **Update all** in **Settings → Providers** run the same update.
+
+If T3 Code runs Google's standalone CLI from its installer's location
+(`~/.local/bin/agy`, or `%LOCALAPPDATA%\agy\bin\agy.exe` on Windows), those
+buttons run `agy update` instead. Update other `agy` installs with the tool that
+installed them.
 
 T3 needs Antigravity 1.5 or newer and recommends 1.5.12 or newer. Sessions do not
 start on an older runtime: update the managed runtime here, or update the executable

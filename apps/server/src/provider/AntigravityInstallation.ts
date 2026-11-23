@@ -119,6 +119,10 @@ interface AntigravityInstallationService {
   readonly state: Effect.Effect<ProviderInstallState>;
   readonly changes: Stream.Stream<ProviderInstallState>;
   readonly checkForUpdate: Effect.Effect<void>;
+  /** Google's current release for this platform, or null when unknown or withdrawn. */
+  readonly latestVersion: Effect.Effect<string | null>;
+  /** Installs the current release and waits until it is active. */
+  readonly update: Effect.Effect<void, AntigravityInstallationError>;
   readonly remove: (
     protectedBinaryPaths?: ReadonlyArray<string>,
   ) => Effect.Effect<void, AntigravityInstallationError>;
@@ -1511,6 +1515,28 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   // A startup install prunes when it activates; pruning now could delete the release it is verifying.
   if (!isRunning(yield* SubscriptionRef.get(state))) yield* pruneInactiveReleases;
 
+  const update = start.pipe(
+    Effect.flatMap((started) =>
+      SubscriptionRef.changes(state).pipe(
+        Stream.filter((value) => value.operationId === started.operationId && !isRunning(value)),
+        Stream.runHead,
+      ),
+    ),
+    Effect.flatMap((finished) =>
+      Option.isSome(finished) && finished.value.phase === "succeeded"
+        ? Effect.void
+        : Effect.fail(
+            installationError(
+              "update",
+              Option.match(finished, {
+                onNone: () => null,
+                onSome: (value) => value.message,
+              }) ?? "The Antigravity runtime update did not finish.",
+            ),
+          ),
+    ),
+  );
+
   return AntigravityInstallation.of({
     managedDirectory,
     resolve,
@@ -1521,6 +1547,11 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     state: SubscriptionRef.get(state),
     changes: SubscriptionRef.changes(state),
     checkForUpdate: refreshRelease().pipe(Effect.ignore),
+    latestVersion: refreshRelease().pipe(
+      Effect.ignore,
+      Effect.andThen(Effect.sync(() => releaseAsset?.version ?? null)),
+    ),
+    update,
     remove,
   });
 });

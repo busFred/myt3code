@@ -38,9 +38,21 @@ export const compareMuseVersions = (current: string, latest: string) =>
     ? compareSemverVersions(comparableMuseVersion(current), comparableMuseVersion(latest))
     : compareSemverVersions(current.replace(MUSE_REVISION, ""), latest.replace(MUSE_REVISION, ""));
 
+const LAUNCHER_MAX_BYTES = 128 * 1_024;
+
+const readLauncher = Effect.fn("MuseMaintenance.readLauncher")(
+  function* (file: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const stat = yield* fs.stat(file);
+    return Number(stat.size) > LAUNCHER_MAX_BYTES ? "" : yield* fs.readFileString(file);
+  },
+  Effect.orElseSucceed(() => ""),
+);
+
 /**
- * Mise upgrades a binary it installed. Otherwise only the official launcher owns
- * an update channel; a standalone binary cannot update itself.
+ * Mise upgrades a binary it installed. Otherwise only Meta's launcher owns an update
+ * channel: the bash script on macOS and Linux, and on Windows the `muse.cmd` shim that
+ * runs `.muse-launcher.ps1` beside it. A standalone binary cannot update itself.
  */
 export const museMaintenance: ProviderMaintenanceCapabilitiesResolver = {
   resolve: Effect.fn("MuseMaintenance.resolve")(function* (context) {
@@ -48,40 +60,50 @@ export const museMaintenance: ProviderMaintenanceCapabilitiesResolver = {
       ...makeManualOnlyProviderMaintenanceCapabilities({ provider: DRIVER, packageName: null }),
       compareVersions: compareMuseVersions,
     };
-    if (!context || context.platform === "win32") return manual;
+    if (!context) return manual;
     const mise = yield* resolveMiseProviderMaintenance(
       { provider: DRIVER, packageName: null },
       { tool: "muse" },
       context,
     );
     if (mise) return { ...mise, compareVersions: compareMuseVersions };
-    const fs = yield* FileSystem.FileSystem;
-    const isLauncher = yield* Effect.gen(function* () {
-      const stat = yield* fs.stat(context.realCommandPath);
-      if (Number(stat.size) > 128 * 1_024) return false;
-      const source = yield* fs.readFileString(context.realCommandPath);
-      return source.includes("muse-code/launcher-") && source.includes("MUSE_SYNC_UPDATE");
-    }).pipe(Effect.orElseSucceed(() => false));
+    const windows = context.platform === "win32";
+    const isLauncher = windows
+      ? /\.cmd$/i.test(context.realCommandPath) &&
+        (yield* readLauncher(context.realCommandPath)).includes(".muse-launcher.ps1") &&
+        isMuseLauncherSource(
+          yield* readLauncher(context.realCommandPath.replace(/[^\\/]+$/, ".muse-launcher.ps1")),
+          "muse-code/launcher-ps-",
+        )
+      : isMuseLauncherSource(yield* readLauncher(context.realCommandPath), "muse-code/launcher-");
     if (!isLauncher) return manual;
     // The launcher has no `update` subcommand. Its documented launch environment
     // forces a synchronous refresh of this executable's own installation.
     const updateEnv = {
       ...(context.env.MUSE_CHANNEL ? { MUSE_CHANNEL: context.env.MUSE_CHANNEL } : {}),
+      MUSE_LOGIN: "0",
       MUSE_NO_AUTO_UPDATE: "0",
       MUSE_SYNC_UPDATE: "1",
       MUSE_UPDATE_INTERVAL_SECONDS: "0",
     };
+    const variables = Object.entries(updateEnv);
     return {
       ...makeProviderMaintenanceCapabilities({
         provider: DRIVER,
         packageName: null,
         updateExecutable: context.resolvedCommandPath,
         updateArgs: ["--version"],
-        updateCommand: [
-          ...Object.entries(updateEnv).map(([key, value]) => `${key}=${shellQuote(value)}`),
-          shellQuote(context.resolvedCommandPath),
-          "--version",
-        ].join(" "),
+        // Windows terminals default to PowerShell.
+        updateCommand: windows
+          ? [
+              ...variables.map(([key, value]) => `$env:${key}=${powerShellQuote(value)};`),
+              `& ${powerShellQuote(context.resolvedCommandPath)} --version`,
+            ].join(" ")
+          : [
+              ...variables.map(([key, value]) => `${key}=${shellQuote(value)}`),
+              shellQuote(context.resolvedCommandPath),
+              "--version",
+            ].join(" "),
         updateLockKey: `muse:${context.realCommandPath}`,
         platform: context.platform,
         env: { ...context.env, ...updateEnv },
@@ -91,8 +113,16 @@ export const museMaintenance: ProviderMaintenanceCapabilitiesResolver = {
   }),
 };
 
+function isMuseLauncherSource(source: string, userAgent: string) {
+  return source.includes(userAgent) && source.includes("MUSE_SYNC_UPDATE");
+}
+
 function shellQuote(word: string) {
   return /^[\w./:@=-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
+}
+
+function powerShellQuote(word: string) {
+  return `'${word.replace(/['\u2018\u2019]/g, "$&$&")}'`;
 }
 
 export const latestMuseVersion = Effect.fn("latestMuseVersion")(function* (

@@ -160,6 +160,24 @@ it("does not suggest copying a command that installs an incompatible latest vers
   ).not.toBeNull();
 });
 
+it("offers no command to copy for an update the server installs itself", () => {
+  const advisory = {
+    status: "behind_latest" as const,
+    currentVersion: "1.0.114",
+    latestVersion: "1.0.120",
+    updateCommand: "Install the ACP Registry's current github-copilot-cli release",
+    canUpdate: true,
+    checkedAt: provider.checkedAt,
+    message: null,
+  };
+  expect(getProviderVersionAdvisoryPresentation(advisory)?.updateCommand).toBe(
+    advisory.updateCommand,
+  );
+  expect(
+    getProviderVersionAdvisoryPresentation({ ...advisory, updateRunsInApp: true })?.updateCommand,
+  ).toBeNull();
+});
+
 it("does not offer an update that cannot change a limited-support version", () => {
   // OpenCode 1.18.35 is the newest `opencode-ai`; the recommended 2.x ships as another package.
   const advisory = {

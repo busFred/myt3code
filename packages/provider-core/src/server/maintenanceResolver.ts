@@ -135,6 +135,7 @@ export function makeProviderMaintenanceCapabilities(input: {
   readonly updateCommand?: string;
   readonly platform?: NodeJS.Platform;
   readonly env?: NodeJS.ProcessEnv;
+  readonly run?: Effect.Effect<void, Error>;
   readonly latestVersion?: string | null;
   readonly lookupLatestVersion?: Effect.Effect<string | null>;
 }): ProviderMaintenanceCapabilities {
@@ -153,6 +154,7 @@ export function makeProviderMaintenanceCapabilities(input: {
           args: input.updateArgs,
           lockKey: input.updateLockKey,
           ...(input.env ? { env: input.env } : {}),
+          ...(input.run ? { run: input.run } : {}),
         };
   return {
     provider: input.provider,
@@ -1369,6 +1371,7 @@ export function createProviderVersionAdvisory(input: {
       capabilities.manualCommand ??
       null,
     canUpdate: capabilities.update !== null,
+    ...(capabilities.update?.run ? { updateRunsInApp: true } : {}),
     canInstallVersion: makeTargetedProviderUpdateAction(capabilities, "0.0.0") !== null,
     checkedAt: input.checkedAt ?? null,
     message: advisory.message,

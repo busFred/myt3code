@@ -28,4 +28,6 @@ export interface ProviderMaintenanceCommandAction {
   readonly lockKey: string;
   /** The provider's environment, including its PATH and custom home. */
   readonly env?: NodeJS.ProcessEnv;
+  /** Installs in the server instead of spawning `executable`; `command` then only describes it. */
+  readonly run?: Effect.Effect<void, Error>;
 }

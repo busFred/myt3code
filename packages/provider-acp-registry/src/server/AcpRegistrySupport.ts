@@ -525,6 +525,13 @@ export class AcpRegistryCatalog extends Context.Service<
     readonly prepare: (
       input: AcpRegistryPrepareInput,
     ) => Effect.Effect<AcpRegistryPrepareResult, AcpRegistryError>;
+    /** The registry's current release of the configured agent, without adopting it. */
+    readonly latestVersion: (settings: AcpRegistrySettings) => Effect.Effect<string | null>;
+    /** Adopts the registry's current release and installs it as these settings run it. */
+    readonly update: (
+      settings: AcpRegistrySettings,
+      environment?: NodeJS.ProcessEnv,
+    ) => Effect.Effect<void, AcpRegistryError>;
     readonly inspect: (
       settings: AcpRegistrySettings,
       environment?: NodeJS.ProcessEnv,
@@ -882,7 +889,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       Effect.ignore,
     );
 
-  const fetchRegistry = Effect.fn("AcpRegistryCatalog.fetchRegistry")(function* () {
+  const fetchRegistry = Effect.fn("AcpRegistryCatalog.fetchRegistry")(function* (persist = true) {
     yield* assertHttpsUrl(registryUrl, "ACP Registry index URL must use HTTPS.");
     const response = yield* httpClient.execute(HttpClientRequest.get(registryUrl)).pipe(
       Effect.flatMap(HttpClientResponse.filterStatusOk),
@@ -941,7 +948,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       });
     }
     const registry = yield* decodeRegistryText(collected.text);
-    yield* writeRegistryCache(collected.text);
+    if (persist) yield* writeRegistryCache(collected.text);
     return registry;
   });
 
@@ -1784,23 +1791,36 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     },
   );
 
+  const installCurrentRelease = Effect.fn("AcpRegistryCatalog.installCurrentRelease")(function* (
+    agentId: string,
+    preference: AcpRegistryDistributionPreference,
+    environment: NodeJS.ProcessEnv,
+  ) {
+    const registry = yield* refreshRegistry();
+    const agent = yield* findAgent(registry, agentId);
+    const distribution = yield* compatibleDistribution(agent, preference);
+    if (distribution.kind === "binary") {
+      // Only explicit command overrides may use PATH copies with different ACP capabilities.
+      yield* withInstallPermit(agent.id)(
+        installBinary(agent, distribution.binaryTarget!).pipe(
+          Effect.tap(() => reservePreparedBinary(agent.id)),
+        ),
+      );
+    } else {
+      yield* withInstallPermit(agent.id)(
+        ensureGlobalPackage(agent, distribution.kind, distribution.packageName!, environment),
+      );
+    }
+    return { agent, distribution };
+  });
+
   const prepare: AcpRegistryCatalog["Service"]["prepare"] = Effect.fn("AcpRegistryCatalog.prepare")(
     function* (input) {
-      const registry = yield* refreshRegistry();
-      const agent = yield* findAgent(registry, input.agentId);
-      const distribution = yield* compatibleDistribution(agent, "auto");
-      if (distribution.kind === "binary") {
-        // Only explicit command overrides may use PATH copies with different ACP capabilities.
-        yield* withInstallPermit(agent.id)(
-          installBinary(agent, distribution.binaryTarget!).pipe(
-            Effect.tap(() => reservePreparedBinary(agent.id)),
-          ),
-        );
-      } else {
-        yield* withInstallPermit(agent.id)(
-          ensureGlobalPackage(agent, distribution.kind, distribution.packageName!, hostEnvironment),
-        );
-      }
+      const { agent, distribution } = yield* installCurrentRelease(
+        input.agentId,
+        "auto",
+        hostEnvironment,
+      );
       return {
         agentId: agent.id,
         version: agent.version,
@@ -1809,6 +1829,29 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       } satisfies AcpRegistryPrepareResult;
     },
   );
+
+  // Sessions keep the release this server adopted until an update installs a newer one.
+  const latestVersion: AcpRegistryCatalog["Service"]["latestVersion"] = Effect.fn(
+    "AcpRegistryCatalog.latestVersion",
+  )(function* (settings) {
+    if (settings.source === "local" || settings.agentId.trim().length === 0) return null;
+    const registry = yield* fetchRegistry(false).pipe(Effect.option);
+    if (Option.isNone(registry)) return null;
+    const agent = registry.value.agents.find(
+      (candidate) => candidate.id === settings.agentId.trim(),
+    );
+    return agent &&
+      resolveAcpRegistryDistribution({ agent, preference: settings.distribution, platformTarget })
+      ? agent.version
+      : null;
+  });
+
+  const update: AcpRegistryCatalog["Service"]["update"] = (settings, environment) =>
+    installCurrentRelease(
+      settings.agentId,
+      settings.distribution,
+      environment ?? hostEnvironment,
+    ).pipe(Effect.asVoid);
 
   const validateLocalExecutable = (command: string) =>
     platform === "win32" && /\.(?:cmd|bat)$/iu.test(command)
@@ -2131,6 +2174,8 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
   return AcpRegistryCatalog.of({
     search,
     prepare,
+    latestVersion,
+    update,
     inspect,
     resolve,
     uninstallManagedBinary,

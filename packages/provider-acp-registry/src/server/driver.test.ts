@@ -8,12 +8,14 @@ import {
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { toCustomModelSetting } from "@t3tools/shared/model";
 import { AcpRegistrySettings } from "../settings.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as HttpClient from "effect/http/HttpClient";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -61,6 +63,8 @@ function catalogWithInspection(
   return {
     search: () => Effect.die("unused search"),
     prepare: () => Effect.die("unused prepare"),
+    latestVersion: () => Effect.succeed(null),
+    update: () => Effect.die("unused update"),
     inspect: () => Effect.succeed(inspection),
     resolve: () => Effect.die("unused resolve"),
     uninstallManagedBinary: () => Effect.die("unused uninstall"),
@@ -959,6 +963,13 @@ const driverLayer = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
       ProviderEventLoggers.NoOpProviderEventLoggers,
     ),
   ),
+  Layer.provideMerge(ProviderLatestVersions.layer),
+  Layer.provideMerge(
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make(() => Effect.die("ACP Registry tests do not reach the network")),
+    ),
+  ),
   Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
@@ -981,6 +992,58 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
         installed: false,
         message: "Checking ACP Registry agent readiness...",
       });
+    }),
+  );
+
+  it.effect("updates a registry-managed agent to the registry's current release", () =>
+    Effect.gen(function* () {
+      const updates: Array<string> = [];
+      const create = (config: AcpRegistrySettings) =>
+        AcpRegistryDriver.create({
+          instanceId: identity.instanceId,
+          displayName: identity.displayName,
+          enabled: true,
+          environment: [],
+          config,
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+            ...catalogWithInspection({
+              status: "ready",
+              agentId: "github-copilot-cli",
+              version: "1.0.114",
+              distribution: "npx",
+            }),
+            resolve: () =>
+              Effect.fail(
+                new AcpRegistrySupport.AcpRegistryError({
+                  reason: "runner_unavailable",
+                  detail: "not probed in this test",
+                }),
+              ),
+            latestVersion: () => Effect.succeed("1.0.120"),
+            update: (settings) => Effect.sync(() => void updates.push(settings.agentId)),
+          }),
+        );
+
+      const managed = yield* create(decodeSettings({ agentId: "github-copilot-cli" }));
+      yield* managed.snapshot.refresh;
+      expect((yield* managed.snapshot.getSnapshot).versionAdvisory).toMatchObject({
+        status: "behind_latest",
+        currentVersion: "1.0.114",
+        latestVersion: "1.0.120",
+        canUpdate: true,
+        updateRunsInApp: true,
+      });
+      const update = (yield* managed.snapshot.resolveMaintenance()).update;
+      expect(update?.lockKey).toBe("acp-registry:github-copilot-cli");
+      yield* update?.run ?? Effect.void;
+      expect(updates).toEqual(["github-copilot-cli"]);
+
+      // A user-chosen executable belongs to whatever installed it, not the registry.
+      const overridden = yield* create(
+        decodeSettings({ agentId: "github-copilot-cli", commandPath: "/missing/copilot" }),
+      );
+      expect((yield* overridden.snapshot.resolveMaintenance()).update).toBeNull();
     }),
   );
 

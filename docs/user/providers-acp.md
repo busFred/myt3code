@@ -51,6 +51,12 @@ version published by the Registry. Their commands are available in a new server 
 sign-in and direct use. Removing an agent's last provider instance removes T3-managed binary files
 but keeps package installs. To use an existing local binary, set **Executable override** explicitly.
 
+T3 Code keeps using the release it installed until you update. While provider update checks are
+enabled, **Settings → Providers** shows when the Registry publishes a newer release, and **Update
+now** or **Update all** installs it. Running chats keep the previous release; new sessions use the
+new one. An **Executable override** or local command stays with whatever installed it; GitHub
+Copilot CLI installed with npm, pnpm, Bun, or Vite+ updates through that package manager.
+
 ## Signing in
 
 Open the agent's account section in **Settings → Providers** on web or desktop. Choose
