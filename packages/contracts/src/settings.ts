@@ -413,7 +413,9 @@ export const VoiceTranscriptionDestination = Schema.Union([
 ]);
 export type VoiceTranscriptionDestination = typeof VoiceTranscriptionDestination.Type;
 
-export const ClientSettingsSchema = Schema.Struct({
+export const ClientSettingsFields = Schema.Struct({
+  // Bumped once by the decode-time upgrade below; see upgradeAppearanceDefaults.
+  appearanceDefaultsVersion: Schema.Int.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   notificationMode: NotificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("off" as const)),
   ),
@@ -618,6 +620,38 @@ export const ClientSettingsSchema = Schema.Struct({
   // KaTeX out of the render path entirely.
   mathRenderingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
+type ClientSettingsFieldsType = typeof ClientSettingsFields.Type;
+
+// Settings are saved as one object, so anyone who ever saved one holds the old
+// contrast/glass defaults. Move exactly those old defaults to the new ones, once.
+const LEGACY_APPEARANCE_CONTRAST = 100;
+const LEGACY_GLASS_OPACITY = 80;
+const APPEARANCE_DEFAULTS_VERSION = 1;
+const upgradeAppearanceDefaults = (settings: ClientSettingsFieldsType): ClientSettingsFieldsType =>
+  settings.appearanceDefaultsVersion >= APPEARANCE_DEFAULTS_VERSION
+    ? settings
+    : {
+        ...settings,
+        appearanceDefaultsVersion: APPEARANCE_DEFAULTS_VERSION,
+        appearanceContrast:
+          settings.appearanceContrast === LEGACY_APPEARANCE_CONTRAST
+            ? DEFAULT_APPEARANCE_CONTRAST
+            : settings.appearanceContrast,
+        glassOpacity:
+          settings.glassOpacity === LEGACY_GLASS_OPACITY
+            ? DEFAULT_GLASS_OPACITY
+            : settings.glassOpacity,
+      };
+
+export const ClientSettingsSchema = ClientSettingsFields.pipe(
+  Schema.decodeTo(
+    Schema.toType(ClientSettingsFields),
+    SchemaTransformation.transform<ClientSettingsFieldsType, ClientSettingsFieldsType>({
+      decode: upgradeAppearanceDefaults,
+      encode: (settings) => settings,
+    }),
+  ),
+);
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
 export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientSettingsSchema)({});

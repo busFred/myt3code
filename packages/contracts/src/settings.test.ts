@@ -555,3 +555,30 @@ describe("server model preferences", () => {
     expect(decodeServerSettingsPatch(input)).toEqual(input);
   });
 });
+
+describe("appearance defaults upgrade", () => {
+  it("moves the old contrast/glass defaults to the new ones once", () => {
+    const upgraded = decodeClientSettings({ appearanceContrast: 100, glassOpacity: 80 });
+    expect(upgraded).toMatchObject({
+      appearanceContrast: 200,
+      glassOpacity: 100,
+      appearanceDefaultsVersion: 1,
+    });
+    // Re-decoding the saved object keeps a later deliberate 100/80.
+    expect(
+      decodeClientSettings({
+        ...encodeClientSettings(upgraded),
+        appearanceContrast: 100,
+        glassOpacity: 80,
+      }),
+    ).toMatchObject({ appearanceContrast: 100, glassOpacity: 80 });
+  });
+
+  it("leaves other stored values untouched", () => {
+    expect(decodeClientSettings({ appearanceContrast: 150, glassOpacity: 60 })).toMatchObject({
+      appearanceContrast: 150,
+      glassOpacity: 60,
+      appearanceDefaultsVersion: 1,
+    });
+  });
+});
