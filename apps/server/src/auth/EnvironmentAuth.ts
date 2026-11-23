@@ -106,19 +106,34 @@ const RENEWABLE_SESSION_WINDOW = Duration.days(30);
 const PAIRING_LINK_SUBJECT = "one-time-token";
 const NON_RENEWABLE_SUBJECTS: ReadonlySet<string> = new Set(NON_RENEWABLE_SESSION_SUBJECTS);
 
+// A self-renewing device refreshes its token a minute before it ends, so a shorter window would
+// have it renew on every request. Its lifetime is the window, so it is at least this.
+const MIN_RENEWING_SESSION_WINDOW = Duration.minutes(10);
+
+const isSelfRenewing = (session: { readonly method: string; readonly subject: string }) =>
+  session.method === "dpop-access-token" && session.subject === PAIRING_LINK_SUBJECT;
+
+const atLeastRenewingWindow = (lifetime: AuthSessionLifetime): AuthSessionLifetime =>
+  lifetime._tag === "duration" && lifetime.millis < Duration.toMillis(MIN_RENEWING_SESSION_WINDOW)
+    ? { _tag: "duration", millis: Duration.toMillis(MIN_RENEWING_SESSION_WINDOW) }
+    : lifetime;
+
 /**
  * A pairing link's lifetime goes to the session it creates. T3 Connect and the desktop app keep
  * their own lifetimes, so unlinking Connect or rotating the desktop secret still cuts them off.
  */
-const grantLifetime = (grant: {
-  readonly method: string;
-  readonly subject: string;
-  readonly lifetime?: AuthSessionLifetime;
-}) =>
+const grantLifetime = (
+  grant: {
+    readonly method: string;
+    readonly subject: string;
+    readonly lifetime?: AuthSessionLifetime;
+  },
+  renewing = false,
+) =>
   grant.lifetime !== undefined &&
   grant.method === "one-time-token" &&
-  grant.subject !== CLOUD_CONNECT_SUBJECT
-    ? { lifetime: grant.lifetime }
+  !NON_RENEWABLE_SUBJECTS.has(grant.subject)
+    ? { lifetime: renewing ? atLeastRenewingWindow(grant.lifetime) : grant.lifetime }
     : {};
 
 export interface McpClientSession {
@@ -1298,7 +1313,7 @@ export const make = Effect.gen(function* () {
                       }
                     : {}),
                   ...(renewable ? { renewalWindow: RENEWABLE_SESSION_WINDOW } : {}),
-                  ...grantLifetime(grant),
+                  ...grantLifetime(grant, renewable),
                   replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
                   client: {
                     ...requestMetadata,
@@ -1540,7 +1555,7 @@ export const make = Effect.gen(function* () {
 
   const renewSession: EnvironmentAuth["Service"]["renewSession"] = Effect.fn(
     "EnvironmentAuth.renewSession",
-  )(function* (sessionId, lifetime, options) {
+  )(function* (sessionId, requested, options) {
     const mapRenewalError = Effect.mapError(
       (cause: SessionStore.SessionCredentialInternalError) =>
         new ServerAuthSessionRenewalError({ cause }),
@@ -1558,20 +1573,20 @@ export const make = Effect.gen(function* () {
       if (NON_RENEWABLE_SUBJECTS.has(target.value.subject)) {
         return yield* new ServerAuthSessionNotRenewableError({});
       }
+      const lifetime = isSelfRenewing(target.value) ? atLeastRenewingWindow(requested) : requested;
+      // The expiry checked is the one written.
+      const expiresAt = DateTime.makeUnsafe(
+        sessionLifetimeExpiresAtMillis(lifetime, (yield* DateTime.now).epochMilliseconds),
+      );
       const callerScopes = options?.callerScopes;
       if (callerScopes !== undefined) {
-        const now = yield* DateTime.now;
         const missing = target.value.scopes.find((scope) => !callerScopes.has(scope));
-        if (
-          missing !== undefined &&
-          sessionLifetimeExpiresAtMillis(lifetime, now.epochMilliseconds) >
-            target.value.expiresAt.epochMilliseconds
-        ) {
+        if (missing !== undefined && DateTime.isGreaterThan(expiresAt, target.value.expiresAt)) {
           return yield* new ServerAuthRenewScopeRequiredError({ requiredScope: missing });
         }
       }
       const renewed = yield* sessions
-        .setExpiry(sessionId, lifetime, target.value)
+        .setExpiry(sessionId, { lifetime, expiresAt }, target.value)
         .pipe(mapRenewalError);
       if (Option.isSome(renewed)) return renewed;
     }

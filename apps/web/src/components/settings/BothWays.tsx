@@ -15,7 +15,6 @@ import {
   type LifetimeMode,
   isLifetimeChoiceValid,
   lifetimeFromChoice,
-  linkDoneIn,
   MAX_CUSTOM_LIFETIME_DAYS,
   mergeBothWaysRetry,
   summarizeBothWays,
@@ -218,8 +217,8 @@ export function BothWaysResults({
 }
 
 /**
- * Links `a` and `b` both ways with this client's sessions; finished links of `previous` are left
- * alone. `batch` leaves the link lists for the caller to refresh once.
+ * Links `a` and `b` both ways with this client's sessions; links either side has are kept, and
+ * steps `previous` finished stay done. `batch` leaves the link lists for the caller to refresh once.
  */
 export function useBothWaysRunner() {
   const gt = useGT();
@@ -227,24 +226,13 @@ export function useBothWaysRunner() {
   return async (input: {
     readonly a: EnvironmentId;
     readonly b: EnvironmentId;
-    readonly aLinksToB: boolean;
     readonly access: AuthMcpClientAccess;
     readonly lifetime: LifetimeChoice;
     readonly previous?: ReadonlyMap<BothWaysStep, BothWaysOutcome>;
     readonly batch?: boolean;
   }) => {
-    const a = bothWaysSide({
-      environmentId: input.a,
-      other: input.b,
-      relays,
-      linksToOther: input.aLinksToB || linkDoneIn(input.previous, "a_to_b"),
-    });
-    const b = bothWaysSide({
-      environmentId: input.b,
-      other: input.a,
-      relays,
-      linksToOther: linkDoneIn(input.previous, "b_to_a"),
-    });
+    const a = bothWaysSide({ environmentId: input.a, other: input.b, relays });
+    const b = bothWaysSide({ environmentId: input.b, other: input.a, relays });
     if (a === null || b === null) return null;
     const outcomes = await linkEnvironmentsBothWays({
       a,
@@ -252,9 +240,6 @@ export function useBothWaysRunner() {
       access: input.access,
       lifetime: lifetimeFromChoice(input.lifetime),
       invite: input.previous?.get("invite")?.kind !== "done",
-      linkedEarlier:
-        input.previous?.get("a_to_b")?.kind === "done" ||
-        input.previous?.get("b_to_a")?.kind === "done",
       batch: input.batch === true,
       appCodeLabel: (label) => gt("App for {label}", { label }),
     });

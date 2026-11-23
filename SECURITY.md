@@ -83,7 +83,8 @@ revocation and ceilings hold, not what a full-scope session can do once issued.
   all others" removes them.
 - `access:write` can renew a session (`POST /api/auth/clients/renew`), earlier
   or later, up to never expiring. Lengthening one needs every scope that
-  session holds; T3 Connect and desktop app sessions refuse renewal.
+  session holds; T3 Connect and desktop app sessions refuse renewal. A device
+  that renews its own token keeps a window of at least 10 minutes.
 - A session holding every standard scope can leave this environment's desktop
   app an invite (`POST /api/app-invites`), which the app adds without asking.
   The invite carries a one-time code from the other environment and lasts at

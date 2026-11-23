@@ -7,7 +7,6 @@ import {
   isLifetimeChoiceValid,
   isMissingEndpointFailure,
   lifetimeFromChoice,
-  linkDoneIn,
   mergeBothWaysRetry,
   summarizeBothWays,
 } from "./sessionLifetime.logic";
@@ -71,16 +70,6 @@ describe("both ways outcomes", () => {
       ]),
     );
     expect(summary).toEqual({ failedSteps: ["b_to_a"], lifetimeIgnored: true, complete: false });
-  });
-
-  it("treats a finished link as done for a retry", () => {
-    const previous = outcomes([
-      ["a_to_b", { kind: "done" }],
-      ["b_to_a", { kind: "failed", failure: "other", detail: null }],
-    ]);
-    expect(linkDoneIn(previous, "a_to_b")).toBe(true);
-    expect(linkDoneIn(previous, "b_to_a")).toBe(false);
-    expect(linkDoneIn(undefined, "a_to_b")).toBe(false);
   });
 
   it("keeps what an earlier run finished, so the next retry still knows a link was made", () => {

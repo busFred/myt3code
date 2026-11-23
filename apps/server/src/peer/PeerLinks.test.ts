@@ -601,16 +601,24 @@ it.effect("reads one stored link without asking the peer", () =>
       expect(yield* a.links.names).toEqual([{ environmentId: box.environmentId, label: "Box" }]);
       expect(yield* Ref.get(b.probes)).toBe(0);
 
-      // An older answer that lands after a newer one never moves the expiry back.
-      const expiresAt = Option.getOrThrow(stored).expiresAt;
-      const later = DateTime.add(expiresAt, { days: 20 });
-      yield* a.links.recordExpiry(box.environmentId, later);
-      yield* a.links.recordExpiry(box.environmentId, DateTime.add(expiresAt, { days: 10 }));
-      expect(
-        Option.map(yield* a.links.get(box.environmentId), (link) =>
-          DateTime.formatIso(link.expiresAt),
-        ),
-      ).toEqual(Option.some(DateTime.formatIso(later)));
+      // The peer's answer moves the expiry either way, as when it was renewed to never and then
+      // shortened there, but never for a credential the link no longer holds.
+      const storedExpiry = Effect.map(a.links.get(box.environmentId), (link) =>
+        Option.map(link, (found) => DateTime.formatIso(found.expiresAt)),
+      );
+      const { token } = yield* a.links.resolve(box.environmentId);
+      const never = DateTime.makeUnsafe(NEVER_EXPIRES_AT_MILLIS);
+      const shortened = DateTime.add(Option.getOrThrow(stored).expiresAt, { days: 1 });
+      yield* a.links.recordExpiry(box.environmentId, never, token);
+      expect(yield* storedExpiry).toEqual(Option.some(DateTime.formatIso(never)));
+      yield* a.links.recordExpiry(box.environmentId, shortened, token);
+      expect(yield* storedExpiry).toEqual(Option.some(DateTime.formatIso(shortened)));
+
+      const again = yield* b.auth.issuePairingCredential();
+      yield* a.links.link({ url: b.url, pairingCode: again.credential, access: "auto" });
+      const relinked = yield* storedExpiry;
+      yield* a.links.recordExpiry(box.environmentId, never, token);
+      expect(yield* storedExpiry).toEqual(relinked);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

@@ -91,14 +91,20 @@ describe("pickUpAppInvites", () => {
 });
 
 describe("shouldTakeAppInvites", () => {
+  const NOW = 1_000;
   const take = (
-    snapshot: { readonly appInvites?: ReadonlyArray<unknown> } | null,
+    snapshot: {
+      readonly appInvites?: ReadonlyArray<{ readonly expiresAt: { epochMilliseconds: number } }>;
+    } | null,
     failed: boolean,
     checkedAtLaunch: boolean,
-  ) => shouldTakeAppInvites(appInviteSignal({ snapshot, failed }), checkedAtLaunch);
+  ) => shouldTakeAppInvites(appInviteSignal({ snapshot, failed }, NOW), checkedAtLaunch);
 
-  it("takes only when the snapshot lists invites", () => {
-    expect(take({ appInvites: [{}] }, false, true)).toBe(true);
+  it("takes only when the snapshot lists invites that have not expired", () => {
+    const live = { expiresAt: { epochMilliseconds: NOW + 1 } };
+    const expired = { expiresAt: { epochMilliseconds: NOW } };
+    expect(take({ appInvites: [expired, live] }, false, true)).toBe(true);
+    expect(take({ appInvites: [expired] }, false, false)).toBe(false);
     expect(take({ appInvites: [] }, false, false)).toBe(false);
     expect(take(null, false, false)).toBe(false);
   });

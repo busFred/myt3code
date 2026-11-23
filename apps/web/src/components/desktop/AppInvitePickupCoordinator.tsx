@@ -43,7 +43,6 @@ export function AppInvitePickupCoordinator() {
   );
   const snapshot = access.data?.type === "snapshot" ? access.data.payload : null;
   const failed = access.failure !== null;
-  const signal = appInviteSignal({ snapshot, failed });
   // A new invite can replace one while the signal stays pending, so the list itself is watched.
   const appInvites = snapshot === null ? null : snapshot.appInvites;
   const takeInvites = useAtomCommand(authEnvironment.takePendingAppInvites, {
@@ -88,10 +87,13 @@ export function AppInvitePickupCoordinator() {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the server announces invites on the access stream; one without it is checked once at launch
   useEffect(() => {
     if (!ready || environmentId === null) return;
-    const current = appInviteSignal({
-      snapshot: appInvites === null ? null : appInvites === undefined ? {} : { appInvites },
-      failed,
-    });
+    const current = appInviteSignal(
+      {
+        snapshot: appInvites === null ? null : appInvites === undefined ? {} : { appInvites },
+        failed,
+      },
+      Date.now(),
+    );
     if (!shouldTakeAppInvites(current, checkedAtLaunch.current === environmentId)) return;
     checkedAtLaunch.current = environmentId;
     void run();
@@ -99,13 +101,16 @@ export function AppInvitePickupCoordinator() {
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window focus is an external event; retries invites a failed take left, at most once a minute
   useEffect(() => {
-    if (!ready || signal !== "pending") return;
+    if (!ready || appInviteSignal({ snapshot, failed }, Date.now()) !== "pending") return;
     const onFocus = () => {
-      if (Date.now() - lastRunAt.current >= FOCUS_RECHECK_MS) void run();
+      const now = Date.now();
+      // An invite that expired since stays listed until the next snapshot.
+      if (appInviteSignal({ snapshot, failed }, now) !== "pending") return;
+      if (now - lastRunAt.current >= FOCUS_RECHECK_MS) void run();
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [ready, signal, run]);
+  }, [ready, snapshot, failed, run]);
 
   return null;
 }

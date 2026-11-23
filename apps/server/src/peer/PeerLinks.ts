@@ -60,6 +60,17 @@ export const probeTimeout = (origin: string) =>
   isLocalLoopbackHost(new URL(origin).hostname) ? Duration.seconds(3) : Duration.seconds(10);
 /** How long a listing waits on a link's addresses; a real call still gives a waking peer `probeTimeout`. */
 const LIST_PROBE_TIMEOUT = Duration.seconds(3);
+const MCP_PROTOCOL_VERSION = "2025-06-18";
+const EXPIRY_PROBE_BODY = JSON.stringify({
+  jsonrpc: "2.0",
+  id: 0,
+  method: "initialize",
+  params: {
+    protocolVersion: MCP_PROTOCOL_VERSION,
+    capabilities: {},
+    clientInfo: { name: "t3code-peer", version: "1" },
+  },
+});
 
 /** Node's TLS verification code in a failed request's cause chain, if any. */
 export const certificateErrorCode = (error: unknown) => {
@@ -147,14 +158,18 @@ export class PeerLinks extends Context.Service<
       environmentId: EnvironmentId,
       outcome: { readonly error: string | null },
     ) => Effect.Effect<void>;
-    /** Records a later end the peer gives the link's session: using a link renews it there. */
+    /**
+     * Records the end the peer gives the link's session, earlier or later: the peer decides. Only
+     * while the link still holds `token`, so an answer for a replaced credential is dropped.
+     */
     readonly recordExpiry: (
       environmentId: EnvironmentId,
       expiresAt: DateTime.Utc,
+      token: string,
     ) => Effect.Effect<void>;
     /**
-     * Asks the peer when the link's session ends, as after it was renewed there, and records a
-     * later end. None when the peer does not say, such as one that no longer accepts the link.
+     * Asks the peer when the link's session ends, as after it was renewed there, and records it.
+     * None when the peer does not say, such as one that no longer accepts the link.
      */
     readonly refreshExpiry: (
       environmentId: EnvironmentId,
@@ -889,11 +904,20 @@ const make = Effect.gen(function* () {
       Effect.ignoreCause({ log: true }),
     );
 
-  const recordExpiry: PeerLinks["Service"]["recordExpiry"] = (environmentId, expiresAt) =>
-    sql`
-      UPDATE peer_environment_links SET expires_at = ${DateTime.formatIso(expiresAt)}
-      WHERE environment_id = ${environmentId} AND expires_at < ${DateTime.formatIso(expiresAt)}
-    `.pipe(Effect.asVoid, Effect.ignoreCause({ log: true }));
+  const recordExpiry: PeerLinks["Service"]["recordExpiry"] = Effect.fn("PeerLinks.recordExpiry")(
+    function* (environmentId, expiresAt, token) {
+      const row = yield* readRow(environmentId);
+      if (Option.isNone(row)) return;
+      const stored = yield* secrets.get(row.value.secret_name);
+      if (Option.isNone(stored) || new TextDecoder().decode(stored.value) !== token) return;
+      // A link made again meanwhile has a new secret name, which this update then misses.
+      yield* sql`
+        UPDATE peer_environment_links SET expires_at = ${DateTime.formatIso(expiresAt)}
+        WHERE environment_id = ${environmentId} AND secret_name = ${row.value.secret_name}
+      `;
+    },
+    Effect.ignoreCause({ log: true }),
+  );
 
   const refreshExpiry: PeerLinks["Service"]["refreshExpiry"] = Effect.fn("PeerLinks.refreshExpiry")(
     function* (environmentId) {
@@ -906,21 +930,7 @@ const make = Effect.gen(function* () {
               accept: "application/json, text/event-stream",
               authorization: `Bearer ${token}`,
             }),
-            HttpClientRequest.setBody(
-              HttpBody.text(
-                JSON.stringify({
-                  jsonrpc: "2.0",
-                  id: 0,
-                  method: "initialize",
-                  params: {
-                    protocolVersion: "2025-06-18",
-                    capabilities: {},
-                    clientInfo: { name: "t3code-peer", version: "1" },
-                  },
-                }),
-                "application/json",
-              ),
-            ),
+            HttpClientRequest.setBody(HttpBody.text(EXPIRY_PROBE_BODY, "application/json")),
           ),
         )
         .pipe(
@@ -937,8 +947,23 @@ const make = Effect.gen(function* () {
         Option.fromNullishOr(response.headers[McpInvocationContext.LINK_EXPIRES_AT_HEADER]),
         DateTime.make,
       );
+      // Best effort: the session `initialize` opened there is ended rather than left to idle out.
+      const mcpSessionId = response.headers["mcp-session-id"];
+      if (mcpSessionId !== undefined) {
+        yield* peerHttpClient
+          .execute(
+            HttpClientRequest.delete(`${url}/mcp`).pipe(
+              HttpClientRequest.setHeaders({
+                authorization: `Bearer ${token}`,
+                "mcp-session-id": mcpSessionId,
+                "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+              }),
+            ),
+          )
+          .pipe(Effect.timeout(probeTimeout(url)), Effect.ignore);
+      }
       if (response.status !== 200 || Option.isNone(expiresAt)) return Option.none();
-      yield* recordExpiry(environmentId, DateTime.toUtc(expiresAt.value));
+      yield* recordExpiry(environmentId, DateTime.toUtc(expiresAt.value), token);
       return Option.some(DateTime.toUtc(expiresAt.value));
     },
   );

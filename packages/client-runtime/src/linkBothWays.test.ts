@@ -1,4 +1,5 @@
 import {
+  type AuthMcpClientAccess,
   AuthSessionId,
   type AuthSessionLifetime,
   EnvironmentId,
@@ -20,14 +21,20 @@ const side = (name: string, overrides: Partial<BothWaysSide> = {}): BothWaysSide
   label: name,
   urls: [`https://${name}.example.ts.net`, `http://100.64.0.${name.length}:3773`],
   linkedEnvironmentsEnabled: true,
-  linksToOther: false,
   ...overrides,
 });
 const never: AuthSessionLifetime = { _tag: "never" };
 const NOT_FOUND = { status: 404 };
 
-/** Records every call; `fail` names calls that fail, as `<op>:<environment>`. */
-const recordingOps = (fail: Record<string, unknown> = {}, echoLifetime = true) => {
+/**
+ * Records every call; `fail` names calls that fail, as `<op>:<environment>`. `linked` maps an
+ * environment to the access of a link it already has, which it keeps.
+ */
+const recordingOps = (
+  fail: Record<string, unknown> = {},
+  echoLifetime = true,
+  linked: Record<string, AuthMcpClientAccess> = {},
+) => {
   const calls: Array<string> = [];
   const result = <A>(key: string, success: A) => {
     calls.push(key);
@@ -42,7 +49,10 @@ const recordingOps = (fail: Record<string, unknown> = {}, echoLifetime = true) =
         ...(echoLifetime && input.lifetime ? { lifetime: input.lifetime } : {}),
       }),
     link: (environmentId, input) =>
-      result(`link:${environmentId}->${input.expectedEnvironmentId}:${input.pairingCode}`, {}),
+      result(`link:${environmentId}->${input.expectedEnvironmentId}:${input.pairingCode}`, {
+        alreadyLinked: environmentId in linked,
+        access: linked[environmentId] ?? input.access,
+      }),
     mintAppCode: (environmentId, input) =>
       result(`app:${environmentId}`, {
         id: `app-link-${environmentId}`,
@@ -113,27 +123,42 @@ describe("runLinkBothWays", () => {
     });
     expect(refused.calls).toContain("revoke:environment-a:app-link-environment-a");
 
-    // With no link made now, or in an earlier run of the same request, no invite is left.
-    const linked = { linksToOther: true };
-    const alreadyLinked = recordingOps();
-    const noLink = await runLinkBothWays({
-      a: side("a", linked),
-      b: side("b", linked),
+    // The invite follows b's link to a, made now or kept from before, so a rerun retries it.
+    const both = { "environment-a": "full-access", "environment-b": "full-access" } as const;
+    const alreadyLinked = recordingOps({}, true, both);
+    const kept = await runLinkBothWays({
+      a: side("a"),
+      b: side("b"),
       access: "full-access",
       invite: true,
       ops: alreadyLinked.ops,
     });
-    expect(noLink.get("invite")).toEqual({ kind: "skipped", reason: "not_linked" });
-    expect(alreadyLinked.calls.filter((call) => call.startsWith("app:"))).toEqual([]);
-    const retried = await runLinkBothWays({
-      a: side("a", linked),
-      b: side("b", linked),
+    expect(kept.get("b_to_a")).toEqual({ kind: "skipped" });
+    expect(kept.get("invite")).toEqual({ kind: "done" });
+    // b keeps its narrower link to a, so the invite would give its app more: none is left.
+    const onlyA = recordingOps({}, true, { "environment-b": "auto" });
+    const narrowBack = await runLinkBothWays({
+      a: side("a"),
+      b: side("b"),
       access: "full-access",
       invite: true,
-      linkedEarlier: true,
-      ops: alreadyLinked.ops,
+      ops: onlyA.ops,
     });
-    expect(retried.get("invite")).toEqual({ kind: "done" });
+    expect(narrowBack.get("a_to_b")).toEqual({ kind: "done" });
+    expect(narrowBack.get("invite")).toEqual({ kind: "skipped", reason: "not_full_access" });
+    expect(onlyA.calls.filter((call) => call.startsWith("app:"))).toEqual([]);
+    const noBack = recordingOps({
+      "link:environment-b->environment-a:code-environment-a": new Error("refused"),
+    });
+    const unlinked = await runLinkBothWays({
+      a: side("a"),
+      b: side("b"),
+      access: "full-access",
+      invite: true,
+      ops: noBack.ops,
+    });
+    expect(unlinked.get("a_to_b")).toEqual({ kind: "done" });
+    expect(unlinked.get("invite")).toEqual({ kind: "skipped", reason: "not_linked" });
   });
 
   it("leaves linked directions alone and retries only what failed", async () => {
@@ -158,9 +183,9 @@ describe("runLinkBothWays", () => {
     });
     expect(failed.get("invite")).toEqual({ kind: "skipped" });
 
-    const retry = recordingOps();
+    const retry = recordingOps({}, true, { "environment-a": "approval-required" });
     const retried = await runLinkBothWays({
-      a: side("a", { linksToOther: true }),
+      a: side("a"),
       b: side("b"),
       access: "approval-required",
       invite: false,
@@ -168,8 +193,8 @@ describe("runLinkBothWays", () => {
     });
     expect(retried.get("a_to_b")).toEqual({ kind: "skipped" });
     expect(retried.get("b_to_a")).toEqual({ kind: "done" });
-    // The linked direction spends no code, and the failed one revoked the code it left unused.
-    expect(retry.calls).not.toContain("mint:environment-b");
+    // The kept link and the failed one each revoke the code they left unused.
+    expect(retry.calls).toContain("revoke:environment-b:link-code-environment-b");
     expect(first.calls).toContain("revoke:environment-a:link-code-environment-a");
   });
 
@@ -217,11 +242,7 @@ describe("runLinkBothWays", () => {
       failure: "no_address",
       detail: null,
     });
-    expect(outcomes.get("invite")).toEqual({
-      kind: "failed",
-      failure: "no_address",
-      detail: null,
-    });
+    expect(outcomes.get("invite")).toEqual({ kind: "skipped", reason: "not_linked" });
   });
 });
 

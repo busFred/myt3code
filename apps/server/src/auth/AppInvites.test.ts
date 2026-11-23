@@ -64,6 +64,19 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AppInvites", (it
     }).pipe(Effect.provide(Layer.merge(layerAppInvites, TestClock.layer()))),
   );
 
+  it.effect("leaves an invite whose code cannot be read pending, and hands out the rest", () =>
+    Effect.gen(function* () {
+      const invites = yield* AppInvites.AppInvites;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      const lost = yield* invites.create(inviteInput("LOST"));
+      yield* invites.create(inviteInput("KEPT", EnvironmentId.make("b")));
+      yield* secrets.remove(`app-invite-${lost.id}`);
+
+      expect((yield* invites.takePending).map((invite) => invite.credential)).toEqual(["KEPT"]);
+      expect((yield* invites.list).map((invite) => invite.id)).toEqual([lost.id]);
+    }).pipe(Effect.provide(Layer.merge(layerAppInvites, TestClock.layer()))),
+  );
+
   it.effect("ends an invite when its code does, after a day, or when replaced or revoked", () =>
     Effect.gen(function* () {
       const invites = yield* AppInvites.AppInvites;
