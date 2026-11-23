@@ -53,25 +53,36 @@ export const make = Effect.gen(function* () {
       environment.platform === "win32" ? icons.png : icons.ico,
     );
 
-    if (enabled && Option.isNone(iconPath)) {
-      yield* logWarning("no icon found for the tray; closing the window will quit");
-    }
     if (enabled && Option.isSome(iconPath)) {
-      yield* electronTray.show({
-        iconPath: iconPath.value,
-        tooltip: environment.displayName,
-        menu: [
-          { label: m(msg("Show T3 Code")), click: () => runFork(showWindow) },
-          { type: "separator" },
-          {
-            label: m(msg("Quit", { $context: "tray menu item, quits the app" })),
-            click: () => runFork(electronApp.quit),
-          },
-        ],
-        onClick: () => runFork(showWindow),
-      });
-      yield* Ref.set(desktopState.trayActive, true);
-      return;
+      const shown = yield* electronTray
+        .show({
+          iconPath: iconPath.value,
+          tooltip: environment.displayName,
+          menu: [
+            { label: m(msg("Show T3 Code")), click: () => runFork(showWindow) },
+            { type: "separator" },
+            {
+              label: m(msg("Quit", { $context: "tray menu item, quits the app" })),
+              click: () => runFork(electronApp.quit),
+            },
+          ],
+          onClick: () => runFork(showWindow),
+        })
+        .pipe(
+          Effect.as(true),
+          // A native failure must not block startup; closing the window quits instead.
+          Effect.catchCause((cause) =>
+            logWarning("failed to create the tray; closing the window will quit", { cause }).pipe(
+              Effect.as(false),
+            ),
+          ),
+        );
+      if (shown) {
+        yield* Ref.set(desktopState.trayActive, true);
+        return;
+      }
+    } else if (enabled) {
+      yield* logWarning("no icon found for the tray; closing the window will quit");
     }
 
     yield* Ref.set(desktopState.trayActive, false);
