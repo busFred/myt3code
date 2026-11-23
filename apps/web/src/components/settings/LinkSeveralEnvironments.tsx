@@ -344,7 +344,12 @@ export function LinkSeveralEnvironmentsDialog({
                           ? gt("Already linked", {
                               $context: "status of a machine whose links were kept",
                             })
-                          : gt("Linked", { $context: "status of a machine that was just linked" })
+                          : steps.has(id) && summarizeBothWays(steps.get(id)!).invited
+                            ? gt("Linked, app invited", {
+                                $context:
+                                  "status of a machine that was just linked and whose desktop app was invited",
+                              })
+                            : gt("Linked", { $context: "status of a machine that was just linked" })
                         : outcome?.kind === "failed"
                           ? linkBatchFailureLabel(outcome.failure, m)
                           : blocked === null
@@ -366,7 +371,8 @@ export function LinkSeveralEnvironmentsDialog({
                             <span className="block truncate font-medium">{machine.label}</span>
                             {steps.has(id) &&
                             (outcome?.kind === "failed" ||
-                              summarizeBothWays(steps.get(id)!).lifetimeIgnored) ? (
+                              summarizeBothWays(steps.get(id)!).lifetimeIgnored ||
+                              summarizeBothWays(steps.get(id)!).inviteBlocked) ? (
                               <BothWaysResults
                                 outcomes={steps.get(id)!}
                                 aLabel={sourceLabel ?? environmentId}

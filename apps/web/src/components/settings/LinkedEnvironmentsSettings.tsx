@@ -518,11 +518,16 @@ export function LinkEnvironmentDialog({
     }
     setBothWaysOutcomes(outcomes);
     const summary = summarizeBothWays(outcomes);
-    // With every link kept as it was, the results stay up to say so.
-    if (summary.complete && summary.changed) {
+    // With every link kept as it was, or the invite skipped for want of an address, the results
+    // stay up to say so.
+    if (summary.closable) {
       toastManager.add({
         type: "success",
-        title: gt("Linked {label} both ways", { label: target.label }),
+        title: summary.invited
+          ? gt("Linked {label} both ways and invited its desktop app to connect", {
+              label: target.label,
+            })
+          : gt("Linked {label} both ways", { label: target.label }),
       });
       if (summary.lifetimeIgnored) warnLifetimeIgnored();
       handleOpenChange(false);

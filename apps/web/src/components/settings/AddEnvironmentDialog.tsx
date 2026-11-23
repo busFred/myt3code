@@ -272,7 +272,14 @@ export function AddEnvironmentDialog({
     });
     const summary = outcomes === null ? null : summarizeBothWays(outcomes);
     if (summary !== null && summary.complete && summary.changed) {
-      toastManager.add({ type: "success", title: gt("Linked both ways") });
+      toastManager.add({
+        type: "success",
+        title: summary.invited
+          ? gt("Linked {label} both ways and invited its desktop app to connect", {
+              label: readEnvironment(environmentId)?.label ?? label ?? gt("The new environment"),
+            })
+          : gt("Linked both ways"),
+      });
     }
   };
   const connectSavedBackendSshTarget = async (target: DesktopSshEnvironmentTarget) => {

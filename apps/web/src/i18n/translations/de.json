@@ -13044,5 +13044,7 @@
   "eb1f9774d484c1d2": "Die Verknüpfungen von {label} konnten nicht gelesen werden, daher wurde die Verknüpfung zurück hierher nicht verlängert.",
   "0aca36439bb7b84c": "Bereits verknüpft. „In beide Richtungen verknüpfen“ behält bestehende Verknüpfungen unverändert bei. Um ihre Laufzeit zu ändern, nutze „Läuft nie ab (beidseitig)“ oder „Verlängern“ unter „Autorisierte Clients“ auf dem anderen Rechner. Um den Zugriff zu ändern, vergiss die Verknüpfung zuerst oder deaktiviere „In beide Richtungen verknüpfen“.",
   "b83989521b0985a8": "Bereits verknüpft",
-  "f38fe37557b20463": "{kept, plural, one {# Rechner war bereits verknüpft und blieb unverändert.} other {# Rechner waren bereits verknüpft und blieben unverändert.}}"
+  "f38fe37557b20463": "{kept, plural, one {# Rechner war bereits verknüpft und blieb unverändert.} other {# Rechner waren bereits verknüpft und blieben unverändert.}}",
+  "31153a383ad1ac8d": "{label} in beide Richtungen verknüpft und dessen Desktop-App zum Verbinden eingeladen",
+  "a0064c808166da11": "Verknüpft, App eingeladen"
 }

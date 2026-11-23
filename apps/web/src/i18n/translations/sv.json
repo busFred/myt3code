@@ -13051,5 +13051,7 @@
   "eb1f9774d484c1d2": "Det gick inte att läsa länkarna på {label}, så dess länk tillbaka hit förnyades inte.",
   "0aca36439bb7b84c": "Redan länkad. ”Länka åt båda håll” behåller befintliga länkar som de är. Om du vill ändra hur länge de gäller använder du ”Går aldrig ut (åt båda håll)” eller ”Förnya” under ”Auktoriserade klienter” på den andra maskinen. Om du vill ändra åtkomsten glömmer du länken först eller avmarkerar ”Länka åt båda håll”.",
   "b83989521b0985a8": "Redan länkad",
-  "f38fe37557b20463": "{kept, plural, one {# dator var redan länkad och lämnades som den var.} other {# datorer var redan länkade och lämnades som de var.}}"
+  "f38fe37557b20463": "{kept, plural, one {# dator var redan länkad och lämnades som den var.} other {# datorer var redan länkade och lämnades som de var.}}",
+  "31153a383ad1ac8d": "{label} länkad åt båda hållen och dess skrivbordsapp inbjuden att ansluta",
+  "a0064c808166da11": "Länkad, appen inbjuden"
 }

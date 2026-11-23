@@ -13044,5 +13044,7 @@
   "eb1f9774d484c1d2": "Impossible de lire les associations de {label} : son association vers ici n'a donc pas été renouvelée.",
   "0aca36439bb7b84c": "Déjà associé. « Associer dans les deux sens » conserve les associations existantes telles quelles. Pour changer leur durée, utilisez « N'expire jamais (dans les deux sens) » ou « Renouveler » dans « Clients autorisés » sur l'autre machine. Pour changer l'accès, oubliez d'abord l'association ou décochez « Associer dans les deux sens ».",
   "b83989521b0985a8": "Déjà lié",
-  "f38fe37557b20463": "{kept, plural, one {# machine était déjà liée et reste telle quelle.} other {# machines étaient déjà liées et restent telles quelles.}}"
+  "f38fe37557b20463": "{kept, plural, one {# machine était déjà liée et reste telle quelle.} other {# machines étaient déjà liées et restent telles quelles.}}",
+  "31153a383ad1ac8d": "{label} lié dans les deux sens et son application de bureau invitée à se connecter",
+  "a0064c808166da11": "Lié, application invitée"
 }

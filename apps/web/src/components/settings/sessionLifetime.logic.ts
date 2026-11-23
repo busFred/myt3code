@@ -87,6 +87,12 @@ export interface BothWaysSummary {
   readonly complete: boolean;
   /** Some step did something; with every link kept as it was, nothing changed. */
   readonly changed: boolean;
+  /** The other machine's desktop app was invited to connect back. */
+  readonly invited: boolean;
+  /** The invite was skipped for want of an address it may safely travel over, which needs a look. */
+  readonly inviteBlocked: boolean;
+  /** Worth closing the dialog on: every step went through, and the invite left nothing to read. */
+  readonly closable: boolean;
 }
 
 export function summarizeBothWays(
@@ -95,13 +101,20 @@ export function summarizeBothWays(
   const failedSteps = [...outcomes].flatMap(([step, outcome]) =>
     outcome.kind === "failed" ? [step] : [],
   );
+  const invite = outcomes.get("invite");
+  const inviteBlocked = invite?.kind === "skipped" && invite.reason === "no_safe_address";
+  const complete = failedSteps.length === 0;
+  const changed = [...outcomes.values()].some((outcome) => outcome.kind === "done");
   return {
     failedSteps,
     lifetimeIgnored: [...outcomes.values()].some(
       (outcome) => outcome.kind === "done" && outcome.lifetimeIgnored === true,
     ),
-    complete: failedSteps.length === 0,
-    changed: [...outcomes.values()].some((outcome) => outcome.kind === "done"),
+    complete,
+    changed,
+    invited: invite?.kind === "done",
+    inviteBlocked,
+    closable: complete && changed && !inviteBlocked,
   };
 }
 
