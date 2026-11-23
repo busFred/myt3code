@@ -74,6 +74,16 @@ once it has one.
 - The default grant includes `access:write`, so a full session can mint more
   pairing links and sessions. They appear in Sharing & access, and "revoke all
   others" removes them.
+- `access:write` can renew a session (`POST /api/auth/clients/renew`), earlier
+  or later, up to never expiring. Lengthening one needs every scope that
+  session holds; T3 Connect and desktop app sessions refuse renewal.
+- A session holding every standard scope can leave this environment's desktop
+  app an invite (`POST /api/app-invites`), which the app adds without asking.
+  The invite carries a one-time code from the other environment and lasts at
+  most a day. Only desktop app sessions take invites: subject
+  `desktop-bootstrap`, or `desktop-service`, which only the local
+  `t3 pair --desktop-service` mints, since it writes the environment's
+  database.
 - `filesystem:read` reads anything the server's user can read, including paths
   outside projects.
 - Plain HTTP on a LAN or tailnet is the user's choice. `t3 serve` warns when it
@@ -92,7 +102,8 @@ once it has one.
 
 ## Where enforcement lives
 
-- Session issuance, pairing, token exchange: [`auth/http.ts`](apps/server/src/auth/http.ts), [`auth/EnvironmentAuth.ts`](apps/server/src/auth/EnvironmentAuth.ts), [`auth/dpop.ts`](apps/server/src/auth/dpop.ts)
+- Session issuance, pairing, token exchange, renew: [`auth/http.ts`](apps/server/src/auth/http.ts), [`auth/EnvironmentAuth.ts`](apps/server/src/auth/EnvironmentAuth.ts), [`auth/dpop.ts`](apps/server/src/auth/dpop.ts)
+- App invites and linking over HTTP: [`auth/accessHttp.ts`](apps/server/src/auth/accessHttp.ts)
 - Per-RPC scopes: [`auth/RpcAuthorization.ts`](apps/server/src/auth/RpcAuthorization.ts). [`clientRpcPermissions.ts`](packages/contracts/src/clientRpcPermissions.ts) only drives client UI and is never the boundary.
 - MCP: [`auth/McpOAuth.ts`](apps/server/src/auth/McpOAuth.ts), [`mcp/McpToolAccess.ts`](apps/server/src/mcp/McpToolAccess.ts), [`mcp/threadAccess.ts`](apps/server/src/mcp/threadAccess.ts), [`mcp/linkOrigin.ts`](apps/server/src/mcp/linkOrigin.ts)
 - Guest links: [`guest/GuestShareService.ts`](apps/server/src/guest/GuestShareService.ts)

@@ -158,7 +158,8 @@ t3 auth session renew <session-id> --expire never
 A duration counts from now and can also end a session sooner. Making a session
 last longer from a device needs every permission that session has; a device
 with fewer can only shorten it. T3 Connect and desktop app sessions keep their
-own lifetimes.
+own lifetimes. A browser renewed from another device picks up its new lifetime
+the next time it opens T3 Code, so open it there before its old sign-in ends.
 
 ### Reach one machine several ways
 
@@ -513,7 +514,8 @@ t3 environment link <address> --pairing-code <code> --both-ways --expire never
 
 It links each machine to the other and turns on Linked environments on both.
 With `--access full-access` it also invites the other machine's desktop app to
-connect to this one; the invite lasts a day, and `--no-invite-app` skips it.
+connect to this one, once it has made a link; the invite lasts a day, and
+`--no-invite-app` skips it.
 Links with less access leave no invite, because the app would get more access
 than the link. The code must be able to manage access there, as a plain
 `t3 pair` code can; it is spent once for a session that ends when the command

@@ -2003,6 +2003,7 @@
   "33386c89f3b07fea": "Expirée. Associez-la à nouveau avec un nouveau code d’appairage.",
   "13d91e967cd9065c": "Ne répond pas pour le moment.",
   "fbf8bb81dfce9662": "{count, plural, one {Expire dans {count} jour} other {Expire dans {count} jours}}",
+  "3f698d5e79505a0a": "N'expire jamais",
   "8971602c42718d72": "Joignable",
   "4c6b2d924da2c94d": "Aucun environnement connecté pour l’instant.",
   "28494052dfb4647a": [

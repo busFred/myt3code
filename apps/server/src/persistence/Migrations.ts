@@ -346,13 +346,19 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     executedMigrations.push(...(yield* run({ loader: makeMigrationLoader(id) })));
   }
   // Only a missing part takes the write lock; CLI startup runs this on the live database.
-  if (toMigrationInclusive === undefined && (yield* forkSchemaPending)) {
+  const forkSchemaRan = toMigrationInclusive === undefined && (yield* forkSchemaPending);
+  if (forkSchemaRan) {
     yield* sql.withTransaction(applyForkSchema);
   }
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
-  yield* migrations.length === 0
+  // The started line was logged, so the finished line must follow it, even for the fork's step.
+  yield* migrations.length === 0 && !forkSchemaRan && !hasPending
     ? Effect.logDebug("Database schema is current")
-    : Effect.log(DATABASE_MIGRATIONS_FINISHED_MESSAGE).pipe(Effect.annotateLogs({ migrations }));
+    : Effect.log(DATABASE_MIGRATIONS_FINISHED_MESSAGE).pipe(
+        Effect.annotateLogs({
+          migrations: forkSchemaRan ? [...migrations, "fork_auth_lifetimes"] : migrations,
+        }),
+      );
 
   const recorded = yield* sql<{
     readonly migration_id: number;

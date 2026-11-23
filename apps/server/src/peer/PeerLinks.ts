@@ -32,7 +32,9 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpBody from "effect/http/HttpBody";
 import * as HttpClientError from "effect/http/HttpClientError";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiClient from "effect/http-api/HttpApiClient";
 import { isLocalLoopbackHost, isTailnetHost } from "@t3tools/shared/hostClassification";
@@ -40,6 +42,7 @@ import { isLocalLoopbackHost, isTailnetHost } from "@t3tools/shared/hostClassifi
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 
 const PeerHttpApi = HttpApi.make(EnvironmentHttpApi.identifier)
   .add(EnvironmentHttpApi.groups.metadata)
@@ -139,6 +142,13 @@ export class PeerLinks extends Context.Service<
       environmentId: EnvironmentId,
       expiresAt: DateTime.Utc,
     ) => Effect.Effect<void>;
+    /**
+     * Asks the peer when the link's session ends, as after it was renewed there, and records a
+     * later end. None when the peer does not say, such as one that no longer accepts the link.
+     */
+    readonly refreshExpiry: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<Option.Option<DateTime.Utc>, PeerLinkError>;
   }
 >()("t3/peer/PeerLinks") {}
 
@@ -739,7 +749,9 @@ const make = Effect.gen(function* () {
       const row = yield* readRow(environmentId);
       if (Option.isNone(row)) return yield* notLinked;
       const link = yield* toLink(row.value);
-      if (DateTime.isLessThanOrEqualTo(link.expiresAt, yield* DateTime.now)) {
+      // The expiry stored here is only the last one the peer named: a renewal there moves it,
+      // so the peer decides, and refuses a link that really ended. An unfenced one never goes.
+      if (row.value.fenced !== 1) {
         return yield* new PeerLinkError({
           reason: "expired",
           message: `The link to ${link.label} expired. Link it again with a new pairing code from ${link.label}.`,
@@ -815,6 +827,54 @@ const make = Effect.gen(function* () {
       WHERE environment_id = ${environmentId} AND expires_at < ${DateTime.formatIso(expiresAt)}
     `.pipe(Effect.asVoid, Effect.ignoreCause({ log: true }));
 
+  const refreshExpiry: PeerLinks["Service"]["refreshExpiry"] = Effect.fn("PeerLinks.refreshExpiry")(
+    function* (environmentId) {
+      const { url, token } = yield* resolve(environmentId);
+      // The lightest call the peer authenticates as the link; its answer names the link's end.
+      const response = yield* peerHttpClient
+        .execute(
+          HttpClientRequest.post(`${url}/mcp`).pipe(
+            HttpClientRequest.setHeaders({
+              accept: "application/json, text/event-stream",
+              authorization: `Bearer ${token}`,
+            }),
+            HttpClientRequest.setBody(
+              HttpBody.text(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: 0,
+                  method: "initialize",
+                  params: {
+                    protocolVersion: "2025-06-18",
+                    capabilities: {},
+                    clientInfo: { name: "t3code-peer", version: "1" },
+                  },
+                }),
+                "application/json",
+              ),
+            ),
+          ),
+        )
+        .pipe(
+          Effect.timeout(probeTimeout(url)),
+          Effect.mapError(
+            () =>
+              new PeerLinkError({
+                reason: "unreachable",
+                message: `${url} did not answer in time.`,
+              }),
+          ),
+        );
+      const expiresAt = Option.flatMap(
+        Option.fromNullishOr(response.headers[McpInvocationContext.LINK_EXPIRES_AT_HEADER]),
+        DateTime.make,
+      );
+      if (response.status !== 200 || Option.isNone(expiresAt)) return Option.none();
+      yield* recordExpiry(environmentId, DateTime.toUtc(expiresAt.value));
+      return Option.some(DateTime.toUtc(expiresAt.value));
+    },
+  );
+
   return PeerLinks.of({
     enabled,
     link,
@@ -827,6 +887,7 @@ const make = Effect.gen(function* () {
     resolve,
     recordOutcome,
     recordExpiry,
+    refreshExpiry,
   });
 });
 

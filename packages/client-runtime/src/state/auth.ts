@@ -10,6 +10,7 @@ import type {
   AuthCreateAppInviteInput,
   AuthRevokeAppInviteInput,
   AuthLinkPeerInput,
+  AuthRefreshPeerLinkExpiryInput,
   AuthRevokePairingLinkInput,
 } from "@t3tools/contracts";
 import { WS_METHODS } from "@t3tools/contracts";
@@ -184,6 +185,19 @@ export function createAuthEnvironmentAtoms<R, E>(
           // Linking probes the other environment's addresses and signs in there.
           timeoutMs: 60_000,
           request: ({ client, headers }) => client.linkPeer({ headers, payload: input }),
+        }),
+    }),
+    /** Has the environment ask a linked one when its link there ends; older servers answer 404. */
+    refreshPeerLinkExpiry: createEnvironmentCommand(runtime, {
+      label: "environment-data:server:access-refresh-peer-link-expiry",
+      execute: (input: AuthRefreshPeerLinkExpiryInput) =>
+        executeConnectedEnvironmentHttpRequest({
+          group: "access",
+          method: "POST",
+          url: (urls) => urls.refreshPeerLinkExpiry(),
+          timeoutMs: ACCESS_REQUEST_TIMEOUT_MS,
+          request: ({ client, headers }) =>
+            client.refreshPeerLinkExpiry({ headers, payload: input }),
         }),
     }),
     revokeOtherClients: createEnvironmentCommand(runtime, {

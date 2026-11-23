@@ -42,8 +42,14 @@ const run = async <W, A, E>(
 
 const PEER_LINK_CODE_LABEL = "T3 Code link";
 
-/** Each op runs with this client's own session on the environment it names. */
-const bothWaysOps = (appCodeLabel: (environmentLabel: string) => string): BothWaysOps => ({
+/**
+ * Each op runs with this client's own session on the environment it names. In a batch a link
+ * leaves the lists alone, and the batch refreshes each once when it ends.
+ */
+const bothWaysOps = (
+  appCodeLabel: (environmentLabel: string) => string,
+  batch: boolean,
+): BothWaysOps => ({
   enableLinks: (environmentId) =>
     run(serverEnvironment.updateSettings, {
       environmentId,
@@ -65,7 +71,11 @@ const bothWaysOps = (appCodeLabel: (environmentLabel: string) => string): BothWa
       ? Result.fail(new Error("The environment did not issue a peer-link code."))
       : minted;
   },
-  link: (environmentId, input) => run(peerLinkEnvironment.link, { environmentId, input }),
+  link: (environmentId, input) =>
+    run(batch ? peerLinkEnvironment.linkInBatch : peerLinkEnvironment.link, {
+      environmentId,
+      input,
+    }),
   mintAppCode: (environmentId, input) =>
     run(authEnvironment.createPairingCredential, {
       environmentId,
@@ -75,7 +85,7 @@ const bothWaysOps = (appCodeLabel: (environmentLabel: string) => string): BothWa
         ...(input.lifetime === undefined ? {} : { lifetime: input.lifetime }),
       },
     }),
-  revokeAppCode: (environmentId, id) =>
+  revokeCode: (environmentId, id) =>
     run(authEnvironment.revokePairingLink, { environmentId, input: { id } }),
   createInvite: (environmentId, input) =>
     run(authEnvironment.createAppInvite, { environmentId, input }),
@@ -114,6 +124,8 @@ export function linkEnvironmentsBothWays(input: {
   readonly access: AuthMcpClientAccess;
   readonly lifetime: AuthSessionLifetime | undefined;
   readonly invite: boolean;
+  readonly linkedEarlier: boolean;
+  readonly batch: boolean;
   readonly appCodeLabel: (environmentLabel: string) => string;
 }): Promise<ReadonlyMap<BothWaysStep, BothWaysOutcome>> {
   return runLinkBothWays({
@@ -122,8 +134,28 @@ export function linkEnvironmentsBothWays(input: {
     access: input.access,
     ...(input.lifetime === undefined ? {} : { lifetime: input.lifetime }),
     invite: input.invite,
-    ops: bothWaysOps(input.appCodeLabel),
+    linkedEarlier: input.linkedEarlier,
+    ops: bothWaysOps(input.appCodeLabel, input.batch),
   });
+}
+
+/** Lists each environment's links again, once, as a batch does when it ends. */
+export function refreshPeerLinkLists(environmentIds: Iterable<EnvironmentId>) {
+  for (const environmentId of new Set(environmentIds)) {
+    appAtomRegistry.refresh(peerLinkEnvironment.list({ environmentId, input: {} }));
+  }
+}
+
+/**
+ * Has each side ask the other when its link there now ends, so a renewal made there shows here.
+ * Best effort: an older server answers 404 and keeps the expiry it knew.
+ */
+export async function refreshLinkExpiries(a: EnvironmentId, b: EnvironmentId) {
+  await Promise.all([
+    run(authEnvironment.refreshPeerLinkExpiry, { environmentId: a, input: { environmentId: b } }),
+    run(authEnvironment.refreshPeerLinkExpiry, { environmentId: b, input: { environmentId: a } }),
+  ]);
+  refreshPeerLinkLists([a, b]);
 }
 
 /** Lists the links `environmentId` holds, for finding the session its link to another has there. */

@@ -1030,7 +1030,8 @@ it("parses `--ttl` years and `--expire` never or a duration", () => {
   expect(lifetime(" Never ")).toEqual({ _tag: "never" });
   expect(lifetime("2y")).toEqual({ _tag: "duration", millis: 730 * day });
   expect(lifetime("90d")).toEqual({ _tag: "duration", millis: 90 * day });
-  for (const invalid of ["0d", "forever", ""]) {
+  expect(lifetime("100y")).toEqual({ _tag: "duration", millis: 36_500 * day });
+  for (const invalid of ["0d", "forever", "", "101y"]) {
     expect(() => lifetime(invalid)).toThrow();
   }
 });

@@ -336,10 +336,17 @@ export const isNeverExpiring = (expiresAt: { readonly epochMilliseconds: number 
   (typeof expiresAt === "number" ? expiresAt : expiresAt.epochMilliseconds) >=
   NEVER_EXPIRING_FROM_MILLIS;
 
+/** The longest duration a session lifetime may name; longer is what `never` is for. */
+export const MAX_SESSION_LIFETIME_MILLIS = 100 * 365 * 24 * 60 * 60 * 1000;
+
 /** How long a device session lasts: until a fixed time from now, or never. Absent means the default. */
 export const AuthSessionLifetime = Schema.Union([
   Schema.TaggedStruct("never", {}),
-  Schema.TaggedStruct("duration", { millis: Schema.Int.check(Schema.isGreaterThan(0)) }),
+  Schema.TaggedStruct("duration", {
+    millis: Schema.Int.check(
+      Schema.isBetween({ minimum: 1, maximum: MAX_SESSION_LIFETIME_MILLIS }),
+    ),
+  }),
 ]);
 export type AuthSessionLifetime = typeof AuthSessionLifetime.Type;
 
@@ -359,6 +366,22 @@ export const MAX_APP_INVITE_TTL_MILLIS = 24 * 60 * 60 * 1000;
 
 /** The subject of every MCP client session, a peer link's included. */
 export const MCP_CLIENT_SESSION_SUBJECT = "mcp-client";
+/** The desktop app that runs this environment's server. */
+export const DESKTOP_BOOTSTRAP_SESSION_SUBJECT = "desktop-bootstrap";
+/** The desktop app attached to this environment's background service, paired by its local CLI. */
+export const DESKTOP_SERVICE_SESSION_SUBJECT = "desktop-service";
+/** A device signed in through T3 Connect. */
+export const CLOUD_CONNECT_SESSION_SUBJECT = "cloud-connect";
+/** Sessions only this environment's own desktop app holds. */
+export const DESKTOP_APP_SESSION_SUBJECTS: ReadonlyArray<string> = [
+  DESKTOP_BOOTSTRAP_SESSION_SUBJECT,
+  DESKTOP_SERVICE_SESSION_SUBJECT,
+];
+/** Sessions that keep their own lifetimes, so renewing one is refused. */
+export const NON_RENEWABLE_SESSION_SUBJECTS: ReadonlyArray<string> = [
+  ...DESKTOP_APP_SESSION_SUBJECTS,
+  CLOUD_CONNECT_SESSION_SUBJECT,
+];
 
 export const AuthPairingCredentialResult = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -431,8 +454,6 @@ export const AuthAppInvite = Schema.Struct({
   urls: Schema.Array(TrimmedNonEmptyString),
   createdAt: Schema.DateTimeUtc,
   expiresAt: Schema.DateTimeUtc,
-  /** The code's pairing link on that environment, for revoking it there too. */
-  pairingLinkId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthAppInvite = typeof AuthAppInvite.Type;
 
@@ -573,16 +594,10 @@ export const AuthCreateAppInviteInput = Schema.Struct({
   credential: TrimmedNonEmptyString,
   /** When the code stops working there; the invite ends then too. */
   credentialExpiresAt: Schema.optionalKey(Schema.DateTimeUtc),
-  /** The code's pairing link on that environment, kept so revoking the invite can revoke it there. */
-  pairingLinkId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthCreateAppInviteInput = typeof AuthCreateAppInviteInput.Type;
 
-export const AuthCreateAppInviteResult = Schema.Struct({
-  ...AuthAppInvite.fields,
-  /** Pairing links of the pending invites this one replaced, for revoking them there too. */
-  replacedPairingLinkIds: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
-});
+export const AuthCreateAppInviteResult = AuthAppInvite;
 export type AuthCreateAppInviteResult = typeof AuthCreateAppInviteResult.Type;
 
 export const AuthRevokeAppInviteInput = Schema.Struct({ id: TrimmedNonEmptyString });

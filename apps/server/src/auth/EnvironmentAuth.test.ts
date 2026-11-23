@@ -19,6 +19,7 @@ import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
+import * as RunningServer from "../cli/runningServer.ts";
 import { makeDpopKey } from "./dpop.testkit.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -783,6 +784,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
           { callerScopes },
         );
         expect(Option.isSome(shortened)).toBe(true);
+        // The CLI renews through a running server as the local admin, so it may lengthen any.
+        const asCli = yield* serverAuth.renewSession(
+          admin.sessionId,
+          { _tag: "never" },
+          { callerScopes: new Set(RunningServer.LOCAL_ADMIN_SCOPES) },
+        );
+        expect(Option.getOrNull(asCli)?.epochMilliseconds).toBe(NEVER_EXPIRES_AT_MILLIS);
         // A renewal meant for a peer link leaves a session with another subject alone.
         const otherSubject = yield* serverAuth.renewSession(
           admin.sessionId,

@@ -357,8 +357,6 @@ function ConnectionsSettingsContent({
   const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
   const [renewingClientSessionId, setRenewingClientSessionId] = useState<string | null>(null);
   const [revokingAppInviteId, setRevokingAppInviteId] = useState<string | null>(null);
-  // The access stream sends invites only with its snapshot, so revoked ones are hidden here.
-  const [revokedAppInviteIds, setRevokedAppInviteIds] = useState<ReadonlySet<string>>(new Set());
   const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
   const [routeTarget, setRouteTarget] = useState<EnvironmentPresentation | null>(null);
   const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
@@ -480,7 +478,8 @@ function ConnectionsSettingsContent({
   const appInvites = (() => {
     const event = authAccessChanges.data;
     if (event?.type !== "snapshot") return [];
-    return (event.payload.appInvites ?? []).filter((invite) => !revokedAppInviteIds.has(invite.id));
+    // Each invite change sends a new snapshot, so a revoked invite leaves with it.
+    return event.payload.appInvites ?? [];
   })();
   const isLocalBackendNetworkAccessible = desktopBridge
     ? desktopServerExposureState?.mode === "network-accessible"
@@ -722,7 +721,7 @@ function ConnectionsSettingsContent({
   };
 
   const handleRevokeAppInvite = async (invite: AuthAppInvite) => {
-    const { id, pairingLinkId } = invite;
+    const { id } = invite;
     if (
       accessEnvironmentId === null ||
       !readEnvironmentScope(accessEnvironmentId, AuthAccessWriteScope)
@@ -731,19 +730,7 @@ function ConnectionsSettingsContent({
     setRevokingAppInviteId(id);
     setDesktopAccessManagementMutationError(null);
     const result = await revokeAppInvite({ environmentId: accessEnvironmentId, input: { id } });
-    if (result._tag === "Success") {
-      setRevokedAppInviteIds((current) => new Set(current).add(id));
-      // The invite's code lives on the machine it invites to; revoke it there when this client can.
-      if (
-        pairingLinkId !== undefined &&
-        readEnvironmentScope(invite.environmentId, AuthAccessWriteScope)
-      ) {
-        void revokePairingLink({
-          environmentId: invite.environmentId,
-          input: { id: pairingLinkId },
-        });
-      }
-    } else if (!isAtomCommandInterrupted(result)) {
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       const message = isMissingEndpointFailure(error)
         ? gt("That machine runs an older T3 Code")

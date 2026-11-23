@@ -385,7 +385,10 @@ export const prepareLocalBackend = Effect.fn("DesktopServiceConnection.prepareLo
         const ownerKey = `${current.value.pid}:${DesktopHomeOwner.ownerOrigin(current.value)}`;
         const cached = yield* Ref.get(bearer);
         if (Option.isSome(cached) && cached.value.owner === ownerKey) return cached.value.token;
-        const result = yield* cli("pair", ["pair", "--json", "--label", "T3 Code Desktop"]).pipe(
+        const pairArgs = ["pair", "--json", "--label", "T3 Code Desktop"];
+        // Marks the session as this app's, so it can take app invites; an older t3 lacks the flag.
+        const result = yield* cli("pair", [...pairArgs, "--desktop-service"]).pipe(
+          Effect.catch(() => cli("pair", pairArgs)),
           Effect.flatMap(decodePairResult),
         );
         if (

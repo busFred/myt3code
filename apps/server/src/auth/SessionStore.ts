@@ -465,14 +465,25 @@ export class SessionStore extends Context.Service<
       sessionId: AuthSessionId,
       expiresAt: DateTime.Utc,
       step: Duration.Duration,
+      /** Moves it only while the session still has this window, so a renewal is never undone. */
+      expectedRenewalWindow?: AuthSessionLifetime | null,
     ) => Effect.Effect<Option.Option<DateTime.Utc>, SessionCredentialInternalError>;
+    /** A session that is neither revoked nor expired. */
+    readonly getLive: (
+      sessionId: AuthSessionId,
+    ) => Effect.Effect<
+      Option.Option<AuthSessions.AuthSessionRecord>,
+      SessionCredentialInternalError
+    >;
     /**
      * Sets a live session's expiry to `lifetime` from now, earlier or later; a renewable session
-     * also takes it as its window. None when the session is revoked, expired or missing.
+     * also takes it as its window. None when the session is revoked, expired or missing, or its
+     * expiry or window is no longer `expected`.
      */
     readonly setExpiry: (
       sessionId: AuthSessionId,
       lifetime: AuthSessionLifetime,
+      expected: Pick<AuthSessions.AuthSessionRecord, "expiresAt" | "renewalWindow">,
     ) => Effect.Effect<Option.Option<DateTime.Utc>, SessionCredentialInternalError>;
     readonly issueWebSocketToken: (
       sessionId: AuthSessionId,
@@ -769,7 +780,7 @@ const make = Effect.gen(function* () {
           : DateTime.makeUnsafe(
               sessionLifetimeExpiresAtMillis(input.lifetime, issuedAt.epochMilliseconds),
             );
-      const expiresAt =
+      const tokenExpiresAt =
         lifetimeExpiresAt !== undefined && input?.renewalWindow === undefined
           ? lifetimeExpiresAt
           : DateTime.add(issuedAt, {
@@ -778,7 +789,9 @@ const make = Effect.gen(function* () {
       const sessionExpiresAt = input?.renewalWindow
         ? (lifetimeExpiresAt ??
           DateTime.add(issuedAt, { milliseconds: Duration.toMillis(input.renewalWindow) }))
-        : expiresAt;
+        : tokenExpiresAt;
+      // A renewing device's short token never outlives its session.
+      const expiresAt = DateTime.min(tokenExpiresAt, sessionExpiresAt);
       const claims: SessionClaims = {
         v: 1,
         kind: "session",
@@ -980,7 +993,7 @@ const make = Effect.gen(function* () {
   );
 
   const extend: SessionStore["Service"]["extend"] = Effect.fn("SessionStore.extend")(
-    function* (sessionId, expiresAt, step) {
+    function* (sessionId, expiresAt, step, expectedRenewalWindow) {
       const now = yield* DateTime.now;
       // The step is checked in the update, so of two uses that read the same expiry one writes.
       const extended = yield* authSessions.extend({
@@ -988,6 +1001,7 @@ const make = Effect.gen(function* () {
         expiresAt,
         now,
         onlyIfExpiresBy: DateTime.subtract(expiresAt, { milliseconds: Duration.toMillis(step) }),
+        ...(expectedRenewalWindow === undefined ? {} : { expectedRenewalWindow }),
       });
       if (!extended) {
         const row = yield* authSessions.getById({ sessionId });
@@ -1050,7 +1064,7 @@ const make = Effect.gen(function* () {
         });
       }
       yield* input.consumeProof;
-      const expiresAt = DateTime.add(now, { milliseconds: Duration.toMillis(input.ttl) });
+      const tokenExpiresAt = DateTime.add(now, { milliseconds: Duration.toMillis(input.ttl) });
       const windowEndsAt =
         row.value.renewalWindow === null
           ? DateTime.add(now, { milliseconds: Duration.toMillis(input.renewalWindow) })
@@ -1062,16 +1076,24 @@ const make = Effect.gen(function* () {
           sessionId: claims.sid,
           expiresAt: windowEndsAt,
           now,
+          expectedRenewalWindow: row.value.renewalWindow,
         })
         .pipe(
           Effect.mapError(
             (cause) => new SessionCredentialIssueError({ sessionId: claims.sid, cause }),
           ),
         );
-      // A revoke can land between the read above and the update.
-      if (!extended) {
+      // A revoke can land between the read above and the update, and a renewal that changed the
+      // window keeps the expiry it set.
+      const current = extended ? Option.none() : yield* getLive(claims.sid);
+      if (!extended && Option.isNone(current)) {
         return yield* new SessionTokenNotRenewableError({ sessionId: claims.sid });
       }
+      const sessionEndsAt = Option.match(current, {
+        onNone: () => DateTime.max(windowEndsAt, row.value.expiresAt),
+        onSome: (session) => session.expiresAt,
+      });
+      const expiresAt = DateTime.min(tokenExpiresAt, sessionEndsAt);
       const renewedToken = yield* signClaims({
         ...claims,
         iat: now.epochMilliseconds,
@@ -1095,8 +1117,24 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const getLive: SessionStore["Service"]["getLive"] = Effect.fn("SessionStore.getLive")(
+    function* (sessionId) {
+      const row = yield* authSessions.getById({ sessionId });
+      const now = yield* DateTime.now;
+      return Option.filter(
+        row,
+        (session) => session.revokedAt === null && DateTime.isGreaterThan(session.expiresAt, now),
+      );
+    },
+    (effect, sessionId) =>
+      Effect.mapError(
+        effect,
+        (cause) => new SessionCredentialVerificationError({ sessionId, cause }),
+      ),
+  );
+
   const setExpiry: SessionStore["Service"]["setExpiry"] = Effect.fn("SessionStore.setExpiry")(
-    function* (sessionId, lifetime) {
+    function* (sessionId, lifetime, expected) {
       const now = yield* DateTime.now;
       const expiresAt = DateTime.makeUnsafe(
         sessionLifetimeExpiresAtMillis(lifetime, now.epochMilliseconds),
@@ -1106,6 +1144,8 @@ const make = Effect.gen(function* () {
         expiresAt,
         renewalWindow: lifetime,
         now,
+        expectedExpiresAt: DateTime.toUtc(expected.expiresAt),
+        expectedRenewalWindow: expected.renewalWindow,
       });
       if (!updated) return Option.none<DateTime.Utc>();
       const session = yield* loadActiveSession(sessionId);
@@ -1418,6 +1458,7 @@ const make = Effect.gen(function* () {
     issue,
     renew,
     extend,
+    getLive,
     setExpiry,
     verify,
     issueWebSocketToken,

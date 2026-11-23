@@ -105,7 +105,10 @@ Unlinking on the linking side only forgets the token.
   there. An address alone never moves an unexpired link to another address.
 - **The receiving side owns a link's expiry.** It renews the session when the
   link is used and answers each call with `T3-Link-Expires-At`; the linking
-  side stores that and never extends a link on its own. A receiving side that
+  side stores that and never extends a link on its own. The receiving side
+  decides: a call goes out even after the stored expiry passes, so a renewal
+  there takes effect at once and the next answer corrects the stored copy, and
+  `POST /api/peer-links/refresh-expiry` asks for it right after a renewal. A receiving side that
   predates renewal sends no header, so the link keeps its original 30 days on
   both sides. The pairing code can give the session another lifetime or
   never; renewal slides by that lifetime and never moves an expiry earlier.
@@ -119,9 +122,13 @@ Unlinking on the linking side only forgets the token.
   both for a client connected to each side, turns Linked environments on first
   where it is off, and for a full-access link leaves an
   [app invite](environment-auth.md#app-invites).
-  `t3 environment link --both-ways` spends one standard code for a session that
-  must manage access there, shortened to minutes, and has the other side link
-  back through `POST /api/peer-links/link`, the HTTP form of `peerLinks.link`.
+  `t3 environment link --both-ways` first checks that the other side has
+  renew, then spends one standard code for a session that must manage access
+  there, shortened to minutes, and has the other side link back through
+  `POST /api/peer-links/link`, the HTTP form of `peerLinks.link`. It turns
+  Linked environments on here through the running server
+  (`POST /api/peer-links/enable`), which would otherwise see the setting only
+  after its file watcher fires and could refuse the link back.
 - **All callers on one side share the link's single session on the other**,
   so idempotency keys are hashed with the caller's namespace before they
   leave. Without that, two agents reusing a key would collide on the far side.

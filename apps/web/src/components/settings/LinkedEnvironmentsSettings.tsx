@@ -21,7 +21,7 @@ import { T, useGT, useMessages, Var } from "gt-react";
 import { useId, useRef, useState } from "react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
-import { readPeerLinks, renewLinksBothWays } from "~/state/bothWays";
+import { readPeerLinks, refreshLinkExpiries, renewLinksBothWays } from "~/state/bothWays";
 import { mintPairingCodeOn } from "~/state/peerPairingCode";
 import { peerLinkEnvironment, useLinkableMachines } from "~/state/peerLinks";
 import { useEnvironment, useEnvironments } from "~/state/environments";
@@ -178,6 +178,8 @@ function LinkedEnvironmentRow({
       },
       lifetime: { _tag: "never" },
     });
+    // Each side keeps the expiry its peer last named; have both ask again, so this shows.
+    await refreshLinkExpiries(environmentId, link.environmentId);
     setRenewing(false);
     const failed = renewFailedSteps(outcomes);
     if (failed.length === 0) {
@@ -305,6 +307,14 @@ function LinkEnvironmentAction({
     BothWaysOutcome
   > | null>(null);
   const runBothWays = useBothWaysRunner();
+  const warnLifetimeIgnored = () =>
+    toastManager.add({
+      type: "warning",
+      title: gt("That machine runs an older T3 Code"),
+      description: gt(
+        "It ignored the device lifetime, so the device signs in for the default 30 days.",
+      ),
+    });
   // Machines whose minting already failed, so the dialog asks for a code instead.
   const [mintFailed, setMintFailed] = useState<ReadonlySet<EnvironmentId>>(new Set());
   // Enter then a click can both run before a re-render; this guard is synchronous.
@@ -382,11 +392,13 @@ function LinkEnvironmentAction({
       return;
     }
     setBothWaysOutcomes(outcomes);
-    if (summarizeBothWays(outcomes).complete) {
+    const summary = summarizeBothWays(outcomes);
+    if (summary.complete) {
       toastManager.add({
         type: "success",
         title: gt("Linked {label} both ways", { label: target.label }),
       });
+      if (summary.lifetimeIgnored) warnLifetimeIgnored();
       handleOpenChange(false);
     }
   };
@@ -473,7 +485,11 @@ function LinkEnvironmentAction({
                 machines={machines}
                 value={selected}
                 disabled={busy}
-                onChange={setChoice}
+                onChange={(next) => {
+                  setChoice(next);
+                  // Outcomes belong to the machine, access and lifetime they ran with.
+                  setBothWaysOutcomes(null);
+                }}
               />
             ) : null}
             {machine?.linked ? (
@@ -538,13 +554,23 @@ function LinkEnvironmentAction({
                 ) : null}
               </label>
             )}
-            <LinkAccessPicker value={access} onChange={setAccess} disabled={busy} />
+            <LinkAccessPicker
+              value={access}
+              onChange={(next) => {
+                setAccess(next);
+                setBothWaysOutcomes(null);
+              }}
+              disabled={busy}
+            />
             {canLinkBothWays ? (
               <BothWaysOption
                 checked={bothWays}
                 onCheckedChange={setBothWays}
                 lifetime={lifetime}
-                onLifetimeChange={setLifetime}
+                onLifetimeChange={(next) => {
+                  setLifetime(next);
+                  setBothWaysOutcomes(null);
+                }}
                 disabled={busy}
               />
             ) : null}

@@ -7,6 +7,7 @@ import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 
 import { T, useGT, useMessages, Var } from "gt-react";
 import {
   AuthAccessWriteScope,
+  type AuthMcpClientAccess,
   type DesktopDiscoveredSshHost,
   type DesktopSshEnvironmentTarget,
   type EnvironmentId,
@@ -49,6 +50,7 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { AnimatedHeight } from "../AnimatedHeight";
 import { BothWaysOption, BothWaysResults, useBothWaysRunner } from "./BothWays";
+import { LinkAccessPicker } from "./LinkAccessPicker";
 import {
   DEFAULT_LIFETIME_CHOICE,
   type LifetimeChoice,
@@ -146,6 +148,7 @@ export function AddEnvironmentDialog({
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
   const savedBackendSessionRef = useRef(0);
   const [bothWays, setBothWays] = useState(true);
+  const [access, setAccess] = useState<AuthMcpClientAccess>("approval-required");
   const [lifetime, setLifetime] = useState<LifetimeChoice>(DEFAULT_LIFETIME_CHOICE);
   // Set once an environment was added with "Link both ways" on, until the dialog closes.
   const [bothWaysRun, setBothWaysRun] = useState<{
@@ -195,6 +198,7 @@ export function AddEnvironmentDialog({
       setSavedBackendSshUsername("");
       setSavedBackendSshPort("");
       setBothWays(true);
+      setAccess("approval-required");
       setLifetime(DEFAULT_LIFETIME_CHOICE);
       setBothWaysRun(null);
     }
@@ -251,7 +255,7 @@ export function AddEnvironmentDialog({
       a: primaryEnvironmentId,
       b: environmentId,
       aLinksToB: false,
-      access: "approval-required",
+      access,
       lifetime,
       ...(previous === undefined ? {} : { previous }),
     });
@@ -556,6 +560,13 @@ export function AddEnvironmentDialog({
           onCheckedChange={setBothWays}
           lifetime={lifetime}
           onLifetimeChange={setLifetime}
+          disabled={isAddingSavedBackend || bothWaysRun !== null}
+        />
+      ) : null}
+      {offersBothWays && bothWays ? (
+        <LinkAccessPicker
+          value={access}
+          onChange={setAccess}
           disabled={isAddingSavedBackend || bothWaysRun !== null}
         />
       ) : null}

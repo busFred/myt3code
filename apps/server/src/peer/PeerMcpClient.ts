@@ -92,6 +92,21 @@ const linkedEnvironmentsOffThere = new OrchestratorMcpFailure({
     "The linked environment has Linked environments turned off. Turn it on in its Settings → Labs.",
 });
 
+/** A peer that refuses the link: revoked there, or, once the expiry it last named passed, ended. */
+const refusedLink = (link: PeerLinks.ResolvedPeerLink["link"]) =>
+  DateTime.now.pipe(
+    Effect.flatMap((now) =>
+      Effect.fail(
+        new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: DateTime.isLessThanOrEqualTo(link.expiresAt, now)
+            ? `The link to ${link.label} expired. Link it again with a new pairing code from ${link.label}.`
+            : "The linked environment no longer accepts this link. It may have been revoked there; link it again.",
+        }),
+      ),
+    ),
+  );
+
 const stoppedAnswering = new OrchestratorMcpFailure({
   code: "orchestration_error",
   message: "The linked environment stopped answering.",
@@ -167,13 +182,11 @@ const make = Effect.gen(function* () {
       );
       const sessionId = initialized.headers["mcp-session-id"];
       if (initialized.status === 403) return yield* linkedEnvironmentsOffThere;
+      if (initialized.status === 401) return yield* refusedLink(link);
       if (initialized.status !== 200 || sessionId === undefined) {
         return yield* new OrchestratorMcpFailure({
-          code: initialized.status === 401 ? "capability_denied" : "orchestration_error",
-          message:
-            initialized.status === 401
-              ? "The linked environment no longer accepts this link. It may have been revoked there; link it again."
-              : `The linked environment refused to start an MCP session (HTTP ${initialized.status}).`,
+          code: "orchestration_error",
+          message: `The linked environment refused to start an MCP session (HTTP ${initialized.status}).`,
         });
       }
       yield* recordLinkExpiry(link, initialized.headers);
@@ -241,13 +254,7 @@ const make = Effect.gen(function* () {
         yield* Ref.update(sessions, (current) => new Map(current).set(sessionKey, renewed));
         response = yield* callOnce(renewed);
       }
-      if (response.status === 401) {
-        return yield* new OrchestratorMcpFailure({
-          code: "capability_denied",
-          message:
-            "The linked environment no longer accepts this link. It may have been revoked there; link it again.",
-        });
-      }
+      if (response.status === 401) return yield* refusedLink(resolved.link);
       if (response.status === 403) return yield* linkedEnvironmentsOffThere;
       if (response.status !== 200) {
         return yield* new OrchestratorMcpFailure({

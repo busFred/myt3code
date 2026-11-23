@@ -67,6 +67,7 @@ import {
   describeLifetime,
   isLifetimeChoiceValid,
   lifetimeFromChoice,
+  renewsItself,
 } from "./sessionLifetime.logic";
 import { Textarea } from "../ui/textarea";
 import {
@@ -157,22 +158,37 @@ function DeviceLifetimeLabel({ lifetime }: { readonly lifetime: AuthSessionLifet
   );
 }
 
-const RENEW_LABELS = (gt: ReturnType<typeof useGT>): Record<RenewLifetimeId, string> => ({
-  "30-days": gt("30 days"),
-  "1-year": gt("1 year"),
-  never: gt("Never"),
-});
+const RENEW_LABELS = (
+  gt: ReturnType<typeof useGT>,
+  renewsItself: boolean,
+): Record<RenewLifetimeId, string> =>
+  renewsItself
+    ? {
+        "30-days": gt("While used within 30 days"),
+        "1-year": gt("While used within 1 year"),
+        never: gt("Never"),
+      }
+    : {
+        "30-days": gt("30 days"),
+        "1-year": gt("1 year"),
+        never: gt("Never"),
+      };
 
-/** Gives a signed-in device a new lifetime counted from now. */
+/**
+ * Gives a signed-in device a new lifetime counted from now. A device that renews itself stays
+ * signed in while it is used within that time, so its choices say so.
+ */
 function RenewMenu({
   disabled,
+  renewsItself,
   onRenew,
 }: {
   readonly disabled: boolean;
+  readonly renewsItself: boolean;
   readonly onRenew: (lifetime: AuthSessionLifetime) => void;
 }) {
   const gt = useGT();
-  const labels = RENEW_LABELS(gt);
+  const labels = RENEW_LABELS(gt, renewsItself);
   return (
     <Menu>
       <MenuTrigger render={<Button size="xs" variant="outline" disabled={disabled} />}>
@@ -655,6 +671,7 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
           {canRevoke && canRenewSession(clientSession) ? (
             <RenewMenu
               disabled={renewingClientSessionId === clientSession.sessionId}
+              renewsItself={renewsItself(clientSession)}
               onRenew={(lifetime) => onRenewSession(clientSession.sessionId, lifetime)}
             />
           ) : null}
@@ -1078,6 +1095,8 @@ const AppInviteListRow = memo(function AppInviteListRow({
   const m = useMessages();
   const nowMs = useNowSecond();
   const expiresAt = DateTime.formatIso(invite.expiresAt);
+  // The server drops an expired invite only on its next change.
+  if (invite.expiresAt.epochMilliseconds <= nowMs) return null;
   return (
     <div className={ITEM_ROW_CLASSNAME}>
       <div className={ITEM_ROW_INNER_CLASSNAME}>
