@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopLifecycle from "../../app/DesktopLifecycle.ts";
+import * as DesktopTray from "../../window/DesktopTray.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
 import * as IpcChannels from "../channels.ts";
 import { makeIpcMethod, makeSyncIpcMethod } from "../DesktopIpc.ts";
@@ -46,6 +47,24 @@ export const setServiceQuitBehavior = makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.localEnvironment.setServiceQuitBehavior")(function* (behavior) {
     yield* (yield* DesktopAppSettings.DesktopAppSettings).setServiceQuitBehavior(behavior);
+  }),
+});
+
+export const getCloseToTray = makeSyncIpcMethod({
+  channel: IpcChannels.GET_CLOSE_TO_TRAY_CHANNEL,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.localEnvironment.getCloseToTray")(function* () {
+    return (yield* (yield* DesktopAppSettings.DesktopAppSettings).get).closeToTray;
+  }),
+});
+
+export const setCloseToTray = makeIpcMethod({
+  channel: IpcChannels.SET_CLOSE_TO_TRAY_CHANNEL,
+  payload: Schema.Boolean,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.localEnvironment.setCloseToTray")(function* (enabled) {
+    yield* (yield* DesktopAppSettings.DesktopAppSettings).setCloseToTray(enabled);
+    yield* (yield* DesktopTray.DesktopTray).sync;
   }),
 });
 

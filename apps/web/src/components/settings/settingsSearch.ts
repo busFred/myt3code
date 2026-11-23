@@ -59,6 +59,7 @@ export interface SettingsSearchItem {
   readonly scope?: SettingsSearchScope;
   readonly desktopOnly?: boolean;
   readonly macOnly?: boolean;
+  readonly hiddenOnMac?: boolean;
   readonly windowsOnly?: boolean;
   readonly releaseChannelOnly?: boolean;
   readonly secretProvidersOnly?: boolean;
@@ -1390,6 +1391,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     desktopOnly: true,
   },
   {
+    id: "close-to-tray",
+    title: msg("Close to system tray"),
+    to: "/settings/connections",
+    searchTerms: [msg("close window hide background keep running tray notification area quit")],
+    desktopOnly: true,
+    hiddenOnMac: true,
+  },
+  {
     id: "network-access",
     title: msg("Network access"),
     to: "/settings/access",
@@ -1714,6 +1723,7 @@ export function settingsForThisPlatform(
       (isElectron || item.desktopOnly !== true) &&
       (!item.releaseChannelOnly || isElectron || HOSTED_APP_CHANNEL !== null) &&
       (!item.macOnly || isMacPlatform(platform)) &&
+      (!item.hiddenOnMac || !isMacPlatform(platform)) &&
       (!item.windowsOnly || isWindowsPlatform(platform)),
   );
 }

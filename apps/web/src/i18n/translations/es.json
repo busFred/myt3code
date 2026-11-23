@@ -13026,5 +13026,8 @@
   "1a9b7ef6139ec759": "Salir de la app y detener el servicio",
   "092d7ccda12b583e": "No se pudo guardar el comportamiento al salir.",
   "2f1268d157d95b42": "Elige si el servicio en segundo plano sigue en ejecución al salir de la app.",
-  "b6151aba5c92d5d9": "Al salir estando conectado al servicio en segundo plano"
+  "b6151aba5c92d5d9": "Al salir estando conectado al servicio en segundo plano",
+  "0f1aea9181bd9938": "Al cerrar la ventana, T3 Code sigue ejecutándose en la bandeja del sistema. Usa el icono de la bandeja para mostrarlo de nuevo o salir. En GNOME, los iconos de la bandeja necesitan la extensión AppIndicator; volver a abrir T3 Code también recupera la ventana.",
+  "dd2e0c88ac9c9641": "Cerrar a la bandeja del sistema",
+  "57285efd2e1f1c4e": "cerrar ventana ocultar segundo plano seguir ejecutando bandeja área de notificación salir"
 }

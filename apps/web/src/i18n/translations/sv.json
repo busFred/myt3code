@@ -13038,5 +13038,8 @@
   "1a9b7ef6139ec759": "Avsluta appen och stoppa tjänsten",
   "092d7ccda12b583e": "Det gick inte att spara avslutsbeteendet.",
   "2f1268d157d95b42": "Välj om bakgrundstjänsten fortsätter köra när du avslutar appen.",
-  "b6151aba5c92d5d9": "Vid avslut när appen är ansluten till bakgrundstjänsten"
+  "b6151aba5c92d5d9": "Vid avslut när appen är ansluten till bakgrundstjänsten",
+  "0f1aea9181bd9938": "När du stänger fönstret fortsätter T3 Code att köras i systemfältet. Använd ikonen där för att visa det igen eller avsluta. I GNOME kräver ikoner i systemfältet tillägget AppIndicator; att starta T3 Code igen tar också fram fönstret.",
+  "dd2e0c88ac9c9641": "Stäng till systemfältet",
+  "57285efd2e1f1c4e": "stäng fönster dölj bakgrund fortsätt köra systemfält meddelandefält avsluta"
 }

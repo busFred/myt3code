@@ -13031,5 +13031,8 @@
   "1a9b7ef6139ec759": "App beenden und Dienst stoppen",
   "092d7ccda12b583e": "Beendigungsverhalten konnte nicht gespeichert werden.",
   "2f1268d157d95b42": "Lege fest, ob der Hintergrunddienst nach dem Beenden der App weiterläuft.",
-  "b6151aba5c92d5d9": "Beim Beenden, während mit dem Hintergrunddienst verbunden"
+  "b6151aba5c92d5d9": "Beim Beenden, während mit dem Hintergrunddienst verbunden",
+  "0f1aea9181bd9938": "Das Schließen des Fensters lässt T3 Code im Infobereich der Taskleiste weiterlaufen. Über das Symbol dort zeigst du es wieder an oder beendest es. Unter GNOME brauchen Symbole im Infobereich die AppIndicator-Erweiterung; ein erneuter Start von T3 Code holt das Fenster ebenfalls zurück.",
+  "dd2e0c88ac9c9641": "In Infobereich schließen",
+  "57285efd2e1f1c4e": "fenster schließen ausblenden hintergrund weiterlaufen infobereich tray benachrichtigungsbereich beenden"
 }

@@ -13040,5 +13040,8 @@
   "1a9b7ef6139ec759": "Quit app and stop service",
   "092d7ccda12b583e": "Couldn't save quit behavior.",
   "2f1268d157d95b42": "Choose whether the background service keeps running after you quit the app.",
-  "b6151aba5c92d5d9": "When quitting while connected to the background service"
+  "b6151aba5c92d5d9": "When quitting while connected to the background service",
+  "0f1aea9181bd9938": "Closing the window keeps T3 Code running in the system tray. Use the tray icon to show it again or quit. On GNOME, tray icons need the AppIndicator extension; launching T3 Code again also brings the window back.",
+  "dd2e0c88ac9c9641": "Close to system tray",
+  "57285efd2e1f1c4e": "close window hide background keep running tray notification area quit"
 }

@@ -48,6 +48,7 @@ import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import { m } from "../i18n/messages.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
+import { shouldHideMainWindowOnClose } from "./CloseToTray.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
 import { installMainWindowRemoteRequestHeaderPolicy } from "./RemoteRequestHeaders.ts";
@@ -886,8 +887,20 @@ export const make = Effect.gen(function* () {
     window.on("move", scheduleBoundsPersist);
     window.on("maximize", scheduleBoundsPersist);
     window.on("unmaximize", scheduleBoundsPersist);
-    window.on("close", () => {
+    window.on("close", (event) => {
       runFork(flushBoundsPersist);
+      // Reading two Refs completes synchronously, which the cancelable close event needs.
+      const hide = Effect.runSyncWith(context)(
+        Effect.gen(function* () {
+          return shouldHideMainWindowOnClose({
+            trayActive: yield* Ref.get(desktopState.trayActive),
+            quitting: yield* Ref.get(desktopState.quitting),
+          });
+        }),
+      );
+      if (!hide) return;
+      event.preventDefault();
+      window.hide();
     });
 
     if (environment.platform === "darwin") {

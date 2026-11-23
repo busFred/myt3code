@@ -13031,5 +13031,8 @@
   "1a9b7ef6139ec759": "Quitter l'app et arrêter le service",
   "092d7ccda12b583e": "Impossible d'enregistrer le comportement à la fermeture.",
   "2f1268d157d95b42": "Choisissez si le service en arrière-plan reste actif après la fermeture de l'app.",
-  "b6151aba5c92d5d9": "À la fermeture lorsque l'app est connectée au service en arrière-plan"
+  "b6151aba5c92d5d9": "À la fermeture lorsque l'app est connectée au service en arrière-plan",
+  "0f1aea9181bd9938": "Fermer la fenêtre laisse T3 Code actif dans la zone de notification. Utilisez son icône pour le réafficher ou quitter. Sous GNOME, les icônes de la zone de notification nécessitent l'extension AppIndicator ; relancer T3 Code ramène aussi la fenêtre.",
+  "dd2e0c88ac9c9641": "Réduire dans la zone de notification à la fermeture",
+  "57285efd2e1f1c4e": "fermer fenêtre masquer arrière-plan rester actif zone de notification barre système quitter"
 }
