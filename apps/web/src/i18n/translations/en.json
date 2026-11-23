@@ -13051,5 +13051,7 @@
   "d041d0a04805b562": "Already linked, kept as it is ({access})",
   "09994d5cd3ca333a": "Needs an https or Tailscale address",
   "eb1f9774d484c1d2": "Could not read {label}'s links, so its link back here was not renewed.",
-  "0aca36439bb7b84c": "Already linked. Link both ways keeps existing links as they are. To change how long they last, use Never expire (both ways), or Renew under Authorized clients on the other machine. To change the access, forget the link first or untick Link both ways."
+  "0aca36439bb7b84c": "Already linked. Link both ways keeps existing links as they are. To change how long they last, use Never expire (both ways), or Renew under Authorized clients on the other machine. To change the access, forget the link first or untick Link both ways.",
+  "b83989521b0985a8": "Already linked",
+  "f38fe37557b20463": "{kept, plural, one {# machine was already linked and kept as it is.} other {# machines were already linked and kept as they are.}}"
 }

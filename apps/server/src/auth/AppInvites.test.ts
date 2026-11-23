@@ -64,6 +64,24 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AppInvites", (it
     }).pipe(Effect.provide(Layer.merge(layerAppInvites, TestClock.layer()))),
   );
 
+  it.effect(
+    "keeps only addresses a code can travel to safely, and rejects an invite with none",
+    () =>
+      Effect.gen(function* () {
+        const invites = yield* AppInvites.AppInvites;
+        const kept = yield* invites.create({
+          ...inviteInput("AAAA-BBBB-CCCC"),
+          urls: ["http://192.168.1.5:3773", "https://a.example.ts.net"],
+        });
+        expect(kept.urls).toEqual(["https://a.example.ts.net"]);
+        const rejected = yield* invites
+          .create({ ...inviteInput("DDDD-EEEE-FFFF"), urls: ["http://192.168.1.5:3773"] })
+          .pipe(Effect.flip);
+        expect(rejected._tag).toBe("AppInviteError");
+        expect((yield* invites.list).map((invite) => invite.id)).toEqual([kept.id]);
+      }).pipe(Effect.provide(Layer.merge(layerAppInvites, TestClock.layer()))),
+  );
+
   it.effect("leaves an invite whose code cannot be read pending, and hands out the rest", () =>
     Effect.gen(function* () {
       const invites = yield* AppInvites.AppInvites;

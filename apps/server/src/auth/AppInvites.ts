@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   MAX_APP_INVITE_TTL_MILLIS,
 } from "@t3tools/contracts";
+import { carriesCredentialsSafely } from "@t3tools/shared/hostClassification";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -115,8 +116,16 @@ const make = Effect.gen(function* () {
         DateTime.isLessThan(input.credentialExpiresAt, latest)
           ? input.credentialExpiresAt
           : latest;
+      // Pickup drops addresses that would send the code unencrypted; none left, nothing to keep.
+      const urls = input.urls.filter(carriesCredentialsSafely);
+      if (urls.length === 0) {
+        return yield* new AppInviteError({
+          operation: "create",
+          cause: "The invite has no address that is safe to use.",
+        });
+      }
       const id = yield* newId;
-      const urlsJson = yield* encodeUrls(input.urls);
+      const urlsJson = yield* encodeUrls(urls);
       const secretName = `app-invite-${id}`;
       // The new code is stored before the pending invite it replaces goes.
       yield* secrets.set(secretName, new TextEncoder().encode(input.credential));
@@ -146,7 +155,7 @@ const make = Effect.gen(function* () {
         id,
         environmentId: input.environmentId,
         label: input.label,
-        urls: input.urls,
+        urls,
         createdAt: now,
         expiresAt,
       } satisfies AuthAppInvite;

@@ -13037,5 +13037,7 @@
   "d041d0a04805b562": "Ya vinculado, se mantiene como está ({access})",
   "09994d5cd3ca333a": "Necesita una dirección https o de Tailscale",
   "eb1f9774d484c1d2": "No se pudieron leer los vínculos de {label}, así que su vínculo de vuelta aquí no se renovó.",
-  "0aca36439bb7b84c": "Ya está vinculado. «Vincular en ambos sentidos» mantiene los vínculos existentes como están. Para cambiar cuánto duran, usa «Nunca caduca (en ambos sentidos)» o «Renovar» en «Clientes autorizados» de la otra máquina. Para cambiar el acceso, olvida primero el vínculo o desmarca «Vincular en ambos sentidos»."
+  "0aca36439bb7b84c": "Ya está vinculado. «Vincular en ambos sentidos» mantiene los vínculos existentes como están. Para cambiar cuánto duran, usa «Nunca caduca (en ambos sentidos)» o «Renovar» en «Clientes autorizados» de la otra máquina. Para cambiar el acceso, olvida primero el vínculo o desmarca «Vincular en ambos sentidos».",
+  "b83989521b0985a8": "Ya vinculado",
+  "f38fe37557b20463": "{kept, plural, one {# equipo ya estaba vinculado y se dejó como estaba.} other {# equipos ya estaban vinculados y se dejaron como estaban.}}"
 }
