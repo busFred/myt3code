@@ -200,8 +200,8 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
   },
 );
 
-// No timeout here: an installer can outlive an interrupted wait, so the update keeps its lock
-// until the installer's own bounds settle it.
+// No timeout here: an in-app installer keeps the update's locks, even past a dropped request,
+// until its own bounds settle it.
 const runInAppUpdate = Effect.fn("ProviderMaintenanceRunner.runInAppUpdate")(function* (
   run: Effect.Effect<void, Error>,
 ) {

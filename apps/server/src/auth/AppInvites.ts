@@ -24,12 +24,16 @@ import * as ServerSecretStore from "./ServerSecretStore.ts";
 
 export class AppInviteError extends Schema.TaggedError<AppInviteError>()("AppInviteError", {
   operation: Schema.Literals(["create", "list", "revoke", "take"]),
+  /** The request itself was unusable, rather than the store failing. */
+  reason: Schema.optionalKey(Schema.Literals(["no_safe_address"])),
   cause: Schema.Defect(),
 }) {
   override get message(): string {
     return `Failed to ${this.operation} app invites.`;
   }
 }
+
+const isAppInviteError = Schema.is(AppInviteError);
 
 /**
  * Invites for this environment's own desktop app to connect to another environment, left by a
@@ -121,6 +125,7 @@ const make = Effect.gen(function* () {
       if (urls.length === 0) {
         return yield* new AppInviteError({
           operation: "create",
+          reason: "no_safe_address",
           cause: "The invite has no address that is safe to use.",
         });
       }
@@ -161,7 +166,9 @@ const make = Effect.gen(function* () {
       } satisfies AuthAppInvite;
     },
     exclusive,
-    Effect.mapError((cause) => new AppInviteError({ operation: "create", cause })),
+    Effect.mapError((cause) =>
+      isAppInviteError(cause) ? cause : new AppInviteError({ operation: "create", cause }),
+    ),
   );
 
   const list: AppInvites["Service"]["list"] = Effect.gen(function* () {

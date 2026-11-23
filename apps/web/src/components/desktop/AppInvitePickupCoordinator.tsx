@@ -82,7 +82,7 @@ export function AppInvitePickupCoordinator() {
         );
       },
       pair: async (input) => {
-        const result = await pairEnvironment(input);
+        const result = await pairEnvironment({ ...input, refuseRedirects: true });
         if (result._tag === "Success") return { ok: true };
         return { ok: false, error: squashAtomCommandFailure(result) };
       },

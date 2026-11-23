@@ -51,6 +51,8 @@ export interface PairingConnectionInput {
   readonly host?: string;
   readonly pairingCode?: string;
   readonly expectedEnvironmentId?: EnvironmentId;
+  /** Sends the one-time code only to the checked address, never on to where it redirects. */
+  readonly refuseRedirects?: boolean;
 }
 
 export interface SshConnectionInput {
@@ -165,6 +167,7 @@ export const preparePairingRegistration = Effect.fn(
   // A key-bound session renews itself, but only on a host that can renew it. The proof is made
   // before the one-time code is sent, so a device that cannot sign keeps the code for bearer.
   const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
+  const requestInit = input.refuseRedirects ? { requestInit: { redirect: "error" as const } } : {};
   const dpopProof =
     descriptor.capabilities.accessTokenRenewal === true && Option.isSome(signer)
       ? yield* signer.value
@@ -180,6 +183,7 @@ export const preparePairingRegistration = Effect.fn(
       credential: target.credential,
       clientMetadata: presentation.metadata,
       dpopProof: dpopProof.value,
+      ...requestInit,
     }).pipe(Effect.mapError(mapRemoteEnvironmentError));
     return new BearerConnectionRegistration({
       ...route,
@@ -193,6 +197,7 @@ export const preparePairingRegistration = Effect.fn(
     httpBaseUrl: target.httpBaseUrl,
     credential: target.credential,
     clientMetadata: presentation.metadata,
+    ...requestInit,
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
 
   return new BearerConnectionRegistration({

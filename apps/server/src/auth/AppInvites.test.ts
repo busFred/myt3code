@@ -77,7 +77,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AppInvites", (it
         const rejected = yield* invites
           .create({ ...inviteInput("DDDD-EEEE-FFFF"), urls: ["http://192.168.1.5:3773"] })
           .pipe(Effect.flip);
-        expect(rejected._tag).toBe("AppInviteError");
+        expect(rejected).toMatchObject({ _tag: "AppInviteError", reason: "no_safe_address" });
         expect((yield* invites.list).map((invite) => invite.id)).toEqual([kept.id]);
       }).pipe(Effect.provide(Layer.merge(layerAppInvites, TestClock.layer()))),
   );
@@ -283,6 +283,13 @@ it.live("guards invites and links by access, and lets only the desktop app take 
             post("/api/app-invites", accessOnly.token, inviteInput("SECRET-CODE")),
           );
           expect(narrower.status).toBe(403);
+          const plainHttpOnly = yield* send(
+            post("/api/app-invites", standard.token, {
+              ...inviteInput("SECRET-CODE"),
+              urls: ["http://192.168.1.5:3773"],
+            }),
+          );
+          expect(plainHttpOnly.status).toBe(400);
           const created = yield* send(
             post("/api/app-invites", standard.token, inviteInput("SECRET-CODE")),
           );
