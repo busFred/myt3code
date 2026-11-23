@@ -31,6 +31,11 @@ import { HttpClient } from "effect/http";
 import * as AcpErrors from "effect-acp/errors";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+import {
+  enrichProviderSnapshotWithVersionAdvisory,
+  makeCachedProviderMaintenanceResolution,
+} from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   isAntigravityTextGenerationAvailable,
   makeAntigravityTextGeneration,
@@ -38,6 +43,7 @@ import {
 import { makeAntigravityAuth, type AntigravityAuth } from "../AntigravityAuth.ts";
 import * as AntigravityInstallation from "../AntigravityInstallation.ts";
 import { brokenRuntimeError } from "../providerCompatibility.ts";
+import { makeAntigravityMaintenanceCapabilities } from "./AntigravityMaintenance.ts";
 import * as AntigravityUsage from "./AntigravityUsage.ts";
 import {
   antigravityAuthConfigIssue,
@@ -120,7 +126,8 @@ export type AntigravityDriverEnv =
   | McpProviderSessions.McpProviderSessions
   | ModelCatalog.ModelCatalog
   | Path.Path
-  | ProviderEventLoggers.ProviderEventLoggers;
+  | ProviderEventLoggers.ProviderEventLoggers
+  | ProviderLatestVersions.ProviderLatestVersions;
 
 export const AntigravityDriver: ProviderDriver<
   AntigravitySettings,
@@ -219,9 +226,44 @@ export const AntigravityDriver: ProviderDriver<
       accentColor,
       continuationGroupKey: continuationIdentity.continuationKey,
     });
+    const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
+    const platform = yield* HostProcess.Platform;
+    const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+      installation.resolve(settings.binaryPath, processEnvironment).pipe(
+        Effect.flatMap((executable) =>
+          fileSystem.realPath(executable.executablePath).pipe(
+            Effect.orElseSucceed(() => executable.executablePath),
+            Effect.map((realPath) => ({ ...executable, realPath })),
+          ),
+        ),
+        Effect.orElseSucceed(() => null),
+        Effect.map((executable) =>
+          makeAntigravityMaintenanceCapabilities({
+            executable,
+            platform,
+            env: processEnvironment,
+            update: installation.update,
+            latestVersion: installation.latestVersion,
+          }),
+        ),
+      ),
+    );
     const classifyModels = (draft: ServerProviderDraft) =>
-      currentCatalog.pipe(
-        Effect.map((catalog) => stampIdentity(ModelCatalog.applyModelCatalog(draft, catalog))),
+      Effect.all([
+        currentCatalog,
+        host.settings.get.pipe(Effect.orDie),
+        // Only a running, versioned install has an update to offer; creation must not resolve one.
+        draft.enabled && draft.installed && draft.version ? resolveMaintenance() : Effect.undefined,
+      ]).pipe(
+        Effect.flatMap(([catalog, hostSettings, capabilities]) =>
+          enrichProviderSnapshotWithVersionAdvisory(
+            stampIdentity(ModelCatalog.applyModelCatalog(draft, catalog)),
+            capabilities,
+            { enableProviderUpdateChecks: hostSettings.enableProviderUpdateChecks },
+          ),
+        ),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+        Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
       );
 
     const prepareSpawn = Effect.fn("AntigravityDriver.prepareSpawn")(function* (
@@ -588,6 +630,7 @@ export const AntigravityDriver: ProviderDriver<
     const provider = yield* makeAntigravityProvider(settings, {
       environment: processEnvironment,
       stampIdentity: classifyModels,
+      resolveMaintenance,
       probe,
       probeUsage: usage.probe,
       clearUsage: usage.clear,

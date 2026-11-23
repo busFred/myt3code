@@ -157,6 +157,8 @@ export function getProviderVersionAdvisoryPresentation(
   const latestIsIncompatible =
     compatibility?.latestVersionStatus === "broken" ||
     compatibility?.latestVersionStatus === "unsupported";
+  // An in-app update has nothing to copy into a terminal.
+  const manualCommand = advisory?.updateRunsInApp ? null : (advisory?.updateCommand ?? null);
   if (
     showCompatibility &&
     compatibility &&
@@ -176,9 +178,7 @@ export function getProviderVersionAdvisoryPresentation(
           ? resolve(msg("Use {version} for full support.", { version: recommendation }))
           : resolve(msg("Update for full support."))),
       updateCommand:
-        targetVersion || latestIsIncompatible || isAlreadyLatest
-          ? null
-          : (advisory?.updateCommand ?? null),
+        targetVersion || latestIsIncompatible || isAlreadyLatest ? null : manualCommand,
       emphasis: compatibility.status === "graceful" ? "normal" : "strong",
       targetVersion,
     };
@@ -202,7 +202,7 @@ export function getProviderVersionAdvisoryPresentation(
       (versionLabel
         ? resolve(msg("Update available: install {version}.", { version: versionLabel }))
         : resolve(msg("Update available: install the latest provider version."))),
-    updateCommand: advisory.updateCommand,
+    updateCommand: manualCommand,
     emphasis: "normal" as const,
     targetVersion: null,
   };

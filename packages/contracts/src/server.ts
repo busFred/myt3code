@@ -203,6 +203,8 @@ export const ServerProviderVersionAdvisory = Schema.Struct({
   updateCommand: Schema.NullOr(TrimmedNonEmptyString),
   canUpdate: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   canInstallVersion: Schema.optionalKey(Schema.Boolean),
+  /** The server installs the update itself, so `updateCommand` names it but is not a shell command. */
+  updateRunsInApp: Schema.optionalKey(Schema.Boolean),
   checkedAt: Schema.NullOr(IsoDateTime),
   message: Schema.NullOr(TrimmedNonEmptyString),
 });

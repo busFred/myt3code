@@ -31,10 +31,8 @@ import {
   DeferringFailedCheck,
   makeManagedServerProvider,
 } from "@t3tools/provider-core/server/managedProvider";
-import {
-  makeManualOnlyProviderMaintenanceCapabilities,
-  type ProviderMaintenanceCapabilities,
-} from "@t3tools/provider-core/server/maintenanceResolver";
+import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
+import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
 import {
   buildServerProvider,
   isCommandMissingCause,
@@ -166,7 +164,7 @@ interface AntigravityProviderOptions {
   readonly supportsTextGeneration: Effect.Effect<boolean>;
   readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
   readonly clearUsage?: Effect.Effect<void>;
-  readonly maintenanceCapabilities?: ProviderMaintenanceCapabilities;
+  readonly resolveMaintenance?: ManagedServerProvider["resolveMaintenance"];
   readonly auth?: { readonly type: string; readonly label: string };
   /** Modes the last session advertised, saved because initialize alone does not report them. */
   readonly rememberedRuntimeModes?: ReadonlyArray<RuntimeMode>;
@@ -376,14 +374,12 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     return yield* options.stampIdentity(next.draft);
   });
 
-  const maintenanceCapabilities =
-    options.maintenanceCapabilities ??
-    makeManualOnlyProviderMaintenanceCapabilities({
-      provider: ProviderDriverKind.make("antigravity"),
-      packageName: null,
-    });
+  const manualMaintenance = makeManualOnlyProviderMaintenanceCapabilities({
+    provider: ProviderDriverKind.make("antigravity"),
+    packageName: null,
+  });
   const managed = yield* makeManagedServerProvider({
-    resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+    resolveMaintenance: options.resolveMaintenance ?? (() => Effect.succeed(manualMaintenance)),
     getSettings: Effect.succeed(settings),
     streamSettings: Stream.empty,
     haveSettingsChanged: () => false,

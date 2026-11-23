@@ -53,7 +53,10 @@ but keeps package installs. To use an existing local binary, set **Executable ov
 
 T3 Code checks the Registry for new versions in the background and installs them for T3-managed
 agents on the next provider check; a check is skipped while that agent is starting a session.
-Refreshing providers in Settings checks the Registry right away.
+Refreshing providers in Settings checks the Registry right away. An **Executable override** or
+local command stays with whatever installed it; GitHub Copilot CLI installed with npm, pnpm, Bun,
+or Vite+ shows its updates in **Settings → Providers**, and **Update now** or **Update all**
+updates it through that package manager.
 
 ## Signing in
 

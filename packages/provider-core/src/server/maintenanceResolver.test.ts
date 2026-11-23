@@ -623,7 +623,7 @@ it.layer(
   });
 
   it("offers the update when an owned install is behind", () => {
-    expect(
+    const advisory = (run?: Effect.Effect<void, Error>) =>
       createProviderVersionAdvisory({
         driver: driver("packageTool"),
         currentVersion: "2.1.110",
@@ -634,13 +634,16 @@ it.layer(
           updateExecutable: "npm",
           updateArgs: ["install", "-g", "@example/package-tool@latest"],
           updateLockKey: "npm-global:/usr/local",
+          ...(run ? { run } : {}),
         }),
-      }),
-    ).toMatchObject({
+      });
+    expect(advisory()).toMatchObject({
       status: "behind_latest",
       canUpdate: true,
       message: "Install the update now or review provider settings.",
     });
+    expect(advisory()).not.toHaveProperty("updateRunsInApp");
+    expect(advisory(Effect.void)).toMatchObject({ canUpdate: true, updateRunsInApp: true });
   });
 
   it("shows the Chocolatey upgrade command without offering to run it", () => {

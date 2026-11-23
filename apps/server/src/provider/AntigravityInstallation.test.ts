@@ -351,7 +351,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
             platform: "linux",
             previous: true,
           });
-          yield* installation.start;
+          const failure = yield* installation.update.pipe(Effect.flip);
+          expect(failure.operation).toBe("update");
           expect((yield* terminalState(installation)).phase).toBe("failed");
           expect(validations).toEqual([]);
           yield* expectPreviousRelease(installation);
@@ -376,13 +377,15 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
             Stream.runHead,
           );
           yield* installation.state;
+          expect(yield* installation.latestVersion).toBe("1.5.7");
           expect(requests).toHaveLength(1);
         } else {
           yield* installation.changes.pipe(Stream.runHead);
+          expect(yield* installation.latestVersion).toBeNull();
           expect(requests).toEqual([]);
         }
-        yield* installation.start;
-        expect((yield* terminalState(installation)).phase).toBe("succeeded");
+        yield* installation.update;
+        expect((yield* installation.state).phase).toBe("succeeded");
       }),
   );
 

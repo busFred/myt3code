@@ -200,6 +200,28 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
   },
 );
 
+const runInAppUpdate = Effect.fn("ProviderMaintenanceRunner.runInAppUpdate")(function* (
+  run: Effect.Effect<void, Error>,
+) {
+  const result = { stdout: "", stdoutTruncated: false, stderrTruncated: false };
+  return yield* run.pipe(
+    Effect.timeoutOption(Duration.millis(UPDATE_TIMEOUT_MS)),
+    Effect.map((completed): ProviderMaintenanceCommandResult =>
+      Option.isSome(completed)
+        ? { ...result, stderr: "", exitCode: 0, timedOut: false }
+        : { ...result, stderr: "", exitCode: null, timedOut: true },
+    ),
+    Effect.catch((error) =>
+      Effect.succeed<ProviderMaintenanceCommandResult>({
+        ...result,
+        stderr: truncateText(error.message, UPDATE_OUTPUT_MAX_BYTES),
+        exitCode: 1,
+        timedOut: false,
+      }),
+    ),
+  );
+});
+
 export function splitOutputLines(
   partialLine: string,
   text: string,
@@ -222,6 +244,7 @@ export function toProgressLine(line: string): string | null {
 }
 
 function describeCommand(command: ProviderMaintenanceCommandAction): string {
+  if (command.run) return command.command;
   const executable = command.executable.split(/[\\/]/).pop() || command.executable;
   return [executable, ...command.args].join(" ");
 }
@@ -305,13 +328,15 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
     update: ProviderMaintenanceCommandAction,
     onProgress: (line: string) => Effect.Effect<void>,
   ) =>
-    runProviderMaintenanceCommandWithSpawner({
-      spawner,
-      command: update.executable,
-      args: update.args,
-      onProgress,
-      ...(update.env ? { env: update.env } : {}),
-    });
+    update.run
+      ? runInAppUpdate(update.run)
+      : runProviderMaintenanceCommandWithSpawner({
+          spawner,
+          command: update.executable,
+          args: update.args,
+          onProgress,
+          ...(update.env ? { env: update.env } : {}),
+        });
   // Instances with other homes or accounts can still run the binary this update replaces. The
   // lock key names the package manager location, so other drivers there keep their own package.
   const instancesSharingInstallation = Effect.fn(

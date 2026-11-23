@@ -24,6 +24,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
@@ -45,7 +46,14 @@ import {
   providerModelsFromSettings,
   providerProbeEnvironment,
 } from "@t3tools/provider-core/server/snapshotProbe";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
+import {
+  enrichProviderSnapshotWithVersionAdvisory,
+  makeCachedProviderMaintenanceResolution,
+  makeManualOnlyProviderMaintenanceCapabilities,
+  makePackageManagedProviderMaintenanceResolver,
+  resolveProviderMaintenanceCapabilitiesEffect,
+} from "@t3tools/provider-core/server/maintenanceResolver";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -148,6 +156,13 @@ const EMPTY_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
   provider: DRIVER_KIND,
   packageName: null,
+});
+// A Copilot CLI the user installed belongs to its package manager. Whether the standalone
+// binary's `copilot update` runs unattended is unverified, so that install stays manual.
+const COPILOT_PACKAGE_MAINTENANCE = makePackageManagedProviderMaintenanceResolver({
+  provider: DRIVER_KIND,
+  npmPackageName: "@github/copilot",
+  nativeUpdate: null,
 });
 
 function modelsFromDiscovery(
@@ -616,8 +631,10 @@ export type AcpRegistryDriverEnv =
   | AcpRegistryAdapterV2DriverEnv
   | Digest.Digest
   | FileSystem.FileSystem
+  | HttpClient.HttpClient
   | Path.Path
-  | ProviderHost.ProviderHost;
+  | ProviderHost.ProviderHost
+  | ProviderLatestVersions.ProviderLatestVersions;
 
 export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryDriverEnv> = {
   driverKind: DRIVER_KIND,
@@ -657,6 +674,8 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     const path = yield* Path.Path;
     const hostEnvironment = yield* HostProcess.Environment;
     const host = yield* ProviderHost.ProviderHost;
+    const httpClient = yield* HttpClient.HttpClient;
+    const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: DRIVER_KIND,
       instanceId,
@@ -703,6 +722,33 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         environment,
         processEnvironment,
       });
+    const resolveMaintenance = isCopilotAcpRegistrySettings(effectiveConfig)
+      ? yield* makeCachedProviderMaintenanceResolution(
+          resolveProviderMaintenanceCapabilitiesEffect(COPILOT_PACKAGE_MAINTENANCE, {
+            binaryPath: effectiveConfig.commandPath,
+            env: processEnvironment,
+          }).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          ),
+        )
+      : () => Effect.succeed(MAINTENANCE);
+    const withVersionAdvisory = (provider: ServerProvider) =>
+      Effect.all([
+        host.settings.get.pipe(Effect.orDie),
+        provider.enabled && provider.installed && provider.version
+          ? resolveMaintenance()
+          : Effect.undefined,
+      ]).pipe(
+        Effect.flatMap(([settings, capabilities]) =>
+          enrichProviderSnapshotWithVersionAdvisory(provider, capabilities, {
+            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+          }),
+        ),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+        Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
+      );
     // Refreshes rebuild the snapshot from the probe, so per-model options
     // reported by sessions and probe discovery are kept here and on disk.
     const learnedModelOptions = yield* makeAcpRegistryLearnedModelOptionsStore({
@@ -742,13 +788,14 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         yield* Ref.set(lastAcceptedCatalog, null);
       }
       if (input.installed) yield* learnedModelOptions.setVersion(input.version);
-      const provider =
+      const provider = yield* withVersionAdvisory(
         input.enabled &&
-        input.installed &&
-        input.auth.status === "unknown" &&
-        (yield* confirmedAuthentication.get)
+          input.installed &&
+          input.auth.status === "unknown" &&
+          (yield* confirmedAuthentication.get)
           ? { ...input, auth: { ...input.auth, status: "authenticated" as const } }
-          : input;
+          : input,
+      );
       const withAcceptedFallback = Effect.fnUntraced(function* (candidate: ServerProvider) {
         const learned = yield* learnedModelOptions.get;
         const accepted = yield* Ref.get(lastAcceptedCatalog);
@@ -1010,7 +1057,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     const snapshot = yield* makeManagedServerProvider<
       ProviderSnapshotSettings<AcpRegistrySettings>
     >({
-      resolveMaintenance: () => Effect.succeed(MAINTENANCE),
+      resolveMaintenance,
       getSettings: snapshotSettings.getSettings,
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,

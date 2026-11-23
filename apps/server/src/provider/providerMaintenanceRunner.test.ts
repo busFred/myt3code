@@ -43,6 +43,9 @@ import {
   type ProviderMaintenanceCapabilities,
 } from "@t3tools/provider-core/server/maintenanceResolver";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
+class InAppUpdateError extends Schema.TaggedError<InAppUpdateError>()("InAppUpdateError", {
+  message: Schema.String,
+}) {}
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const NATIVE_CLI_DRIVER = ProviderDriverKind.make("nativeCli");
@@ -734,6 +737,62 @@ describe("providerMaintenanceRunner", () => {
       ),
     );
   });
+
+  it.effect("runs an in-app update instead of spawning, and records its failure", () =>
+    Effect.forEach(
+      [
+        { run: Effect.void, status: "succeeded", message: "Provider updated." },
+        {
+          run: Effect.fail(
+            new InAppUpdateError({ message: "Could not reach the release server." }),
+          ),
+          status: "failed",
+          message: "Update command exited with code 1: Could not reach the release server.",
+        },
+      ] as const,
+      ({ run, status, message }) =>
+        Effect.gen(function* () {
+          const { registry, updateStatesRef } = yield* makeRegistry(baseNativeCliProvider);
+          let runs = 0;
+          const updater = yield* makeTestRunner({
+            ...registry,
+            getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+              Effect.succeed(
+                makeProviderMaintenanceCapabilities({
+                  provider,
+                  packageName: null,
+                  updateExecutable: "agent",
+                  updateArgs: [],
+                  updateLockKey: "agent:managed",
+                  updateCommand: "Install the latest agent with T3 Code",
+                  run: Effect.suspend(() => {
+                    runs += 1;
+                    return run;
+                  }),
+                }),
+              ),
+          });
+          const result = yield* updater.updateProvider(NATIVE_CLI_DRIVER);
+          assert.strictEqual(runs, 1);
+          assert.strictEqual(result.providers[0]?.updateState?.status, status);
+          assert.strictEqual(result.providers[0]?.updateState?.message, message);
+          assert.include(
+            (yield* Ref.get(updateStatesRef)).map((state) => state.message),
+            "Running Install the latest agent with T3 Code",
+          );
+        }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          layerNonWindowsPlatform,
+          layerLatestVersionHttpClient("1.0.0"),
+          layerMockSpawner(() => {
+            throw new Error("an in-app update must not spawn a process");
+          }),
+        ),
+      ),
+    ),
+  );
 
   it.effect("records command failure output in provider update state", () =>
     Effect.gen(function* () {

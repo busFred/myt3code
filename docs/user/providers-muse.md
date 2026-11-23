@@ -61,7 +61,8 @@ context. Conversation rewind is unavailable.
 
 Install Muse and sign in on the host; in-app installation and sign-in are not
 available. Updates can run from **Settings → Providers** when T3 Code recognizes
-the Muse launcher; otherwise update Muse on that host manually.
+Meta's launcher (`muse` from the macOS and Linux installer, or `muse.cmd` from the
+Windows installer) or a mise install; otherwise update Muse on that host manually.
 
 To stop using Muse in an environment, disable it in **Settings → Providers**.
 This keeps the host's Muse login, thread history, and workspace files.

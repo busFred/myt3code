@@ -100,18 +100,70 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
         lockKey: `muse:${binaryPath}`,
         env: {
           MUSE_CHANNEL: "muse-canary",
+          MUSE_LOGIN: "0",
           MUSE_NO_AUTO_UPDATE: "0",
           MUSE_SYNC_UPDATE: "1",
           MUSE_UPDATE_INTERVAL_SECONDS: "0",
         },
       });
       expect(result.update?.command).toBe(
-        `MUSE_CHANNEL=muse-canary MUSE_NO_AUTO_UPDATE=0 MUSE_SYNC_UPDATE=1 MUSE_UPDATE_INTERVAL_SECONDS=0 '${binaryPath}' --version`,
+        `MUSE_CHANNEL=muse-canary MUSE_LOGIN=0 MUSE_NO_AUTO_UPDATE=0 MUSE_SYNC_UPDATE=1 MUSE_UPDATE_INTERVAL_SECONDS=0 '${binaryPath}' --version`,
       );
       expect(result.compareVersions).toBe(compareMuseVersions);
       yield* fs.writeFileString(binaryPath, "standalone binary");
       expect((yield* museMaintenance.resolve(context)).update).toBeNull();
       expect((yield* museMaintenance.resolve(null)).update).toBeNull();
+    }),
+  );
+
+  // Meta's Windows installer writes `muse.cmd`, which runs `.muse-launcher.ps1` beside it.
+  it.effect("updates the Windows launcher through its cmd shim", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "muse-maintenance-" });
+      const shim = `${directory}/muse.cmd`;
+      const context = {
+        binaryPath: "muse",
+        resolvedCommandPath: shim,
+        realCommandPath: shim,
+        platform: "win32" as const,
+        env: {},
+      };
+      yield* fs.writeFileString(
+        shim,
+        '@echo off\r\n"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0.muse-launcher.ps1" %*\r\n',
+      );
+      const launcherSource =
+        '$user_agent = "muse-code/launcher-ps-$launcher_version"\n$env:MUSE_SYNC_UPDATE\n';
+      for (const [launcher, updates] of [
+        [launcherSource, true],
+        ["# muse-code/launcher-4 MUSE_SYNC_UPDATE", false],
+        ["unrelated script", false],
+      ] as const) {
+        yield* fs.writeFileString(`${directory}/.muse-launcher.ps1`, launcher);
+        const result = yield* museMaintenance.resolve(context);
+        expect(result.update !== null, launcher).toBe(updates);
+      }
+      yield* fs.writeFileString(`${directory}/.muse-launcher.ps1`, launcherSource);
+      const result = yield* museMaintenance.resolve(context);
+      expect(result.update).toMatchObject({
+        executable: shim,
+        args: ["--version"],
+        lockKey: `muse:${shim}`,
+        env: { MUSE_LOGIN: "0", MUSE_NO_AUTO_UPDATE: "0", MUSE_SYNC_UPDATE: "1" },
+      });
+      expect(result.update?.command).toBe(
+        `$env:MUSE_LOGIN='0'; $env:MUSE_NO_AUTO_UPDATE='0'; $env:MUSE_SYNC_UPDATE='1'; $env:MUSE_UPDATE_INTERVAL_SECONDS='0'; & '${shim}' --version`,
+      );
+      // The bash launcher is not how Windows runs Muse, and a bare binary has no updater.
+      expect((yield* museMaintenance.resolve({ ...context, platform: "linux" })).update).toBeNull();
+      expect(
+        (yield* museMaintenance.resolve({
+          ...context,
+          resolvedCommandPath: `${directory}/muse.exe`,
+          realCommandPath: `${directory}/muse.exe`,
+        })).update,
+      ).toBeNull();
     }),
   );
 });

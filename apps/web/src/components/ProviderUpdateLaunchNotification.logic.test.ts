@@ -12,6 +12,7 @@ import {
   canOneClickUpdateProviderCandidate,
   getProviderUpdateRunToastView,
   getProviderUpdateSidebarPillView,
+  collectProviderUpdateCandidates,
   hasOneClickUpdateProviderCandidate,
   isProviderUpdateCandidate,
   isProviderSettingsUpdateCandidate,
@@ -128,6 +129,25 @@ describe("provider update launch notification logic", () => {
         }),
       ]),
     ).toBe(true);
+  });
+
+  it("updates each outdated ACP Registry agent on its own", () => {
+    const copilot = updateCandidate({
+      driver: driver("acpRegistry"),
+      instanceId: instanceId("acpRegistry_github_copilot"),
+      latestVersion: "1.0.120",
+      updateCommand: "copilot registry install 1.0.120",
+    });
+    const other = updateCandidate({
+      driver: driver("acpRegistry"),
+      instanceId: instanceId("acpRegistry_other_agent"),
+      latestVersion: "2.0.0",
+      updateCommand: "other registry install 2.0.0",
+    });
+
+    expect(collectProviderUpdateCandidates([copilot, other])).toHaveLength(2);
+    expect(hasOneClickUpdateProviderCandidate(copilot, [copilot, other])).toBe(true);
+    expect(hasOneClickUpdateProviderCandidate(other, [copilot, other])).toBe(true);
   });
 
   it("keeps the inline update action available while a provider update is already running", () => {

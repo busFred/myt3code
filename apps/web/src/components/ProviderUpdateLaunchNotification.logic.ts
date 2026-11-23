@@ -70,17 +70,22 @@ function chooseRepresentativeProvider(
   return candidate.checkedAt.localeCompare(current.checkedAt) >= 0 ? candidate : current;
 }
 
+// Each ACP Registry instance is a different agent with its own install, so it updates on its own.
+const updateGroupKey = (provider: Pick<ServerProvider, "driver" | "instanceId">): string =>
+  provider.driver === "acpRegistry" ? `${provider.driver}:${provider.instanceId}` : provider.driver;
+
 function dedupeProvidersByDriver<T extends ServerProvider>(providers: ReadonlyArray<T>): T[] {
-  const latestProviderByDriver = new Map<ProviderDriverKind, T>();
+  const latestProviderByGroup = new Map<string, T>();
 
   for (const provider of providers) {
-    latestProviderByDriver.set(
-      provider.driver,
-      chooseRepresentativeProvider(latestProviderByDriver.get(provider.driver), provider) as T,
+    const key = updateGroupKey(provider);
+    latestProviderByGroup.set(
+      key,
+      chooseRepresentativeProvider(latestProviderByGroup.get(key), provider) as T,
     );
   }
 
-  return [...latestProviderByDriver.values()];
+  return [...latestProviderByGroup.values()];
 }
 
 function getProviderUpdatedTitle(
@@ -179,7 +184,9 @@ export function hasOneClickUpdateProviderCandidate(
     return false;
   }
 
-  const driverProviders = providers.filter((provider) => provider.driver === candidate.driver);
+  const driverProviders = providers.filter(
+    (provider) => updateGroupKey(provider) === updateGroupKey(candidate),
+  );
   if (driverProviders.length === 0) {
     return false;
   }
