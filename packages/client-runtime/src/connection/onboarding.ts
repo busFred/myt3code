@@ -129,8 +129,11 @@ export const preparePairingRegistration = Effect.fn(
 )(function* (input: PairingConnectionInput) {
   const target = yield* resolvePairingTarget(input);
   const presentation = yield* ClientCapabilities.ClientPresentation;
+  const requestInit = input.refuseRedirects ? { requestInit: { redirect: "error" as const } } : {};
+  // The identity check must read the same origin the code is sent to.
   const descriptor = yield* fetchRemoteEnvironmentDescriptor({
     httpBaseUrl: target.httpBaseUrl,
+    ...requestInit,
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
   // Checked before redeeming the one-time code, so a wrong link is not spent.
   if (
@@ -167,7 +170,6 @@ export const preparePairingRegistration = Effect.fn(
   // A key-bound session renews itself, but only on a host that can renew it. The proof is made
   // before the one-time code is sent, so a device that cannot sign keeps the code for bearer.
   const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
-  const requestInit = input.refuseRedirects ? { requestInit: { redirect: "error" as const } } : {};
   const dpopProof =
     descriptor.capabilities.accessTokenRenewal === true && Option.isSome(signer)
       ? yield* signer.value

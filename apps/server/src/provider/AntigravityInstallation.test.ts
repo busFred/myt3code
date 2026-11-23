@@ -453,6 +453,91 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
     }),
   );
 
+  it.effect("keeps an update interrupted while it starts waiting until its installation ends", () =>
+    Effect.gen(function* () {
+      const starting = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const validating = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let holdManifest = false;
+      const { installation } = yield* makeHarness({
+        archive: Buffer.from(serverContents),
+        platform: "win32",
+        // The first read after arming happens inside `begin`, where the interrupt is deferred.
+        manifest: Effect.suspend(() => {
+          if (!holdManifest) return Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST);
+          holdManifest = false;
+          return Deferred.succeed(starting, undefined).pipe(
+            Effect.andThen(Deferred.await(resume)),
+            Effect.as(ModelManifest.BUNDLED_MODEL_MANIFEST),
+          );
+        }),
+        validate: () =>
+          Deferred.succeed(validating, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      });
+      holdManifest = true;
+      const update = yield* installation.update.pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Deferred.await(starting);
+      const interrupted = yield* Fiber.interrupt(update).pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(resume, undefined);
+      yield* Deferred.await(validating);
+      expect(update.pollUnsafe()).toBeUndefined();
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(interrupted);
+      expect((yield* installation.state).phase).toBe("succeeded");
+    }),
+  );
+
+  it.effect("fails an installation whose archive extraction hangs", () =>
+    Effect.gen(function* () {
+      const extracting = yield* Deferred.make<void>();
+      const output = (stdout: string) =>
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.encodeText(Stream.make(stdout)),
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        });
+      const spawner = ChildProcessSpawner.make((command) => {
+        if (!ChildProcess.isStandardCommand(command)) return Effect.die("unexpected command");
+        if (command.args.includes("-tzf")) return Effect.succeed(output("antigravity\n"));
+        if (command.args.includes("-tvzf"))
+          return Effect.succeed(output("-rwxr-xr-x 0/0 20 2026-01-01 00:00 antigravity\n"));
+        return Deferred.succeed(extracting, undefined).pipe(
+          Effect.as(
+            ChildProcessSpawner.makeHandle({
+              ...output(""),
+              exitCode: Effect.never,
+              isRunning: Effect.succeed(true),
+              stdout: Stream.never,
+            }),
+          ),
+        );
+      });
+      const { installation, validations } = yield* makeHarness({
+        archive: cliTarball,
+        platform: "linux",
+        spawner,
+      });
+      yield* installation.start;
+      yield* Deferred.await(extracting);
+      yield* TestClock.adjust("10 minutes");
+      const state = yield* terminalState(installation);
+      expect(state.phase).toBe("failed");
+      expect(state.message).toMatch(/timed out/u);
+      expect(validations).toEqual([]);
+    }),
+  );
+
   it.effect("keeps withdrawn native releases from activating or launching", () =>
     Effect.gen(function* () {
       let withdrawn = false;
