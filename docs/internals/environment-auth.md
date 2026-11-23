@@ -38,10 +38,11 @@ CLI and desktop sessions never renew, so unlinking Connect or rotating
 their credential still cuts a device off.
 
 A [peer link](remote.md#peer-links)'s session renews on use instead: its
-bearer token is never reissued. Authenticating a call from it moves the
-row 30 days out, at most once a day so a busy link does not write on every
+bearer token is never reissued. Authenticating a call from it moves the row
+out by the link's window (below; 30 days by default), at most once a day, or
+once per thirtieth of a shorter window, so a busy link does not write on every
 call. Only an unexpired, unrevoked row moves, so an idle link still ends after
-30 days and a revoke is final. Other MCP clients keep the fixed 30 days they
+its window and a revoke is final. Other MCP clients keep the fixed 30 days they
 were issued.
 
 ### The session row holds the deadline
@@ -49,18 +50,23 @@ were issued.
 Verification takes a session's expiry from its row, not from the token's
 `exp`. The two are equal at issue, so this changes nothing until something
 moves the row: peer-link use, a renewing device, or `renew` (`t3 auth session
-renew`, `POST /api/auth/clients/renew`, `access:write` like revoke). Only a
+renew`, `POST /api/auth/clients/renew`, `access:write` like revoke). Making a
+session last longer over HTTP also needs every scope it holds, so access
+management cannot stretch a stronger session; shortening needs only
+`access:write`. A client renewing a peer link passes `expectedSubject`, so a
+session id a linking side misreports cannot renew another kind of session. Only a
 renewing device's token (`rnw`) is also bound by its own short `exp`. WebSocket
-tickets already checked the row, and a live socket's watcher wakes on any
-change to its session, so a renew that shortens a session closes its sockets
-on time. Renew refuses T3 Connect and desktop app sessions, whose short fixed
+tickets already checked the row, and a live socket's or media stream's watcher
+wakes on any change to its session, so a renew that shortens a session closes
+them on time. Renew refuses T3 Connect and desktop app sessions, whose short fixed
 lifetimes are what make unlinking Connect or rotating the desktop secret cut
 them off.
 
 A pairing link can carry a lifetime for the session it creates: a duration or
 never. It applies to browser, bearer, renewing-device and peer-link sessions,
-never to T3 Connect or the desktop app. For a renewing device the lifetime is
-its window, stored on the row, so renewals keep sliding by it. Never is a fixed
+never to T3 Connect or the desktop app. The lifetime is stored on the row as
+the session's window, and `renew` replaces it, so a renewing device or a peer
+link keeps sliding by the lifetime it was last given. Never is a fixed
 far-future expiry (`NEVER_EXPIRES_AT_MILLIS`, 9999-12-31), not a null, so every
 `expiresAt` field, token claim and `expires_at > now` query keeps working;
 `isNeverExpiring` tests a threshold because a linking side derives its copy
@@ -80,8 +86,14 @@ machine's own desktop app to connect to the other
 ([AppInvites](../../apps/server/src/auth/AppInvites.ts)). The invite holds a
 one-time pairing code from the other environment, so the code lives in the
 secret store like a peer link's token, and the access stream lists invites
-without it. Only a desktop-bootstrap session can take invites, each once; a
-newer invite for the same environment replaces the pending one. Invite changes
+without it. The code is a standard one, so only a full-access link leaves an
+invite; anything narrower would hand the app more than the link allows. The
+invite and its code last at most a day. Only a desktop-bootstrap session can
+take invites, each once, and the app asks only when the access snapshot lists
+some, or once at launch from a server whose snapshot has no invite list. A
+newer invite for the same environment replaces the pending one. The invite
+keeps its code's pairing link id, so a client that revokes or replaces it
+revokes the code on the other side too when it holds a session there. Invite changes
 reach the access stream as a fresh snapshot, because older clients cannot
 decode a new event type.
 

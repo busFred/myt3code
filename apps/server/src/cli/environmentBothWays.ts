@@ -8,7 +8,7 @@ import {
   AuthStandardClientScopes,
   AuthTokenExchangeGrantType,
   EnvironmentHttpApi,
-  MAX_PAIRING_LINK_TTL_MILLIS,
+  MAX_APP_INVITE_TTL_MILLIS,
   mcpClientScopes,
 } from "@t3tools/contracts";
 import {
@@ -134,8 +134,9 @@ const describeFailure = (error: unknown): string =>
 
 /**
  * Links this environment and the one at `url` in both directions, turns on Linked environments
- * on each side where it is off, and leaves the other side's desktop app an invite to connect
- * here. The pairing code is spent once for a short session there that must manage access.
+ * on each side where it is off, and with full access leaves the other side's desktop app an
+ * invite to connect here. The pairing code is spent once for a short session there that must
+ * manage access.
  */
 export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (input: {
   readonly url: string;
@@ -144,6 +145,7 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
   readonly access: AuthMcpClientAccess;
   readonly lifetime: Option.Option<AuthSessionLifetime>;
   readonly selfUrls: ReadonlyArray<string>;
+  readonly inviteApp: boolean;
 }) {
   const links = yield* PeerLinks.PeerLinks;
   const auth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -313,14 +315,19 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
     }),
   );
 
+  // The invite's code gives that app full use of this environment, more than a narrower link.
   yield* step(
     `${peer.label} desktop app`,
     Effect.gen(function* () {
+      if (!input.inviteApp) return "skipped (--no-invite-app)";
+      if (input.access !== "full-access") {
+        return "skipped: only a full-access link invites the desktop app";
+      }
       const app = yield* auth.createPairingLink({
         scopes: AuthStandardClientScopes,
         subject: "one-time-token",
         label: `${peer.label} desktop app`,
-        ttl: Duration.millis(MAX_PAIRING_LINK_TTL_MILLIS),
+        ttl: Duration.millis(MAX_APP_INVITE_TTL_MILLIS),
         ...(lifetime ? { lifetime } : {}),
       });
       const invite = yield* client.access
@@ -332,9 +339,16 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
             urls: [selfUrl, ...selfAlternates],
             credential: app.credential,
             credentialExpiresAt: app.expiresAt,
+            pairingLinkId: app.id,
           },
         })
         .pipe(Effect.tapError(() => auth.revokePairingLink(app.id).pipe(Effect.ignore)));
+      // The invite it replaced can no longer be taken, so its code here goes too.
+      yield* Effect.forEach(
+        invite.replacedPairingLinkIds ?? [],
+        (id) => auth.revokePairingLink(id).pipe(Effect.ignore),
+        { discard: true },
+      );
       return `invited to connect to ${self.label}, until ${DateTime.formatIso(invite.expiresAt)}`;
     }),
   );

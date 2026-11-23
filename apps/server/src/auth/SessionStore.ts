@@ -70,6 +70,8 @@ export interface VerifiedSession {
   /** What the token itself says; a browser cookie was set from these when it was issued. */
   readonly tokenIssuedAt?: DateTime.Utc;
   readonly tokenExpiresAt?: DateTime.Utc;
+  /** The lifetime the session was issued or last renewed with, which a sliding session keeps. */
+  readonly renewalWindow?: AuthSessionLifetime;
 }
 
 export interface VerifiedWebSocketTicket extends VerifiedSession {
@@ -810,7 +812,7 @@ const make = Effect.gen(function* () {
         issuedAt,
         expiresAt: sessionExpiresAt,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
-        ...(input?.renewalWindow && input.lifetime ? { renewalWindow: input.lifetime } : {}),
+        ...(input?.lifetime ? { renewalWindow: input.lifetime } : {}),
       } satisfies AuthSessions.CreateAuthSessionInput;
       const replacedSessionIds = yield* (
         input?.replaceSessionId !== undefined || input?.replaceActiveForSubjectAndMethod
@@ -972,6 +974,7 @@ const make = Effect.gen(function* () {
         ...(claims.plk === 1 ? { peerLink: true as const } : {}),
         tokenIssuedAt: DateTime.makeUnsafe(claims.iat),
         tokenExpiresAt: expiresAt.value,
+        ...(row.value.renewalWindow ? { renewalWindow: row.value.renewalWindow } : {}),
       } satisfies VerifiedSession;
     },
   );
@@ -1106,7 +1109,8 @@ const make = Effect.gen(function* () {
       });
       if (!updated) return Option.none<DateTime.Utc>();
       const session = yield* loadActiveSession(sessionId);
-      if (Option.isSome(session)) yield* emitUpsert(session.value);
+      // A session renewed to end already is gone, which wakes the streams that wait on it.
+      yield* Option.isSome(session) ? emitUpsert(session.value) : emitRemoved(sessionId);
       return Option.some(expiresAt);
     },
     (effect, sessionId) =>

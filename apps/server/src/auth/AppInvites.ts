@@ -1,9 +1,10 @@
 import {
   type AuthAppInvite,
   type AuthCreateAppInviteInput,
+  type AuthCreateAppInviteResult,
   type AuthPendingAppInvite,
   EnvironmentId,
-  MAX_PAIRING_LINK_TTL_MILLIS,
+  MAX_APP_INVITE_TTL_MILLIS,
 } from "@t3tools/contracts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
@@ -37,9 +38,10 @@ export class AppInviteError extends Schema.TaggedError<AppInviteError>()("AppInv
 export class AppInvites extends Context.Service<
   AppInvites,
   {
+    /** Replaces a pending invite to the same environment. */
     readonly create: (
       input: AuthCreateAppInviteInput,
-    ) => Effect.Effect<AuthAppInvite, AppInviteError>;
+    ) => Effect.Effect<AuthCreateAppInviteResult, AppInviteError>;
     /** Invites not yet taken, revoked, replaced or expired. */
     readonly list: Effect.Effect<ReadonlyArray<AuthAppInvite>, AppInviteError>;
     readonly revoke: (id: string) => Effect.Effect<boolean, AppInviteError>;
@@ -58,6 +60,7 @@ interface AppInviteRow {
   readonly secret_name: string;
   readonly created_at: string;
   readonly expires_at: string;
+  readonly pairing_link_id: string | null;
 }
 
 const UrlsJson = Schema.fromJsonString(Schema.Array(Schema.String));
@@ -71,6 +74,7 @@ const toInvite = (row: AppInviteRow): AuthAppInvite => ({
   urls: decodeUrls(row.urls_json),
   createdAt: DateTime.makeUnsafe(row.created_at),
   expiresAt: DateTime.makeUnsafe(row.expires_at),
+  ...(row.pairing_link_id === null ? {} : { pairingLinkId: row.pairing_link_id }),
 });
 
 const make = Effect.gen(function* () {
@@ -100,14 +104,16 @@ const make = Effect.gen(function* () {
     function* (input) {
       const now = yield* DateTime.now;
       // A newer invite for the same environment replaces the pending one.
-      yield* sql`
+      const replaced = yield* sql<{ readonly pairing_link_id: string | null }>`
         UPDATE auth_app_invites SET revoked_at = ${DateTime.formatIso(now)}
         WHERE environment_id = ${input.environmentId}
           AND consumed_at IS NULL
           AND revoked_at IS NULL
+          AND expires_at > ${DateTime.formatIso(now)}
+        RETURNING pairing_link_id
       `;
       yield* sweep(now);
-      const latest = DateTime.add(now, { milliseconds: MAX_PAIRING_LINK_TTL_MILLIS });
+      const latest = DateTime.add(now, { milliseconds: MAX_APP_INVITE_TTL_MILLIS });
       const expiresAt =
         input.credentialExpiresAt !== undefined &&
         DateTime.isLessThan(input.credentialExpiresAt, latest)
@@ -124,17 +130,25 @@ const make = Effect.gen(function* () {
         urls: input.urls,
         createdAt: now,
         expiresAt,
+        ...(input.pairingLinkId === undefined ? {} : { pairingLinkId: input.pairingLinkId }),
       };
       yield* sql`
         INSERT INTO auth_app_invites (
-          id, environment_id, label, urls_json, secret_name, created_at, expires_at
+          id, environment_id, label, urls_json, secret_name, created_at, expires_at,
+          pairing_link_id
         ) VALUES (
           ${id}, ${input.environmentId}, ${input.label}, ${urlsJson},
-          ${secretName}, ${DateTime.formatIso(now)}, ${DateTime.formatIso(expiresAt)}
+          ${secretName}, ${DateTime.formatIso(now)}, ${DateTime.formatIso(expiresAt)},
+          ${input.pairingLinkId ?? null}
         )
       `.pipe(Effect.onError(() => secrets.remove(secretName).pipe(Effect.ignore)));
       yield* publish;
-      return invite;
+      return {
+        ...invite,
+        replacedPairingLinkIds: replaced.flatMap((row) =>
+          row.pairing_link_id === null ? [] : [row.pairing_link_id],
+        ),
+      };
     },
     Effect.mapError((cause) => new AppInviteError({ operation: "create", cause })),
   );
@@ -189,8 +203,10 @@ const make = Effect.gen(function* () {
         ),
       ),
     );
-    yield* sweep(now);
-    if (taken.length > 0) yield* publish;
+    if (taken.length > 0) {
+      yield* sweep(now);
+      yield* publish;
+    }
     return invites.flatMap((invite) => (Option.isSome(invite) ? [invite.value] : []));
   }).pipe(
     Effect.mapError((cause) => new AppInviteError({ operation: "take", cause })),

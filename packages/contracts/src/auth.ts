@@ -351,8 +351,14 @@ export const sessionLifetimeExpiresAtMillis = (
     ? NEVER_EXPIRES_AT_MILLIS
     : Math.min(nowMillis + lifetime.millis, NEVER_EXPIRES_AT_MILLIS);
 
-/** The longest a pairing code minted over the API stays usable; an app invite lasts this long. */
-export const MAX_PAIRING_LINK_TTL_MILLIS = 7 * 24 * 60 * 60 * 1000;
+/** The longest a pairing code minted over the API stays usable. */
+const MAX_PAIRING_LINK_TTL_MILLIS = 7 * 24 * 60 * 60 * 1000;
+
+/** The longest an app invite, and the pairing code it carries, stays usable. */
+export const MAX_APP_INVITE_TTL_MILLIS = 24 * 60 * 60 * 1000;
+
+/** The subject of every MCP client session, a peer link's included. */
+export const MCP_CLIENT_SESSION_SUBJECT = "mcp-client";
 
 export const AuthPairingCredentialResult = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -425,6 +431,8 @@ export const AuthAppInvite = Schema.Struct({
   urls: Schema.Array(TrimmedNonEmptyString),
   createdAt: Schema.DateTimeUtc,
   expiresAt: Schema.DateTimeUtc,
+  /** The code's pairing link on that environment, for revoking it there too. */
+  pairingLinkId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthAppInvite = typeof AuthAppInvite.Type;
 
@@ -546,6 +554,8 @@ export type AuthRevokeClientSessionInput = typeof AuthRevokeClientSessionInput.T
 export const AuthRenewClientSessionInput = Schema.Struct({
   sessionId: AuthSessionId,
   lifetime: AuthSessionLifetime,
+  /** Renews only a session with this subject, such as `MCP_CLIENT_SESSION_SUBJECT`. Older servers ignore it. */
+  expectedSubject: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthRenewClientSessionInput = typeof AuthRenewClientSessionInput.Type;
 
@@ -563,8 +573,17 @@ export const AuthCreateAppInviteInput = Schema.Struct({
   credential: TrimmedNonEmptyString,
   /** When the code stops working there; the invite ends then too. */
   credentialExpiresAt: Schema.optionalKey(Schema.DateTimeUtc),
+  /** The code's pairing link on that environment, kept so revoking the invite can revoke it there. */
+  pairingLinkId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthCreateAppInviteInput = typeof AuthCreateAppInviteInput.Type;
+
+export const AuthCreateAppInviteResult = Schema.Struct({
+  ...AuthAppInvite.fields,
+  /** Pairing links of the pending invites this one replaced, for revoking them there too. */
+  replacedPairingLinkIds: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+});
+export type AuthCreateAppInviteResult = typeof AuthCreateAppInviteResult.Type;
 
 export const AuthRevokeAppInviteInput = Schema.Struct({ id: TrimmedNonEmptyString });
 export type AuthRevokeAppInviteInput = typeof AuthRevokeAppInviteInput.Type;

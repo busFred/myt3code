@@ -22,9 +22,12 @@ import {
   type ServerAuthSessionMethod,
   type AuthWebSocketTicketResult,
   type AuthWebSocketTicketUse,
+  AuthEnvironmentScope as AuthEnvironmentScopeSchema,
   DpopFailureReason,
   type DpopFailureReason as DpopFailureReasonType,
+  MCP_CLIENT_SESSION_SUBJECT,
   mcpClientScopes,
+  sessionLifetimeExpiresAtMillis,
 } from "@t3tools/contracts";
 import { isLocalLoopbackHost } from "@t3tools/shared/hostClassification";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
@@ -86,10 +89,11 @@ export interface IssuedBearerSession {
 }
 
 // MCP client tokens are restricted to /mcp; HTTP API and WebSocket RPC would bypass their access cap.
-const MCP_CLIENT_SUBJECT = "mcp-client";
+const MCP_CLIENT_SUBJECT = MCP_CLIENT_SESSION_SUBJECT;
 const MCP_CLIENT_SESSION_TTL = Duration.days(30);
-// A peer link's session moves back out to its full lifetime when a call finds it this far
-// short, so a used link never expires and a busy one writes at most once per step.
+// A peer link's session moves back out to its full window when a call finds it this far short
+// (a thirtieth of a shorter window), so a used link never expires and a busy one writes at most
+// once per step.
 const PEER_LINK_RENEWAL_STEP = Duration.days(1);
 
 // A device pairing with its DPoP key renews the session itself, so the token can be short and
@@ -525,6 +529,16 @@ export class ServerAuthSessionNotRenewableError extends Schema.TaggedError<Serve
   }
 }
 
+/** Lengthening a session needs every scope it holds, so access management cannot extend more. */
+export class ServerAuthRenewScopeRequiredError extends Schema.TaggedError<ServerAuthRenewScopeRequiredError>()(
+  "ServerAuthRenewScopeRequiredError",
+  { requiredScope: AuthEnvironmentScopeSchema },
+) {
+  override get message(): string {
+    return `Making this session last longer needs the ${this.requiredScope} scope.`;
+  }
+}
+
 export class ServerAuthForbiddenOperationError extends Schema.TaggedError<ServerAuthForbiddenOperationError>()(
   "ServerAuthForbiddenOperationError",
   {},
@@ -658,13 +672,23 @@ export class EnvironmentAuth extends Context.Service<
     readonly revokeSession: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<boolean, ServerAuthInternalError>;
-    /** Sets a live session's expiry; None when it is not live. Refuses T3 Connect and desktop sessions. */
+    /**
+     * Sets a live session's expiry; None when it is not live or its subject is not
+     * `expectedSubject`. Refuses T3 Connect and desktop sessions, and with `callerScopes`,
+     * lengthening a session that holds a scope the caller lacks.
+     */
     readonly renewSession: (
       sessionId: AuthSessionId,
       lifetime: AuthSessionLifetime,
+      options?: {
+        readonly expectedSubject?: string;
+        readonly callerScopes?: ReadonlySet<AuthEnvironmentScope>;
+      },
     ) => Effect.Effect<
       Option.Option<DateTime.Utc>,
-      ServerAuthSessionNotRenewableError | ServerAuthInternalError
+      | ServerAuthSessionNotRenewableError
+      | ServerAuthRenewScopeRequiredError
+      | ServerAuthInternalError
     >;
     readonly listClientSessions: (
       currentSessionId: AuthSessionId,
@@ -1466,11 +1490,28 @@ export const make = Effect.gen(function* () {
 
   const renewSession: EnvironmentAuth["Service"]["renewSession"] = Effect.fn(
     "EnvironmentAuth.renewSession",
-  )(function* (sessionId, lifetime) {
+  )(function* (sessionId, lifetime, options) {
     const target = (yield* listSessions()).find((session) => session.sessionId === sessionId);
-    if (target === undefined) return Option.none<DateTime.Utc>();
+    if (
+      target === undefined ||
+      (options?.expectedSubject !== undefined && target.subject !== options.expectedSubject)
+    ) {
+      return Option.none<DateTime.Utc>();
+    }
     if (target.subject === CLOUD_CONNECT_SUBJECT || target.subject === DESKTOP_BOOTSTRAP_SUBJECT) {
       return yield* new ServerAuthSessionNotRenewableError({});
+    }
+    const callerScopes = options?.callerScopes;
+    if (callerScopes !== undefined) {
+      const now = yield* DateTime.now;
+      const missing = target.scopes.find((scope) => !callerScopes.has(scope));
+      if (
+        missing !== undefined &&
+        sessionLifetimeExpiresAtMillis(lifetime, now.epochMilliseconds) >
+          target.expiresAt.epochMilliseconds
+      ) {
+        return yield* new ServerAuthRenewScopeRequiredError({ requiredScope: missing });
+      }
     }
     return yield* sessions
       .setExpiry(sessionId, lifetime)
@@ -1689,20 +1730,25 @@ export const make = Effect.gen(function* () {
       return yield* authenticateRequest(request);
     });
 
-  /** The expiry of a verified peer link session, moved out when this use finds it a step short. */
+  /**
+   * The expiry of a verified peer link session, moved out by its window (the lifetime it was
+   * issued or renewed with, else the default) when this use finds it a step short.
+   */
   const renewPeerLinkSession = Effect.fnUntraced(function* (
     sessionId: AuthSessionId,
     expiresAt: DateTime.DateTime,
+    window: AuthSessionLifetime | undefined,
   ) {
+    if (window?._tag === "never") return DateTime.toUtc(expiresAt);
+    const windowMillis = window?.millis ?? Duration.toMillis(MCP_CLIENT_SESSION_TTL);
+    const step = Duration.min(PEER_LINK_RENEWAL_STEP, Duration.millis(windowMillis / 30));
     const now = yield* DateTime.now;
-    const renewed = DateTime.add(now, {
-      milliseconds: Duration.toMillis(MCP_CLIENT_SESSION_TTL),
-    });
-    if (DateTime.distance(expiresAt, renewed).pipe(Duration.isLessThan(PEER_LINK_RENEWAL_STEP))) {
+    const renewed = DateTime.add(now, { milliseconds: windowMillis });
+    if (DateTime.distance(expiresAt, renewed).pipe(Duration.isLessThan(step))) {
       return DateTime.toUtc(expiresAt);
     }
     const current = yield* sessions
-      .extend(sessionId, renewed, PEER_LINK_RENEWAL_STEP)
+      .extend(sessionId, renewed, step)
       .pipe(mapSessionVerificationErrors);
     // A revoke can land between the verification and the update.
     if (Option.isNone(current)) {
@@ -1736,7 +1782,11 @@ export const make = Effect.gen(function* () {
           if (session.peerLink !== true || session.expiresAt === undefined) return client;
           return {
             ...client,
-            linkExpiresAt: yield* renewPeerLinkSession(session.sessionId, session.expiresAt),
+            linkExpiresAt: yield* renewPeerLinkSession(
+              session.sessionId,
+              session.expiresAt,
+              session.renewalWindow,
+            ),
           } satisfies McpClientSession;
         }),
       ),

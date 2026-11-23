@@ -6,6 +6,26 @@ export type TakeInvitesResult =
   | { readonly _tag: "Unsupported" }
   | { readonly _tag: "Failed"; readonly error: unknown };
 
+/**
+ * What this server's access snapshot says about invites. `unavailable`: no snapshot can come,
+ * or it predates invites, so only a check at launch can find one. `unknown`: none yet.
+ */
+export type AppInviteSignal = "pending" | "none" | "unavailable" | "unknown";
+
+export function appInviteSignal(access: {
+  readonly snapshot: { readonly appInvites?: ReadonlyArray<unknown> } | null;
+  readonly failed: boolean;
+}): AppInviteSignal {
+  if (access.snapshot === null) return access.failed ? "unavailable" : "unknown";
+  if (access.snapshot.appInvites === undefined) return "unavailable";
+  return access.snapshot.appInvites.length > 0 ? "pending" : "none";
+}
+
+/** Taking writes to the server, so it runs only when there is something to take. */
+export function shouldTakeAppInvites(signal: AppInviteSignal, checkedAtLaunch: boolean): boolean {
+  return signal === "pending" || (signal === "unavailable" && !checkedAtLaunch);
+}
+
 export interface AppInvitePickupDeps {
   readonly isDesktop: boolean;
   readonly take: () => Promise<TakeInvitesResult>;

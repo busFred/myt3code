@@ -4,7 +4,8 @@ import {
   type AuthSessionId,
   type AuthSessionLifetime,
   type EnvironmentId,
-  MAX_PAIRING_LINK_TTL_MILLIS,
+  MAX_APP_INVITE_TTL_MILLIS,
+  MCP_CLIENT_SESSION_SUBJECT,
   type PeerLinkCreateInput,
   type PeerLinkFailureKind,
   type PeerLinkSummary,
@@ -47,7 +48,8 @@ export type BothWaysOutcome =
       /** The pairing code's server dropped the requested lifetime: it predates lifetimes. */
       readonly lifetimeIgnored?: true;
     }
-  | { readonly kind: "skipped" }
+  /** `not_full_access`: the invite's code would give more than the link, so none is left. */
+  | { readonly kind: "skipped"; readonly reason?: "not_full_access" }
   | { readonly kind: "failed"; readonly failure: BothWaysFailure; readonly detail: string | null };
 
 /**
@@ -77,12 +79,17 @@ export interface BothWaysOps {
       readonly linkTtlMillis: number;
     },
   ) => Promise<
-    Result.Result<{ readonly credential: string; readonly expiresAt: DateTime.Utc }, unknown>
+    Result.Result<
+      { readonly id: string; readonly credential: string; readonly expiresAt: DateTime.Utc },
+      unknown
+    >
   >;
+  /** Revokes a pairing link there, as `authEnvironment.revokePairingLink` does. */
+  readonly revokeAppCode: (environmentId: EnvironmentId, id: string) => Promise<unknown>;
   readonly createInvite: (
     environmentId: EnvironmentId,
     input: AuthCreateAppInviteInput,
-  ) => Promise<Result.Result<unknown, unknown>>;
+  ) => Promise<Result.Result<{ readonly replacedPairingLinkIds?: ReadonlyArray<string> }, unknown>>;
   readonly isUnsupported?: (failure: unknown) => boolean;
 }
 
@@ -119,7 +126,8 @@ const settle = async (run: () => Promise<BothWaysOutcome>): Promise<BothWaysOutc
 /**
  * Links two environments both ways, each link with a code minted on the side it links to, after
  * turning Linked environments on where it is off. Linked sides are left alone and a failure stops
- * only its step, so a rerun retries what failed. `invite` leaves `b`'s desktop app an invite to `a`.
+ * only its step, so a rerun retries what failed. `invite` leaves `b`'s desktop app an invite to `a`
+ * when the links have full access: the invite's code gives that app full use of `a`.
  */
 export async function runLinkBothWays(input: {
   readonly a: BothWaysSide;
@@ -169,11 +177,12 @@ export async function runLinkBothWays(input: {
   const invite = () =>
     settle(async (): Promise<BothWaysOutcome> => {
       if (!input.invite) return { kind: "skipped" };
+      if (input.access !== "full-access") return { kind: "skipped", reason: "not_full_access" };
       const [firstUrl, ...otherUrls] = a.urls;
       if (firstUrl === undefined) return { kind: "failed", failure: "no_address", detail: null };
       const minted = await ops.mintAppCode(a.environmentId, {
         appEnvironment: { environmentId: b.environmentId, label: b.label },
-        linkTtlMillis: MAX_PAIRING_LINK_TTL_MILLIS,
+        linkTtlMillis: MAX_APP_INVITE_TTL_MILLIS,
         ...lifetime,
       });
       if (Result.isFailure(minted)) return failureOf(minted.failure, ops, "no_code");
@@ -183,7 +192,15 @@ export async function runLinkBothWays(input: {
         urls: [firstUrl, ...otherUrls],
         credential: minted.success.credential,
         credentialExpiresAt: minted.success.expiresAt,
+        pairingLinkId: minted.success.id,
       });
+      // An unused code, or one whose invite was replaced, is revoked; best effort.
+      const unused = Result.isSuccess(created)
+        ? (created.success.replacedPairingLinkIds ?? [])
+        : [minted.success.id];
+      await Promise.all(
+        unused.map((id) => ops.revokeAppCode(a.environmentId, id).catch(() => undefined)),
+      );
       return Result.isSuccess(created) ? { kind: "done" } : failureOf(created.failure, ops);
     });
 
@@ -227,18 +244,24 @@ export async function runRenewBothWays(input: {
   readonly b: RenewBothWaysSide;
   readonly lifetime: AuthSessionLifetime;
   readonly ops: {
+    /** `expectedSubject` refuses a session id that does not name that kind of session. */
     readonly renew: (
       environmentId: EnvironmentId,
       sessionId: AuthSessionId,
       lifetime: AuthSessionLifetime,
+      expectedSubject?: string,
     ) => Promise<Result.Result<{ readonly renewed: boolean }, unknown>>;
     readonly isUnsupported?: (failure: unknown) => boolean;
   };
 }): Promise<ReadonlyMap<RenewBothWaysStep, RenewBothWaysOutcome>> {
   const { ops } = input;
-  const renew = (environmentId: EnvironmentId, sessionId: AuthSessionId) =>
+  const renew = (
+    environmentId: EnvironmentId,
+    sessionId: AuthSessionId,
+    expectedSubject?: string,
+  ) =>
     ops
-      .renew(environmentId, sessionId, input.lifetime)
+      .renew(environmentId, sessionId, input.lifetime, expectedSubject)
       .then((result): RenewBothWaysOutcome =>
         Result.isSuccess(result)
           ? result.success.renewed
@@ -257,7 +280,8 @@ export async function runRenewBothWays(input: {
     }
     return link.peerSessionId === undefined
       ? Promise.resolve<RenewBothWaysOutcome>({ kind: "failed", failure: "unknown_session" })
-      : renew(target.environmentId, link.peerSessionId);
+      : // The linking side reports this id; the target renews it only as a peer link's session.
+        renew(target.environmentId, link.peerSessionId, MCP_CLIENT_SESSION_SUBJECT);
   };
   const renewClient = (side: RenewBothWaysSide) =>
     side.clientSessionId === undefined

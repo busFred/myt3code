@@ -114,8 +114,9 @@ export function BothWaysOption({
           </span>
           <span className="block text-xs text-muted-foreground">
             <T>
-              Also links the other machine back to this one and invites its desktop app to connect.
-              Turns on Labs → Linked environments on either machine where it is off.
+              Also links the other machine back to this one and, with full access, invites its
+              desktop app to connect within a day. Turns on Labs → Linked environments on either
+              machine where it is off.
             </T>
           </span>
         </span>
@@ -192,7 +193,9 @@ export function BothWaysResults({
               {outcome.kind === "done"
                 ? gt("Done")
                 : outcome.kind === "skipped"
-                  ? gt("Already done")
+                  ? outcome.reason === "not_full_access"
+                    ? gt("Only with full access")
+                    : gt("Already done")
                   : outcome.detail !== null
                     ? `${failureLabel(outcome)}: ${outcome.detail}`
                     : failureLabel(outcome)}

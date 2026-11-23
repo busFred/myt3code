@@ -9,7 +9,12 @@ import { authEnvironment } from "../../state/auth";
 import { readEnvironment, usePrimaryEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { pickUpAppInvites, type TakeInvitesResult } from "./appInvitePickup";
+import {
+  appInviteSignal,
+  pickUpAppInvites,
+  shouldTakeAppInvites,
+  type TakeInvitesResult,
+} from "./appInvitePickup";
 
 const FOCUS_RECHECK_MS = 60_000;
 
@@ -35,14 +40,17 @@ export function AppInvitePickupCoordinator() {
       ? authEnvironment.accessChanges({ environmentId, input: null })
       : null,
   );
-  const hasInvites =
-    access.data?.type === "snapshot" && (access.data.payload.appInvites?.length ?? 0) > 0;
+  const signal = appInviteSignal({
+    snapshot: access.data?.type === "snapshot" ? access.data.payload : null,
+    failed: access.failure !== null,
+  });
   const takeInvites = useAtomCommand(authEnvironment.takePendingAppInvites, {
     reportFailure: false,
   });
   const pairEnvironment = useAtomCommand(connectPairing, { reportFailure: false });
   const inFlight = useRef(false);
   const lastRunAt = useRef(0);
+  const checkedAtLaunch = useRef<string | null>(null);
 
   const run = useEffectEvent(async () => {
     if (!ready || environmentId === null || inFlight.current) return;
@@ -69,25 +77,23 @@ export function AppInvitePickupCoordinator() {
     });
   });
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- takes invites once the local server is connected and whenever it announces new ones
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the server announces invites on the access stream; one without it is checked once at launch
   useEffect(() => {
-    if (ready && environmentId !== null) void run();
-  }, [ready, environmentId]);
+    if (!ready || environmentId === null) return;
+    if (!shouldTakeAppInvites(signal, checkedAtLaunch.current === environmentId)) return;
+    checkedAtLaunch.current = environmentId;
+    void run();
+  }, [ready, environmentId, signal]);
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the server announces new invites on the access stream
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window focus is an external event; retries invites a failed take left, at most once a minute
   useEffect(() => {
-    if (hasInvites) void run();
-  }, [hasInvites]);
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window focus is an external event; checking again at most once a minute
-  useEffect(() => {
-    if (!ready) return;
+    if (!ready || signal !== "pending") return;
     const onFocus = () => {
       if (Date.now() - lastRunAt.current >= FOCUS_RECHECK_MS) void run();
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [ready]);
+  }, [ready, signal]);
 
   return null;
 }

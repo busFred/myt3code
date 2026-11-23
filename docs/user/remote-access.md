@@ -155,8 +155,10 @@ To change a device that is already paired, find its session id with
 t3 auth session renew <session-id> --expire never
 ```
 
-A duration counts from now and can also end a session sooner. T3 Connect and
-desktop app sessions keep their own lifetimes.
+A duration counts from now and can also end a session sooner. Making a session
+last longer from a device needs every permission that session has; a device
+with fewer can only shorten it. T3 Connect and desktop app sessions keep their
+own lifetimes.
 
 ### Reach one machine several ways
 
@@ -496,9 +498,9 @@ an address you trust: the code is sent there.
   removes it here.
 - A link stays valid while agents use it. One unused for 30 days expires, as
   does one to a machine on an older T3 Code after 30 days; link again with a
-  new pairing code. A link made with a code from `t3 pair --expire` lasts that
-  long instead, and `t3 auth session renew` on the machine it links to changes
-  it later.
+  new pairing code. A link made with a code from `t3 pair --expire` stays valid
+  that long after its last use instead, or always with `never`, and
+  `t3 auth session renew` on the machine it links to changes that later.
 
 ### Link both ways
 
@@ -509,11 +511,14 @@ on one of them, make a code with `t3 pair` on the other machine and run:
 t3 environment link <address> --pairing-code <code> --both-ways --expire never
 ```
 
-It links each machine to the other, turns on Linked environments on both, and
-invites the other machine's desktop app to connect to this one; the invite lasts
-7 days. The code must be able to manage access there, as a plain `t3 pair` code
-can; it is spent once for a session that ends when the command does. `--expire`
-sets how long both links and the invited app stay signed in. The other machine
+It links each machine to the other and turns on Linked environments on both.
+With `--access full-access` it also invites the other machine's desktop app to
+connect to this one; the invite lasts a day, and `--no-invite-app` skips it.
+Links with less access leave no invite, because the app would get more access
+than the link. The code must be able to manage access there, as a plain
+`t3 pair` code can; it is spent once for a session that ends when the command
+does. `--expire` sets how long both links and the invited app stay signed in.
+The other machine
 reaches this one at its Tailscale address; pass `--self-url <url>` to give
 another. Each step prints its result. Run the command again with a fresh code to
 retry the steps that failed; finished ones are left as they are. A machine on an

@@ -75,6 +75,8 @@ const bothWaysOps = (appCodeLabel: (environmentLabel: string) => string): BothWa
         ...(input.lifetime === undefined ? {} : { lifetime: input.lifetime }),
       },
     }),
+  revokeAppCode: (environmentId, id) =>
+    run(authEnvironment.revokePairingLink, { environmentId, input: { id } }),
   createInvite: (environmentId, input) =>
     run(authEnvironment.createAppInvite, { environmentId, input }),
   isUnsupported: isMissingEndpointFailure,
@@ -138,8 +140,11 @@ export function renewLinksBothWays(input: {
   return runRenewBothWays({
     ...input,
     ops: {
-      renew: (environmentId, sessionId: AuthSessionId, lifetime) =>
-        run(authEnvironment.renewClient, { environmentId, input: { sessionId, lifetime } }),
+      renew: (environmentId, sessionId: AuthSessionId, lifetime, expectedSubject) =>
+        run(authEnvironment.renewClient, {
+          environmentId,
+          input: { sessionId, lifetime, ...(expectedSubject ? { expectedSubject } : {}) },
+        }),
       isUnsupported: isMissingEndpointFailure,
     },
   });

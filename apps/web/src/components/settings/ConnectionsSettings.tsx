@@ -2,7 +2,7 @@ import { errorDisplayMessage, thrownErrorMessage } from "@t3tools/client-runtime
 import { m as resolveMessage } from "~/i18n/messages";
 import { managedCapabilityDenial } from "@t3tools/client-runtime/contract-labels";
 import { SessionPermissions } from "./SessionPermissions";
-import type { AuthSessionLifetime } from "@t3tools/contracts";
+import type { AuthAppInvite, AuthSessionLifetime } from "@t3tools/contracts";
 import { isMissingEndpointFailure } from "./sessionLifetime.logic";
 import { useSearch } from "@tanstack/react-router";
 import { ChevronRightIcon, EllipsisIcon } from "lucide-react";
@@ -721,7 +721,8 @@ function ConnectionsSettingsContent({
     setRenewingClientSessionId(null);
   };
 
-  const handleRevokeAppInvite = async (id: string) => {
+  const handleRevokeAppInvite = async (invite: AuthAppInvite) => {
+    const { id, pairingLinkId } = invite;
     if (
       accessEnvironmentId === null ||
       !readEnvironmentScope(accessEnvironmentId, AuthAccessWriteScope)
@@ -732,6 +733,16 @@ function ConnectionsSettingsContent({
     const result = await revokeAppInvite({ environmentId: accessEnvironmentId, input: { id } });
     if (result._tag === "Success") {
       setRevokedAppInviteIds((current) => new Set(current).add(id));
+      // The invite's code lives on the machine it invites to; revoke it there when this client can.
+      if (
+        pairingLinkId !== undefined &&
+        readEnvironmentScope(invite.environmentId, AuthAccessWriteScope)
+      ) {
+        void revokePairingLink({
+          environmentId: invite.environmentId,
+          input: { id: pairingLinkId },
+        });
+      }
     } else if (!isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       const message = isMissingEndpointFailure(error)
