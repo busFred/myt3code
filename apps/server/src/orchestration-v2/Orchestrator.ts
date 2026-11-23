@@ -2482,9 +2482,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (yield* cancelStaleQuestionWakes(projection)) {
         projection = yield* readCommandProjection(threadId);
       }
+      let deliveryOrder = queuedRunsInDeliveryOrder(projection);
       let storedQueuedRun =
         options?.queuedRunId === undefined
-          ? nextQueuedRun(projection)
+          ? deliveryOrder.find((run) => run.queueHeld !== true)
           : projection.runs.find(
               (run) => run.id === options.queuedRunId && run.status === "queued",
             );
@@ -2496,7 +2497,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           queuedRunCancellationEvents(projection, storedQueuedRun, yield* DateTime.now),
         );
         projection = yield* readCommandProjection(threadId);
-        storedQueuedRun = nextQueuedRun(projection);
+        deliveryOrder = queuedRunsInDeliveryOrder(projection);
+        storedQueuedRun = deliveryOrder.find((run) => run.queueHeld !== true);
       }
       // A wake that outlived some of its pull requests tells only the current ones.
       const currentWake =
@@ -2518,6 +2520,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ]);
         const runId = storedQueuedRun.id;
         projection = yield* readCommandProjection(threadId);
+        deliveryOrder = queuedRunsInDeliveryOrder(projection);
         storedQueuedRun = projection.runs.find((run) => run.id === runId);
       }
       if (storedQueuedRun === undefined) {
@@ -2586,7 +2589,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const wakes =
           worktreeMissing || instanceDisabledForProject
             ? []
-            : queuedRunsInDeliveryOrder(projection).filter((run) => {
+            : deliveryOrder.filter((run) => {
                 const message = projection.messages.find(
                   (candidate) => candidate.id === run.userMessageId,
                 );
@@ -2611,13 +2614,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
         return wakes.length > 0;
       }
+      const now = yield* DateTime.now;
       // Messages from other threads waiting at the head start as one run. A send-now names its run.
       const batch =
         options?.queuedRunId === undefined && settings.batchQueuedAgentMessages
-          ? queuedAgentMessageBatch(projection, storedQueuedRun)
+          ? queuedAgentMessageBatch(projection, storedQueuedRun, deliveryOrder)
           : [];
       const queuedMessage =
-        batch.length === 0 ? storedQueuedMessage : batchedAgentMessage(batch, yield* DateTime.now);
+        batch.length === 0 ? storedQueuedMessage : batchedAgentMessage(batch, now);
       // Move queued ordinals after runs that started while they waited to preserve transcript and checkpoint order.
       // Started runs have prompts; cancelled queued messages do not.
       const newerRunIds = projection.runs
@@ -2678,7 +2682,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         queuedRun.providerInstanceId,
       );
 
-      const now = yield* DateTime.now;
       const targetAdapter = yield* providerAdapters.get(queuedRun.providerInstanceId).pipe(
         Effect.mapError(
           (cause) =>
@@ -3057,7 +3060,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           {
             createdBy: queuedMessage.createdBy,
             creationSource: queuedMessage.creationSource,
-            senderThreadId: batch[0]?.message.senderThreadId ?? queuedMessage.senderThreadId,
+            senderThreadId:
+              batch.find((entry) => entry.message.senderThreadId !== undefined)?.message
+                .senderThreadId ?? queuedMessage.senderThreadId,
             notification: queuedMessage.notification,
             delegatedCompletion: queuedMessage.delegatedCompletion,
             restartContinuationOfRunId: queuedRun.restartContinuationOfRunId,
@@ -3097,6 +3102,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(queuedMessage.idleCompaction === undefined
             ? {}
             : { idleCompaction: queuedMessage.idleCompaction }),
+          ...(queuedMessage.batchedMessageCount === undefined
+            ? {}
+            : { batchedMessageCount: queuedMessage.batchedMessageCount }),
         }),
         ...(freshContext ? { freshContext: true } : {}),
         providerThreadId: queuedProviderThread.id,
@@ -3307,7 +3315,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             },
           })),
           ...executionIdentityEvents,
-          ...batch.slice(1).flatMap(({ run }) => queuedRunCancellationEvents(projection, run, now)),
+          ...batch
+            .slice(1)
+            .flatMap(({ run }) =>
+              queuedRunCancellationEvents(
+                projection,
+                { ...run, batchedIntoRunId: queuedRun.id },
+                now,
+              ),
+            ),
           ...(batch.length === 0
             ? []
             : [
@@ -8083,6 +8099,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : { usageLimitContinuationOfRunId: command.usageLimitContinuationOfRunId }),
         ...(continuedTaskId === undefined ? {} : { delegatedTaskId: continuedTaskId }),
         ...(freshContext ? { freshContext: true } : {}),
+        // Put ahead of older messages, so it never starts with them.
+        ...(queuedRunStop === undefined ? {} : { queueStandalone: true }),
       };
       const attempt: OrchestrationV2RunAttempt = {
         id: attemptId,
@@ -11810,7 +11828,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         nodeId: queuedRootNode.id,
         providerInstanceId: queuedRun.providerInstanceId,
         occurredAt: now,
-        payload: { ...queuedRun, queuePosition: 1 },
+        payload: { ...queuedRun, queuePosition: 1, queueStandalone: true },
       });
       const stops =
         isLiveRun(target) && !(yield* stopReachedRun(command, command.threadId, target.id));
@@ -12046,6 +12064,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             payload: {
               ...run,
               queuePosition,
+              // Someone chose where it runs, so it never starts with its new neighbours.
+              ...(run.id === command.runId ? { queueStandalone: true } : {}),
             },
           });
         }),

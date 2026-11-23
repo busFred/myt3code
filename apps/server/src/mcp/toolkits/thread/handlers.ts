@@ -40,6 +40,14 @@ function queueEntry(
     queuedRunId: run.id,
     createdBy: message.createdBy,
     ...(message.senderThreadId === undefined ? {} : { senderThreadId: message.senderThreadId }),
+    ...(message.linkedSender === undefined
+      ? {}
+      : {
+          linkedSender: {
+            environmentId: message.linkedSender.environmentId,
+            threadId: message.linkedSender.threadId,
+          },
+        }),
     text: characters.slice(0, limit).join(""),
     truncated: characters.length > limit,
   };
@@ -312,13 +320,18 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           };
         }
         const queuedRunId = yield* required(input.queuedRunId, "queuedRunId");
-        return (
-          queueEntry(projection, queuedRunId, 16000) ??
-          (yield* new OrchestratorMcpFailure({
-            code: "invalid_request",
-            message: "The queued message was not found.",
-          }))
-        );
+        const entry = queueEntry(projection, queuedRunId, 16000);
+        if (entry !== undefined) return entry;
+        const batchedInto = (yield* readThread(queued.thread.id, ["runs"], {
+          runIds: [queuedRunId],
+        })).projection.runs.find((run) => run.id === queuedRunId)?.batchedIntoRunId;
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message:
+            batchedInto === undefined
+              ? "The queued message was not found."
+              : `The queued message already started together with other queued messages in run ${batchedInto}.`,
+        });
       }),
     ),
     writesThread((input) =>

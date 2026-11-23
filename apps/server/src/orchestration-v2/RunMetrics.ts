@@ -56,7 +56,8 @@ export const makeRunOutcomeRecorder = <E>(
     for (const { event } of events) {
       if (event.type !== "run.updated") continue;
       const run = event.payload;
-      if (!OUTCOMES.has(run.status)) continue;
+      // A run merged into another never ran; that run's outcome counts for it.
+      if (!OUTCOMES.has(run.status) || run.batchedIntoRunId !== undefined) continue;
       let delegated = run.delegatedTaskId !== undefined || delegatedThreads.get(run.threadId);
       if (delegated === undefined) {
         delegated = yield* isSubagentThread(run.threadId).pipe(Effect.orElseSucceed(() => false));

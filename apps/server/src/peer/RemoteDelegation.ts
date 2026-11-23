@@ -1035,7 +1035,14 @@ const make = Effect.gen(function* () {
         remote.environmentId,
         { threadId: remote.threadId, limit: 1, runLimit: 50 },
       );
-      return read.recentRuns.find((run) => run.runId === remote.runId)?.status ?? null;
+      const run = read.recentRuns.find((candidate) => candidate.runId === remote.runId);
+      const batchedInto = run?.batchedIntoRunId;
+      return (
+        (batchedInto === undefined
+          ? run
+          : (read.recentRuns.find((candidate) => candidate.runId === batchedInto) ?? run)
+        )?.status ?? null
+      );
     },
     Effect.orElseSucceed(() => null),
   );

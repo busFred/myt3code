@@ -565,13 +565,18 @@ export function latestRun(
   return projection.runs.toSorted((left, right) => right.ordinal - left.ordinal)[0];
 }
 
-function latestRestartContinuation(
+/** The run that carries `run`'s work now: its restart continuation, or the run it was batched into. */
+function latestContinuation(
   runs: ReadonlyArray<OrchestrationV2Run>,
   run: OrchestrationV2Run,
 ): OrchestrationV2Run {
   let current = run;
   for (let hops = 0; hops < runs.length; hops++) {
-    const next = runs.find((candidate) => candidate.restartContinuationOfRunId === current.id);
+    const batchedInto = current.batchedIntoRunId;
+    const next =
+      batchedInto === undefined
+        ? runs.find((candidate) => candidate.restartContinuationOfRunId === current.id)
+        : runs.find((candidate) => candidate.id === batchedInto);
     if (next === undefined) break;
     current = next;
   }
@@ -962,7 +967,8 @@ const make = Effect.gen(function* () {
     if (
       message === undefined ||
       run === undefined ||
-      (turnItem === null && run.status !== "queued")
+      // A queued message batched with others starts in the run it names.
+      (turnItem === null && run.status !== "queued" && run.batchedIntoRunId === undefined)
     ) {
       return yield* new ThreadManagementDurableRunProjectionError({
         threadId: input.threadId,
@@ -1019,8 +1025,9 @@ const make = Effect.gen(function* () {
     if (selectedRun === undefined) {
       return { threadId: input.threadId, run: null, timedOut: false };
     }
-    // A restart cuts a run and continues it as a new run. Follow that chain,
-    // so a cut run is not the answer while its continuation is pending.
+    // A restart cuts a run and continues it as a new run, and a queued run can start batched
+    // into another. Follow that chain, so neither is the answer while its work is pending.
+    const followedRunIds = new Set([selectedRun.id]);
     // Runs per matching event and is already covered by the waitForThread span.
     const outcome = Effect.fnUntraced(function* (runs: ReadonlyArray<OrchestrationV2Run>) {
       const current = runs.find((candidate) => candidate.id === selectedRun.id);
@@ -1030,7 +1037,8 @@ const make = Effect.gen(function* () {
           runId: selectedRun.id,
         });
       }
-      const run = latestRestartContinuation(runs, current);
+      const run = latestContinuation(runs, current);
+      followedRunIds.add(run.id);
       const pending =
         isTerminalRunStatus(run.status) && (yield* orchestrator.restartContinuationPending(run));
       return { run, pending, settled: isTerminalRunStatus(run.status) && !pending };
@@ -1103,7 +1111,7 @@ const make = Effect.gen(function* () {
           (stored) =>
             untilDelegatedWorkSettled ||
             stored.event.type !== "run.updated" ||
-            stored.event.payload.id === selectedRun.id ||
+            followedRunIds.has(stored.event.payload.id) ||
             stored.event.payload.restartContinuationOfRunId !== undefined,
         ),
       ),

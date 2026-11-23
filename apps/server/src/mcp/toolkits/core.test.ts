@@ -502,7 +502,16 @@ const historyReads = (
     runs:
       queued === undefined
         ? idle.runs
-        : [{ id: "run:queued", status: "queued", userMessageId: "message:queued" }],
+        : [
+            { id: "run:queued", status: "queued", userMessageId: "message:queued" },
+            // Started together with run:queued.
+            {
+              id: "run:merged",
+              status: "cancelled",
+              userMessageId: "message:merged",
+              batchedIntoRunId: "run:queued",
+            },
+          ],
   } as never;
   return Layer.mock(ThreadManagement.ThreadManagementService)({
     getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
@@ -525,6 +534,7 @@ it.effect("t3_queue list and read load only the queued runs and their messages",
     text: "Status",
     createdBy: "agent",
     senderThreadId: "thread:sender",
+    linkedSender: { environmentId: "environment:laptop", threadId: "thread:remote", title: "R" },
     attachments: [],
     dispatched: [],
   };
@@ -539,17 +549,23 @@ it.effect("t3_queue list and read load only the queued runs and their messages",
         );
     const listed = yield* call({ action: "list" });
     const read = yield* call({ action: "read", queuedRunId: "run:queued" });
+    const merged = yield* call({ action: "read", queuedRunId: "run:merged" });
     expect(reads).toEqual([]);
     // Agents tell another thread's message from the user's without parsing its text.
     const entry = {
       queuedRunId: "run:queued",
       createdBy: "agent",
       senderThreadId: "thread:sender",
+      linkedSender: { environmentId: "environment:laptop", threadId: "thread:remote" },
       text: "Status",
       truncated: false,
     };
     expect(listed.structuredContent).toEqual({ items: [entry], nextCursor: null });
     expect(read.structuredContent).toEqual(entry);
+    expect(declaredFailure(merged)).toMatchObject({
+      message:
+        "The queued message already started together with other queued messages in run run:queued.",
+    });
   }).pipe(
     Effect.provide(
       layerThreadToolkit.pipe(
