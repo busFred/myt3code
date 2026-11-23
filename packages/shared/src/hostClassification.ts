@@ -87,6 +87,20 @@ export const isTailnetHost = (host: string): boolean => {
   return ipv6 !== null && ipv6PrefixMatches(ipv6, [0xfd7a, 0x115c, 0xa1e0, 0, 0, 0, 0, 0], 48);
 };
 
+/**
+ * Whether a credential sent to `url` stays encrypted on the way: https, or plain http only to
+ * this machine or a Tailscale name or IPv6 address, where the network already encrypts.
+ */
+export const carriesCredentialsSafely = (url: string): boolean => {
+  const parsed = URL.parse(url);
+  if (parsed === null) return false;
+  if (parsed.protocol === "https:") return true;
+  return (
+    parsed.protocol === "http:" &&
+    (isLocalLoopbackHost(parsed.hostname) || isTailnetHost(parsed.hostname))
+  );
+};
+
 export const isSharedAddressSpaceHost = (host: string): boolean => {
   const parts = parseIpv4Address(host);
   return parts !== null && parts[0] === 100 && parts[1]! >= 64 && parts[1]! <= 127;

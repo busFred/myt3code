@@ -85,6 +85,8 @@ export interface BothWaysSummary {
   /** A server dropped the requested lifetime, so a link got its default. */
   readonly lifetimeIgnored: boolean;
   readonly complete: boolean;
+  /** Some step did something; with every link kept as it was, nothing changed. */
+  readonly changed: boolean;
 }
 
 export function summarizeBothWays(
@@ -99,6 +101,7 @@ export function summarizeBothWays(
       (outcome) => outcome.kind === "done" && outcome.lifetimeIgnored === true,
     ),
     complete: failedSteps.length === 0,
+    changed: [...outcomes.values()].some((outcome) => outcome.kind === "done"),
   };
 }
 
@@ -113,7 +116,8 @@ export function mergeBothWaysRetry(
       const before = previous.get(step);
       return [
         step,
-        before?.kind === "done" && outcome.kind === "skipped" && outcome.reason === undefined
+        before?.kind === "done" &&
+        (outcome.kind === "kept" || (outcome.kind === "skipped" && outcome.reason === undefined))
           ? before
           : outcome,
       ];

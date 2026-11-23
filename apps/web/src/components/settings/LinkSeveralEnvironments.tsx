@@ -83,6 +83,9 @@ export function LinkSeveralEnvironmentsAction({
   const [bothWays, setBothWays] = useState(true);
   const [lifetime, setLifetime] = useState<LifetimeChoice>(DEFAULT_LIFETIME_CHOICE);
   const [steps, setSteps] = useState(NO_STEPS);
+  // Machines with two-way steps left, kept apart from the shown steps, which a new access or
+  // lifetime clears while these stay pickable.
+  const [unfinishedIds, setUnfinishedIds] = useState(NO_MACHINES);
   const runBothWays = useBothWaysRunner();
   // Enter then a click can both run before a re-render; this guard is synchronous.
   const inFlight = useRef(false);
@@ -93,11 +96,7 @@ export function LinkSeveralEnvironmentsAction({
     reportDefect: false,
   });
   // A machine linked one way with two-way steps left stays pickable, so a retry finishes them.
-  const unfinished = new Set(
-    bothWays
-      ? [...steps].flatMap(([id, outcomes]) => (summarizeBothWays(outcomes).complete ? [] : [id]))
-      : [],
-  );
+  const unfinished = bothWays ? unfinishedIds : NO_MACHINES;
   const candidates = linkBatchCandidates(machines, writable, linksState, unfinished);
   const selectable = candidates.flatMap(({ machine, blocked }) =>
     blocked === null && outcomes.get(machine.environmentId)?.kind !== "linked" ? [machine] : [],
@@ -115,6 +114,7 @@ export function LinkSeveralEnvironmentsAction({
       setBothWays(true);
       setLifetime(DEFAULT_LIFETIME_CHOICE);
       setSteps(NO_STEPS);
+      setUnfinishedIds(NO_MACHINES);
     }
   };
   const toggle = (id: EnvironmentId, checked: boolean) =>
@@ -146,11 +146,19 @@ export function LinkSeveralEnvironmentsAction({
           batch: true,
           ...(steps.has(id) ? { previous: steps.get(id)! } : {}),
         });
-        const outcome: LinkBatchOutcome =
-          stepOutcomes !== null && summarizeBothWays(stepOutcomes).complete
-            ? { kind: "linked" }
-            : { kind: "failed", failure: "other", detail: null };
-        if (stepOutcomes !== null) setSteps((current) => new Map(current).set(id, stepOutcomes));
+        const complete = stepOutcomes !== null && summarizeBothWays(stepOutcomes).complete;
+        const outcome: LinkBatchOutcome = complete
+          ? { kind: "linked" }
+          : { kind: "failed", failure: "other", detail: null };
+        if (stepOutcomes !== null) {
+          setSteps((current) => new Map(current).set(id, stepOutcomes));
+          setUnfinishedIds((current) => {
+            const next = new Set(current);
+            if (complete) next.delete(id);
+            else next.add(id);
+            return next;
+          });
+        }
         results.set(id, outcome);
         finishOne(id, outcome);
       }
@@ -355,8 +363,9 @@ export function LinkSeveralEnvironmentsAction({
               value={access}
               onChange={(next) => {
                 setAccess(next);
-                // Earlier steps ran with the old access, so a retry starts over.
+                // Earlier results ran with the old access, so a retry starts over.
                 setSteps(NO_STEPS);
+                setOutcomes(NO_OUTCOMES);
               }}
               disabled={busy}
             />
@@ -371,6 +380,7 @@ export function LinkSeveralEnvironmentsAction({
               onLifetimeChange={(next) => {
                 setLifetime(next);
                 setSteps(NO_STEPS);
+                setOutcomes(NO_OUTCOMES);
               }}
               disabled={busy}
             />

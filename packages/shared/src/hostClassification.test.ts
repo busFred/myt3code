@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { isPublicFaviconHost } from "./hostClassification.ts";
+import { carriesCredentialsSafely, isPublicFaviconHost } from "./hostClassification.ts";
 
 describe("isPublicFaviconHost", () => {
   it("treats public hosts as public", () => {
@@ -108,5 +108,29 @@ describe("isPublicFaviconHost", () => {
   it("rejects malformed IPv4 text as a public host", () => {
     expect(isPublicFaviconHost("10.0.0.999")).toBe(true);
     expect(isPublicFaviconHost("10.0.0")).toBe(true);
+  });
+});
+
+describe("carriesCredentialsSafely", () => {
+  it("allows https anywhere and plain http only to loopback or Tailscale", () => {
+    for (const url of [
+      "https://192.168.1.10:3773",
+      "https://box.example.com",
+      "http://localhost:3773",
+      "http://127.0.0.1:3773",
+      "http://box.tail1234.ts.net:3773",
+      "http://[fd7a:115c:a1e0::1]:3773",
+    ]) {
+      expect(carriesCredentialsSafely(url), url).toBe(true);
+    }
+    for (const url of [
+      "http://192.168.1.10:3773",
+      "http://100.100.1.2:3773",
+      "http://box.local:3773",
+      "ftp://box.tail1234.ts.net",
+      "not a url",
+    ]) {
+      expect(carriesCredentialsSafely(url), url).toBe(false);
+    }
   });
 });

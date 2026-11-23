@@ -1,4 +1,5 @@
 import type { AuthPendingAppInvite, EnvironmentId } from "@t3tools/contracts";
+import { carriesCredentialsSafely } from "@t3tools/shared/hostClassification";
 
 export type TakeInvitesResult =
   | { readonly _tag: "Taken"; readonly invites: ReadonlyArray<AuthPendingAppInvite> }
@@ -37,8 +38,11 @@ export function shouldTakeAppInvites(signal: AppInviteSignal, checkedAtLaunch: b
 export interface AppInvitePickupDeps {
   readonly isDesktop: boolean;
   readonly take: () => Promise<TakeInvitesResult>;
-  /** True when the environment is already saved and connected, so the invite adds nothing. */
-  readonly isConnected: (environmentId: EnvironmentId) => boolean;
+  /**
+   * True when the invite adds nothing: the environment is saved and connected or connecting,
+   * or the user turned it off, which an invite never undoes.
+   */
+  readonly isHandled: (environmentId: EnvironmentId) => boolean;
   /** Redeems the invite's one-time code at one address and saves the environment. */
   readonly pair: (input: {
     readonly host: string;
@@ -62,10 +66,16 @@ export async function pickUpAppInvites(deps: AppInvitePickupDeps): Promise<numbe
   }
   let added = 0;
   for (const invite of taken.invites) {
-    if (deps.isConnected(invite.environmentId)) continue;
-    let lastError: unknown = new Error("The invite has no addresses.");
+    if (deps.isHandled(invite.environmentId)) continue;
+    // The code gives full use of that environment, so it never travels over plain http.
+    const hosts = invite.urls.filter(carriesCredentialsSafely);
+    let lastError: unknown = new Error(
+      invite.urls.length === 0
+        ? "The invite has no addresses."
+        : "The invite has only plain http addresses, which would send its code unencrypted.",
+    );
     let saved = false;
-    for (const host of invite.urls) {
+    for (const host of hosts) {
       const result = await deps.pair({
         host,
         pairingCode: invite.credential,

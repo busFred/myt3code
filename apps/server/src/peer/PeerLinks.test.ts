@@ -322,6 +322,61 @@ it.effect("two links racing to one peer leave the stored access matching the tok
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
+it.effect("two links that keep an existing one race: the later write keeps the first", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const b = yield* serveB(box);
+      // Each link stores its token after finding no link and before writing its row, so
+      // holding both there makes both pass the read before either writes.
+      const arrived = yield* Ref.make(0);
+      const bothRead = yield* Deferred.make<void>();
+      const barrier = Layer.effect(
+        ServerSecretStore.ServerSecretStore,
+        Effect.map(ServerSecretStore.make, (store) =>
+          ServerSecretStore.ServerSecretStore.of({
+            ...store,
+            set: (name, value) =>
+              Ref.updateAndGet(arrived, (count) => count + 1).pipe(
+                Effect.flatMap((count) =>
+                  count === 2 ? Deferred.succeed(bothRead, undefined) : Effect.void,
+                ),
+                Effect.andThen(Deferred.await(bothRead)),
+                Effect.andThen(store.set(name, value)),
+              ),
+          }),
+        ),
+      );
+      const a = yield* makeA(laptop, barrier);
+      const [first, second] = yield* Effect.all(
+        [b.auth.issuePairingCredential(), b.auth.issuePairingCredential()],
+        { concurrency: 2 },
+      );
+      const results = yield* Effect.all(
+        [
+          a.links.linkUnlessLinked({
+            url: b.url,
+            pairingCode: first.credential,
+            access: "read-only",
+          }),
+          a.links.linkUnlessLinked({
+            url: b.url,
+            pairingCode: second.credential,
+            access: "full-access",
+          }),
+        ],
+        { concurrency: 2 },
+      );
+      expect(results.map((result) => result.alreadyLinked).toSorted()).toEqual([false, true]);
+      const [stored] = yield* a.links.list;
+      expect(results.map((result) => result.link.access)).toEqual([stored!.access, stored!.access]);
+      const { modes } = yield* probe(a);
+      expect(modes).toBe(
+        stored!.access === "read-only" ? "approval-required/default" : "full-access/default",
+      );
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
 /** A bare HTTP server on a socket of its own, answering with `handle`. */
 const serveRaw = <E, R>(
   handle: (
@@ -586,23 +641,31 @@ it.effect("reads one stored link without asking the peer", () =>
       expect(Option.isNone(yield* a.links.get(laptop.environmentId))).toBe(true);
       expect(yield* Ref.get(b.probes)).toBe(0);
 
-      // The peer's answer moves the expiry either way, as when it was renewed to never and then
-      // shortened there, but never for a credential the link no longer holds.
+      // A call's answer only moves the expiry later, since a slow one may predate a renewal;
+      // asking the peer outright moves it either way. Neither touches a replaced credential.
       const storedExpiry = Effect.map(a.links.get(box.environmentId), (link) =>
         Option.map(link, (found) => DateTime.formatIso(found.expiresAt)),
       );
-      const { token } = yield* a.links.resolve(box.environmentId);
+      const { secretName } = yield* a.links.resolve(box.environmentId);
+      const environmentId = box.environmentId;
       const never = DateTime.makeUnsafe(NEVER_EXPIRES_AT_MILLIS);
       const shortened = DateTime.add(Option.getOrThrow(stored).expiresAt, { days: 1 });
-      yield* a.links.recordExpiry(box.environmentId, never, token);
+      yield* a.links.recordExpiry({ environmentId, secretName, expiresAt: never });
       expect(yield* storedExpiry).toEqual(Option.some(DateTime.formatIso(never)));
-      yield* a.links.recordExpiry(box.environmentId, shortened, token);
+      yield* a.links.recordExpiry({ environmentId, secretName, expiresAt: shortened });
+      expect(yield* storedExpiry).toEqual(Option.some(DateTime.formatIso(never)));
+      yield* a.links.recordExpiry({
+        environmentId,
+        secretName,
+        expiresAt: shortened,
+        allowEarlier: true,
+      });
       expect(yield* storedExpiry).toEqual(Option.some(DateTime.formatIso(shortened)));
 
       const again = yield* b.auth.issuePairingCredential();
       yield* a.links.link({ url: b.url, pairingCode: again.credential, access: "auto" });
       const relinked = yield* storedExpiry;
-      yield* a.links.recordExpiry(box.environmentId, never, token);
+      yield* a.links.recordExpiry({ environmentId, secretName, expiresAt: never });
       expect(yield* storedExpiry).toEqual(relinked);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),

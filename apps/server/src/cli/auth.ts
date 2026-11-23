@@ -26,7 +26,7 @@ import { authScopesFlag } from "./authScopes.ts";
 import {
   authLocationFlags,
   type CliAuthLocationFlags,
-  describeSessionLifetime,
+  describeExpiry,
   DurationFromString,
   expireFlag,
   resolveCliAuthConfig,
@@ -412,8 +412,7 @@ const sessionRenewCommand = Command.make("renew", {
         yield* Console.log(
           Option.match(renewed, {
             onNone: () => `No active session found for ${flags.sessionId}.\n`,
-            onSome: () =>
-              `Session ${flags.sessionId} now ${lifetime._tag === "never" ? "never expires" : `lasts ${describeSessionLifetime(lifetime)} from now`}.\n`,
+            onSome: (expiresAt) => `Session ${flags.sessionId} now ${describeExpiry(expiresAt)}.\n`,
           }),
         );
       }),

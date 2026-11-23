@@ -143,7 +143,7 @@ const make = Effect.gen(function* () {
 
   // A peer that renews a used link says when it now ends; one that does not sends nothing.
   const recordLinkExpiry = (
-    { link, token }: Pick<PeerLinks.ResolvedPeerLink, "link" | "token">,
+    { link, secretName }: Pick<PeerLinks.ResolvedPeerLink, "link" | "secretName">,
     headers: Readonly<Record<string, string>>,
   ) =>
     Option.match(
@@ -152,19 +152,18 @@ const make = Effect.gen(function* () {
           Option.fromNullishOr(headers[McpInvocationContext.LINK_EXPIRES_AT_HEADER]),
           DateTime.make,
         ),
-        (expiresAt) => !DateTime.Equivalence(expiresAt, link.expiresAt),
+        (expiresAt) => DateTime.isGreaterThan(expiresAt, link.expiresAt),
       ),
       {
         onNone: () => Effect.void,
-        onSome: (expiresAt) => links.recordExpiry(link.environmentId, expiresAt, token),
+        onSome: (expiresAt) =>
+          links.recordExpiry({ environmentId: link.environmentId, secretName, expiresAt }),
       },
     );
 
   const openSession = Effect.fn("PeerMcpClient.openSession")(
-    function* (
-      { link, url, token }: PeerLinks.ResolvedPeerLink,
-      limitHeader: Record<string, string>,
-    ) {
+    function* (resolved: PeerLinks.ResolvedPeerLink, limitHeader: Record<string, string>) {
+      const { link, url, token } = resolved;
       const initialized = yield* post(
         url,
         token,
@@ -189,7 +188,7 @@ const make = Effect.gen(function* () {
           message: `The linked environment refused to start an MCP session (HTTP ${initialized.status}).`,
         });
       }
-      yield* recordLinkExpiry({ link, token }, initialized.headers);
+      yield* recordLinkExpiry(resolved, initialized.headers);
       yield* post(
         url,
         token,

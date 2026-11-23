@@ -74,9 +74,9 @@ never. It applies to browser, bearer, renewing-device and peer-link sessions,
 never to T3 Connect or the desktop app. The lifetime is stored on the row as
 the session's window, and `renew` replaces it, so a renewing device or a peer
 link keeps sliding by the lifetime it was last given. A renewing device's
-window is at least ten minutes, at issue and on `renew`: its client renews a
-minute before the token ends, so a shorter window would have it renew on every
-request. Never is a fixed
+window is at least its one-hour access token, at issue and on `renew`: its
+client schedules renewal from the token it holds, so a shorter window could end
+before the client tries. Never is a fixed
 far-future expiry (`NEVER_EXPIRES_AT_MILLIS`, 9999-12-31), not a null, so every
 `expiresAt` field, token claim and `expires_at > now` query keeps working;
 `isNeverExpiring` tests a threshold because a linking side derives its copy
@@ -109,7 +109,10 @@ needs every standard scope, and clients leave one only when, after their run,
 the app's environment has a full-access link to the other, made then or
 before, so a rerun retries an invite that failed: the code is a standard one,
 and anything narrower would hand the app more than the link allows. The invite and its code last at most a
-day. Only a desktop app session can take invites, each once:
+day. Its code gives full use of the environment, so clients and the CLI list
+only its https, loopback and Tailscale addresses (the rule peer links follow),
+leave no invite without one, and the app skips any other address it finds in
+one. Only a desktop app session can take invites, each once:
 `desktop-bootstrap`, or `desktop-service`, which only the local
 `t3 pair --desktop-service` can mint because it writes to the environment's
 database. The app asks only when the access snapshot lists some, or once at

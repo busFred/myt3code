@@ -25,7 +25,7 @@ function setup(overrides: Partial<AppInvitePickupDeps> & { invites?: AuthPending
   const deps: AppInvitePickupDeps = {
     isDesktop: true,
     take: async () => ({ _tag: "Taken", invites: overrides.invites ?? [] }),
-    isConnected: () => false,
+    isHandled: () => false,
     pair,
     log,
     ...overrides,
@@ -55,33 +55,50 @@ describe("pickUpAppInvites", () => {
     expect(log).toHaveBeenCalledOnce();
   });
 
-  it("skips environments that are already connected", async () => {
+  it("skips environments that are already handled", async () => {
     const { deps, pair } = setup({
-      invites: [invite("a", ["http://a"]), invite("b", ["http://b"])],
-      isConnected: (id) => id === EnvironmentId.make("a"),
+      invites: [invite("a", ["https://a"]), invite("b", ["https://b"])],
+      isHandled: (id) => id === EnvironmentId.make("a"),
     });
     expect(await pickUpAppInvites(deps)).toBe(1);
     expect(pair).toHaveBeenCalledOnce();
     expect(pair).toHaveBeenCalledWith({
-      host: "http://b",
+      host: "https://b",
       pairingCode: "code-b",
       expectedEnvironmentId: EnvironmentId.make("b"),
     });
   });
 
-  it("tries addresses in order until one works", async () => {
+  it("tries addresses in order until one works, never over plain http", async () => {
     const { deps, pair, log } = setup({
-      invites: [invite("a", ["http://1", "http://2", "http://3"])],
+      invites: [
+        invite("a", [
+          "http://192.168.1.5:3773",
+          "https://1.example",
+          "http://box.tail.ts.net",
+          "https://3.example",
+        ]),
+      ],
     });
     pair.mockResolvedValueOnce({ ok: false, error: "down" }).mockResolvedValueOnce({ ok: true });
     expect(await pickUpAppInvites(deps)).toBe(1);
-    expect(pair.mock.calls.map(([input]) => input.host)).toEqual(["http://1", "http://2"]);
+    expect(pair.mock.calls.map(([input]) => input.host)).toEqual([
+      "https://1.example",
+      "http://box.tail.ts.net",
+    ]);
     expect(log).not.toHaveBeenCalled();
+  });
+
+  it("logs an invite with only plain http addresses and sends its code nowhere", async () => {
+    const { deps, pair, log } = setup({ invites: [invite("a", ["http://192.168.1.5:3773"])] });
+    expect(await pickUpAppInvites(deps)).toBe(0);
+    expect(pair).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledOnce();
   });
 
   it("logs the invite when every address fails and carries on with the next", async () => {
     const { deps, pair, log } = setup({
-      invites: [invite("a", ["http://1"]), invite("b", ["http://2"])],
+      invites: [invite("a", ["https://1"]), invite("b", ["https://2"])],
     });
     pair.mockResolvedValueOnce({ ok: false, error: "down" });
     expect(await pickUpAppInvites(deps)).toBe(1);

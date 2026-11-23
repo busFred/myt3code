@@ -72,7 +72,15 @@ export function AppInvitePickupCoordinator() {
           ? { _tag: "Unsupported" }
           : { _tag: "Failed", error };
       },
-      isConnected: (id) => readEnvironment(id)?.connection.phase === "connected",
+      isHandled: (id) => {
+        const saved = readEnvironment(id);
+        return (
+          saved !== null &&
+          (!saved.entry.enabled ||
+            saved.connection.phase === "connected" ||
+            saved.connection.phase === "connecting")
+        );
+      },
       pair: async (input) => {
         const result = await pairEnvironment(input);
         if (result._tag === "Success") return { ok: true };

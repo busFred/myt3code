@@ -9,11 +9,11 @@ import {
   AuthStandardClientScopes,
   AuthTokenExchangeGrantType,
   EnvironmentHttpApi,
-  isNeverExpiring,
   MAX_APP_INVITE_TTL_MILLIS,
   mcpClientScopes,
 } from "@t3tools/contracts";
 import {
+  carriesCredentialsSafely,
   isLocalLoopbackHost,
   isTailnetHost,
   isWildcardHost,
@@ -36,6 +36,7 @@ import * as HttpApiClient from "effect/http-api/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
+import { describeExpiry } from "./config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import { readLiveServerRuntimeState } from "../serverRuntimeState.ts";
@@ -130,10 +131,6 @@ interface StepOutcome {
   readonly ok: boolean;
   readonly text: string;
 }
-
-/** When a link ends, for printing. */
-export const describeExpiry = (expiresAt: DateTime.Utc) =>
-  isNeverExpiring(expiresAt) ? "never expires" : `until ${DateTime.formatIso(expiresAt)}`;
 
 const wantsInvite = (input: {
   readonly access: AuthMcpClientAccess;
@@ -407,8 +404,17 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
     peerLinkAccess,
     peerLabel: peer.label,
   });
+  // The invite's code gives full use of this environment, so it never travels over plain http.
+  const [inviteUrl, ...otherInviteUrls] = [selfUrl, ...selfAlternates].filter(
+    carriesCredentialsSafely,
+  );
   if (skipInvite !== null) {
     outcomes.push({ ...skipInvite, text: `${inviteLabel}: ${skipInvite.text}` });
+  } else if (inviteUrl === undefined) {
+    outcomes.push({
+      ok: true,
+      text: `${inviteLabel}: skipped: ${self.label} has no https or Tailscale address to send the app's code to. Pass --self-url with one to leave the invite`,
+    });
   } else {
     yield* step(
       inviteLabel,
@@ -426,7 +432,7 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
             payload: {
               environmentId: self.environmentId,
               label: self.label,
-              urls: [selfUrl, ...selfAlternates],
+              urls: [inviteUrl, ...otherInviteUrls],
               credential: app.credential,
               credentialExpiresAt: app.expiresAt,
             },
