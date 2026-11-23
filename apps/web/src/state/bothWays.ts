@@ -13,7 +13,6 @@ import type {
   AuthSessionId,
   AuthSessionLifetime,
   EnvironmentId,
-  PeerLinkCreateInput,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 
@@ -44,33 +43,9 @@ const run = async <W, A, E>(
 const PEER_LINK_CODE_LABEL = "T3 Code link";
 
 /**
- * For a server without the HTTP link, which keeps an existing link: its socket link replaces
- * one, so it runs only when that server has no link to the other yet.
- */
-const linkOverSocket = async (
-  environmentId: EnvironmentId,
-  input: PeerLinkCreateInput,
-  missing: unknown,
-  batch: boolean,
-): Promise<Result.Result<{ alreadyLinked: boolean; access: AuthMcpClientAccess }, unknown>> => {
-  const links = await readPeerLinks(environmentId);
-  if (links === null) return Result.fail(missing);
-  const current = links.find(
-    (link) => link.environmentId === input.expectedEnvironmentId && link.status !== "expired",
-  );
-  if (current !== undefined) return Result.succeed({ alreadyLinked: true, access: current.access });
-  const linked = await run(batch ? peerLinkEnvironment.linkInBatch : peerLinkEnvironment.link, {
-    environmentId,
-    input,
-  });
-  return Result.isSuccess(linked)
-    ? Result.succeed({ alreadyLinked: false, access: linked.success.access })
-    : Result.fail(linked.failure);
-};
-
-/**
  * Each op runs with this client's own session on the environment it names. Links go over HTTP,
- * which keeps a link the environment has. In a batch a link leaves the lists alone, and the batch
+ * which keeps a link the environment has; a server without it is reported as older, since its
+ * socket link would replace one. In a batch a link leaves the lists alone, and the batch
  * refreshes each once when it ends.
  */
 const bothWaysOps = (
@@ -108,9 +83,7 @@ const bothWaysOps = (
   link: async (environmentId, input) => {
     const linked = await run(authEnvironment.linkPeer, { environmentId, input });
     if (Result.isFailure(linked)) {
-      return isMissingEndpointFailure(linked.failure)
-        ? linkOverSocket(environmentId, input, linked.failure, batch)
-        : Result.fail(linked.failure);
+      return Result.fail(linked.failure);
     }
     if (!batch && !linked.success.alreadyLinked) refreshPeerLinkLists([environmentId]);
     return Result.succeed({

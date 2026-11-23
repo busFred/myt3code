@@ -755,7 +755,7 @@ class EnvironmentAccessHttpApi extends HttpApiGroup.make("access")
       headers: OptionalBearerHeaders,
       payload: AuthCreateAppInviteInput,
       success: AuthCreateAppInviteResult,
-      error: EnvironmentScopedOperationErrors,
+      error: [EnvironmentRequestInvalidError, ...EnvironmentScopedOperationErrors],
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(

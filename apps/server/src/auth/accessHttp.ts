@@ -8,6 +8,7 @@ import {
   EnvironmentPeerLinkFailedError,
   type PeerLinkError,
 } from "@t3tools/contracts";
+import { carriesCredentialsSafely } from "@t3tools/shared/hostClassification";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
@@ -17,6 +18,7 @@ import * as AppInvites from "./AppInvites.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
+  failEnvironmentInvalidRequest,
   failEnvironmentOperationForbidden,
   failEnvironmentScopeRequired,
   requireEnvironmentScope,
@@ -50,6 +52,9 @@ export const layer = HttpApiBuilder.group(
           const session = yield* EnvironmentAuthenticatedPrincipal;
           const missing = AuthStandardClientScopes.find((scope) => !session.scopes.has(scope));
           if (missing !== undefined) return yield* failEnvironmentScopeRequired(missing);
+          if (!args.payload.urls.some(carriesCredentialsSafely)) {
+            return yield* failEnvironmentInvalidRequest("invalid_command");
+          }
           return yield* appInvites.create(args.payload).pipe(Effect.catch(inviteFailed));
         }),
       )

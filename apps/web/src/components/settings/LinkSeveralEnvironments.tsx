@@ -104,6 +104,14 @@ export function LinkSeveralEnvironmentsAction({
   const chosen = selectable.filter((machine) => selected.has(machine.environmentId));
   const busy = linking.size > 0;
   const summary = linkBatchSummary(outcomes);
+  // A both-ways run that left every link as it was linked nothing new.
+  const isKept = (id: EnvironmentId) => {
+    const done = steps.get(id);
+    return (
+      outcomes.get(id)?.kind === "linked" && done !== undefined && !summarizeBothWays(done).changed
+    );
+  };
+  const keptCount = [...outcomes.keys()].filter(isKept).length;
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
@@ -295,7 +303,11 @@ export function LinkSeveralEnvironmentsAction({
                     const status = linking.has(id)
                       ? gt("Linking…")
                       : outcome?.kind === "linked"
-                        ? gt("Linked", { $context: "status of a machine that was just linked" })
+                        ? isKept(id)
+                          ? gt("Already linked", {
+                              $context: "status of a machine whose links were kept",
+                            })
+                          : gt("Linked", { $context: "status of a machine that was just linked" })
                         : outcome?.kind === "failed"
                           ? linkBatchFailureLabel(outcome.failure, m)
                           : blocked === null
@@ -350,13 +362,21 @@ export function LinkSeveralEnvironmentsAction({
             {outcomes.size > 0 && !busy ? (
               <p role="status" className="text-xs text-muted-foreground">
                 {summary.failed.length === 0
-                  ? gt("{linked, plural, one {Linked # machine.} other {Linked # machines.}}", {
-                      linked: summary.linked,
-                    })
+                  ? summary.linked > keptCount || keptCount === 0
+                    ? gt("{linked, plural, one {Linked # machine.} other {Linked # machines.}}", {
+                        linked: summary.linked - keptCount,
+                      })
+                    : null
                   : gt(
                       "Linked {linked} of {total}. The ones that failed stay selected, so you can try them again.",
-                      { linked: summary.linked, total: outcomes.size },
+                      { linked: summary.linked - keptCount, total: outcomes.size },
                     )}
+                {keptCount > 0
+                  ? ` ${gt(
+                      "{kept, plural, one {# machine was already linked and kept as it is.} other {# machines were already linked and kept as they are.}}",
+                      { kept: keptCount },
+                    )}`
+                  : null}
               </p>
             ) : null}
             <LinkAccessPicker
