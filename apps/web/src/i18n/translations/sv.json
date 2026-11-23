@@ -3212,7 +3212,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "på datorn som öppnade den här sidan"]
+      "c": [
+        " ",
+        "på datorn som öppnade den här sidan"
+      ]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3224,7 +3227,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "· den som kör den får den här åtkomsten"]
+      "c": [
+        " ",
+        "· den som kör den får den här åtkomsten"
+      ]
     }
   ],
   "c54cc9c75db9dc58": "Godkänn bara en inloggning som du själv precis har startat.",
@@ -12982,5 +12988,55 @@
   "201490988858b511": "återkallad av {by}",
   "99451a5d2d40440f": "Återkallad av {by}.",
   "3ee30a50b70fffab": "Återkallad av {by}: {reason}",
-  "92e129bf413a1220": "återkallad"
+  "92e129bf413a1220": "återkallad",
+  "a6a23cdfeab043e4": "Den nya miljön",
+  "98c2dcdb49430af2": "Detta är redan appens egen miljö.",
+  "2bc9803da3548323": "Det gick inte att logga in där ännu. Försök igen.",
+  "987dd083ff600aa6": "Den här kopplingskoden kan inte hantera åtkomst där och kan därför inte länka åt båda håll. Skapa en länk med åtkomsthantering för att göra det.",
+  "cef3e04249cf6f9d": "Appen kan inte hantera åtkomst i sin egen miljö.",
+  "2a22283ae14a546f": "Det gick inte att länka åt båda håll.",
+  "51bb7b44a16e7413": "Länkade åt båda håll",
+  "033532163e6d3834": "Länkar åt båda håll…",
+  "5d6170336779ed42": "Enheten förblir inloggad: går aldrig ut",
+  "5efc829ed4370124": "{days, plural, one {Enheten förblir inloggad i {days} dag} other {Enheten förblir inloggad i {days} dagar}}",
+  "6f8d4d7274376cf6": "1 år",
+  "502ca86119230a02": "Förnya",
+  "3f698d5e79505a0a": "Går aldrig ut",
+  "ec1e05f70a1e6dc3": "Den här maskinen kör en äldre version av T3 Code",
+  "58e825b94e6fcb3c": "Enhetens giltighetstid ignorerades, så enheten loggas in i standardtiden 30 dagar.",
+  "cf060d5e1c411769": "Hur länge enheten förblir inloggad",
+  "68974fa0aa568d45": "Appinbjudan: {label}",
+  "82c7bf10b67fc60e": "dagar, högst {max}",
+  "0a6ab54e5711001b": "Hur länge båda länkarna och den inbjudna appen förblir inloggade",
+  "d28fd0a693772016": "Slå på Länkade miljöer på {label}",
+  "877eab868bf435c9": "{from} länkar till {to}",
+  "fe7778a97d957f1c": "Bjud in skrivbordsappen på {label}",
+  "6ccdfad04ff27a4d": "Den maskinen kör en äldre version av T3 Code",
+  "991889647f0f391a": "Länkade miljöer kunde inte slås på",
+  "621917f76e618d34": "Ingen adress som den andra maskinen kan nå",
+  "78821aeb6235a718": "Redan klart",
+  "4832793f4309ff73": "App för {label}",
+  "0774359db08acd8f": "Länka åt båda håll",
+  "314d7b467b50ba88": "Länkar även den andra maskinen tillbaka till den här och bjuder in dess skrivbordsapp att ansluta. Slår på Labs → Länkade miljöer på varje maskin där det är avslaget.",
+  "419f172a19dc331a": "Det gick inte att förnya klientåtkomsten",
+  "069d9205c8700651": "Den sessionen finns inte längre.",
+  "a8e9f58d8faf45f0": "Det gick inte att förnya klientåtkomsten.",
+  "2541a73e72f9e44a": "Det gick inte att återkalla appinbjudan.",
+  "6062346df1f17381": "Det gick inte att återkalla appinbjudan",
+  "2bea02a4a288fec6": "Om du ändrar Tailscale HTTPS startas bakgrundstjänsten om. Appen återansluter automatiskt.",
+  "9cde2ab0345b89aa": "Om du ändrar nätverksåtkomsten startas bakgrundstjänsten om och pågående agentomgångar och anslutningar avbryts. Appen återansluter automatiskt.",
+  "2a56c9df0b9c9467": "Om du ändrar Tailscale HTTPS startas bakgrundstjänsten om och pågående agentomgångar och anslutningar avbryts. Appen återansluter automatiskt.",
+  "b7ff604b0117a7f3": "{label} går aldrig ut",
+  "c5f7f0ec3acd416f": "Det gick inte att förnya alla länkar",
+  "1a099eba3c8687b9": "En maskin rapporterar inte sin länks session. Länka den igen för att förnya.",
+  "86938fc827b974e9": "Kontrollera att appen är inloggad där med åtkomsthantering.",
+  "7c552118dea0baba": "Går aldrig ut (åt båda håll)",
+  "417a94d0f381aaf6": "Båda maskinerna måste vara sparade i appen.",
+  "42ff9ac282ca2ee1": "Länkade {label} åt båda håll",
+  "325b0c35844a559f": "Fråga varje gång",
+  "b7155ccb61cda676": "Avsluta bara appen",
+  "1a9b7ef6139ec759": "Avsluta appen och stoppa tjänsten",
+  "092d7ccda12b583e": "Det gick inte att spara avslutsbeteendet.",
+  "2f1268d157d95b42": "Välj om bakgrundstjänsten fortsätter köra när du avslutar appen.",
+  "b6151aba5c92d5d9": "Vid avslut när appen är ansluten till bakgrundstjänsten"
 }

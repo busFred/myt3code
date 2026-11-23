@@ -3212,7 +3212,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "no computador que abriu esta página"]
+      "c": [
+        " ",
+        "no computador que abriu esta página"
+      ]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3224,7 +3227,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "· quem executar recebe este acesso"]
+      "c": [
+        " ",
+        "· quem executar recebe este acesso"
+      ]
     }
   ],
   "c54cc9c75db9dc58": "Aprove apenas um login que você acabou de iniciar.",
@@ -12975,5 +12981,55 @@
   "201490988858b511": "retirada por {by}",
   "99451a5d2d40440f": "Retirada por {by}.",
   "3ee30a50b70fffab": "Retirada por {by}: {reason}",
-  "92e129bf413a1220": "retirada"
+  "92e129bf413a1220": "retirada",
+  "a6a23cdfeab043e4": "O novo ambiente",
+  "98c2dcdb49430af2": "Este já é o ambiente próprio deste app.",
+  "2bc9803da3548323": "Ainda não foi possível entrar lá. Tente novamente.",
+  "987dd083ff600aa6": "Este código de pareamento não pode gerenciar o acesso lá, então não consegue vincular nos dois sentidos. Crie um link com gerenciamento de acesso para isso.",
+  "cef3e04249cf6f9d": "Este app não pode gerenciar o acesso no próprio ambiente.",
+  "2a22283ae14a546f": "Não foi possível vincular nos dois sentidos.",
+  "51bb7b44a16e7413": "Vinculado nos dois sentidos",
+  "033532163e6d3834": "Vinculando nos dois sentidos…",
+  "5d6170336779ed42": "O dispositivo continua conectado: nunca expira",
+  "5efc829ed4370124": "{days, plural, one {O dispositivo continua conectado por {days} dia} other {O dispositivo continua conectado por {days} dias}}",
+  "6f8d4d7274376cf6": "1 ano",
+  "502ca86119230a02": "Renovar",
+  "3f698d5e79505a0a": "Nunca expira",
+  "ec1e05f70a1e6dc3": "Esta máquina executa uma versão mais antiga do T3 Code",
+  "58e825b94e6fcb3c": "A duração do dispositivo foi ignorada, então ele fica conectado pelos 30 dias padrão.",
+  "cf060d5e1c411769": "Por quanto tempo o dispositivo continua conectado",
+  "68974fa0aa568d45": "Convite de app: {label}",
+  "82c7bf10b67fc60e": "dias, até {max}",
+  "0a6ab54e5711001b": "Por quanto tempo os dois vínculos e o app convidado continuam conectados",
+  "d28fd0a693772016": "Ativar Ambientes vinculados em {label}",
+  "877eab868bf435c9": "{from} vincula a {to}",
+  "fe7778a97d957f1c": "Convidar o app de desktop em {label}",
+  "6ccdfad04ff27a4d": "Essa máquina executa uma versão mais antiga do T3 Code",
+  "991889647f0f391a": "Não foi possível ativar Ambientes vinculados",
+  "621917f76e618d34": "Nenhum endereço que a outra máquina consiga alcançar",
+  "78821aeb6235a718": "Já concluído",
+  "4832793f4309ff73": "App para {label}",
+  "0774359db08acd8f": "Vincular nos dois sentidos",
+  "314d7b467b50ba88": "Também vincula a outra máquina a esta e convida o app de desktop dela a se conectar. Ativa Labs → Ambientes vinculados em cada máquina em que estiver desativado.",
+  "419f172a19dc331a": "Não foi possível renovar o acesso do cliente",
+  "069d9205c8700651": "Essa sessão não existe mais.",
+  "a8e9f58d8faf45f0": "Falha ao renovar o acesso do cliente.",
+  "2541a73e72f9e44a": "Falha ao revogar o convite do app.",
+  "6062346df1f17381": "Não foi possível revogar o convite do app",
+  "2bea02a4a288fec6": "Alterar o Tailscale HTTPS reinicia o serviço em segundo plano. O app reconecta automaticamente.",
+  "9cde2ab0345b89aa": "Alterar o acesso à rede reinicia o serviço em segundo plano, interrompendo as rodadas de agentes e conexões em andamento. O app reconecta automaticamente.",
+  "2a56c9df0b9c9467": "Alterar o Tailscale HTTPS reinicia o serviço em segundo plano, interrompendo as rodadas de agentes e conexões em andamento. O app reconecta automaticamente.",
+  "b7ff604b0117a7f3": "{label} nunca expira",
+  "c5f7f0ec3acd416f": "Não foi possível renovar todos os vínculos",
+  "1a099eba3c8687b9": "Uma máquina não informa a sessão do seu vínculo. Vincule-a novamente para renovar.",
+  "86938fc827b974e9": "Verifique se este app está conectado lá com gerenciamento de acesso.",
+  "7c552118dea0baba": "Nunca expira (nos dois sentidos)",
+  "417a94d0f381aaf6": "As duas máquinas precisam estar salvas neste app.",
+  "42ff9ac282ca2ee1": "{label} vinculado nos dois sentidos",
+  "325b0c35844a559f": "Perguntar sempre",
+  "b7155ccb61cda676": "Sair só do app",
+  "1a9b7ef6139ec759": "Sair do app e parar o serviço",
+  "092d7ccda12b583e": "Não foi possível salvar o comportamento ao sair.",
+  "2f1268d157d95b42": "Escolha se o serviço em segundo plano continua em execução depois que você sair do app.",
+  "b6151aba5c92d5d9": "Ao sair conectado ao serviço em segundo plano"
 }

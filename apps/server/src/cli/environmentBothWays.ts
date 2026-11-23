@@ -246,6 +246,42 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
       }),
     );
 
+  // Linking back first turns Linked environments on at both ends, which each link needs.
+  yield* step(
+    `${peer.label} → ${self.label}`,
+    Effect.gen(function* () {
+      const turnedOn = yield* links.turnOn;
+      const code = yield* auth.issuePairingCredential({
+        access: input.access,
+        purpose: "peer-link",
+        ...(lifetime ? { lifetime } : {}),
+      });
+      const linked = yield* client.access
+        .linkPeer({
+          headers: {},
+          payload: {
+            url: selfUrl,
+            alternateUrls: selfAlternates,
+            pairingCode: code.credential,
+            access: input.access,
+            expectedEnvironmentId: self.environmentId,
+            expectedLabel: self.label,
+            enableLinkedEnvironments: true,
+          },
+        })
+        .pipe(Effect.tapError(() => auth.revokePairingLink(code.id).pipe(Effect.ignore)));
+      if (linked.alreadyLinked) {
+        yield* auth.revokePairingLink(code.id).pipe(Effect.ignore);
+        return "already linked, left as it is";
+      }
+      const enabled = [
+        ...(turnedOn ? [self.label] : []),
+        ...(linked.enabledLinkedEnvironments ? [peer.label] : []),
+      ];
+      return `linked with ${linked.link.access} access, until ${DateTime.formatIso(linked.link.expiresAt)}${enabled.length > 0 ? `; turned on Linked environments on ${enabled.join(" and ")}` : ""}`;
+    }),
+  );
+
   yield* step(
     `${self.label} → ${peer.label}`,
     Effect.gen(function* () {
@@ -271,39 +307,9 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
           expectedEnvironmentId: peer.environmentId,
           expectedLabel: peer.label,
         },
-        true,
+        false,
       );
-      return `linked with ${linked.link.access} access, until ${DateTime.formatIso(linked.link.expiresAt)}${lifetime && code.lifetime === undefined ? ` (${peer.label} ignored --expire)` : ""}${linked.enabledLinkedEnvironments ? `; turned on Linked environments on ${self.label}` : ""}`;
-    }),
-  );
-
-  yield* step(
-    `${peer.label} → ${self.label}`,
-    Effect.gen(function* () {
-      const code = yield* auth.issuePairingCredential({
-        access: input.access,
-        purpose: "peer-link",
-        ...(lifetime ? { lifetime } : {}),
-      });
-      const linked = yield* client.access
-        .linkPeer({
-          headers: {},
-          payload: {
-            url: selfUrl,
-            alternateUrls: selfAlternates,
-            pairingCode: code.credential,
-            access: input.access,
-            expectedEnvironmentId: self.environmentId,
-            expectedLabel: self.label,
-            enableLinkedEnvironments: true,
-          },
-        })
-        .pipe(Effect.tapError(() => auth.revokePairingLink(code.id).pipe(Effect.ignore)));
-      if (linked.alreadyLinked) {
-        yield* auth.revokePairingLink(code.id).pipe(Effect.ignore);
-        return "already linked, left as it is";
-      }
-      return `linked with ${linked.link.access} access, until ${DateTime.formatIso(linked.link.expiresAt)}${linked.enabledLinkedEnvironments ? `; turned on Linked environments on ${peer.label}` : ""}`;
+      return `linked with ${linked.link.access} access, until ${DateTime.formatIso(linked.link.expiresAt)}${lifetime && code.lifetime === undefined ? ` (${peer.label} ignored --expire)` : ""}`;
     }),
   );
 

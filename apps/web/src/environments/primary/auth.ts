@@ -3,6 +3,7 @@ import type {
   AuthBrowserSessionResult,
   AuthClientMetadata,
   AuthConnectDeviceRequest,
+  AuthSessionLifetime,
   AuthEnvironmentScope,
   ServerAuthSessionMethod,
   AuthSessionId,
@@ -120,6 +121,7 @@ export interface ServerPairingLinkRecord {
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly connectDeviceRequest?: AuthConnectDeviceRequest;
+  readonly lifetime?: AuthSessionLifetime;
 }
 
 export interface ServerClientSessionRecord {

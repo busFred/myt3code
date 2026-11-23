@@ -7,6 +7,7 @@ import {
   linkListState,
   runLinkBatch,
 } from "@t3tools/client-runtime/link-batch";
+import type { BothWaysOutcome, BothWaysStep } from "@t3tools/client-runtime/link-both-ways";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   AuthAccessWriteScope,
@@ -19,7 +20,7 @@ import { useId, useRef, useState } from "react";
 
 import { useEnvironments } from "~/state/environments";
 import { mintPairingCodeOn } from "~/state/peerPairingCode";
-import { peerLinkEnvironment, useLinkableMachines, useLinkBackOffers } from "~/state/peerLinks";
+import { peerLinkEnvironment, useLinkableMachines } from "~/state/peerLinks";
 import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentsWithScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -36,10 +37,20 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
+import { BothWaysOption, BothWaysResults, useBothWaysRunner } from "./BothWays";
 import { LinkAccessPicker } from "./LinkAccessPicker";
+import {
+  DEFAULT_LIFETIME_CHOICE,
+  type LifetimeChoice,
+  isLifetimeChoiceValid,
+  summarizeBothWays,
+} from "./sessionLifetime.logic";
 
 const NO_MACHINES: ReadonlySet<EnvironmentId> = new Set();
 const NO_OUTCOMES: ReadonlyMap<EnvironmentId, LinkBatchOutcome> = new Map();
+const NO_STEPS: ReadonlyMap<EnvironmentId, ReadonlyMap<BothWaysStep, BothWaysOutcome>> = new Map();
+// Each machine signs in to two others at once, so fewer run together than a plain batch.
+const BOTH_WAYS_CONCURRENCY = 2;
 
 export function LinkSeveralEnvironmentsAction({
   environmentId,
@@ -102,39 +113,25 @@ export function LinkSeveralEnvironmentsDialog({
   const [access, setAccess] = useState<AuthMcpClientAccess>("approval-required");
   const [outcomes, setOutcomes] = useState(NO_OUTCOMES);
   const [linking, setLinking] = useState(NO_MACHINES);
+  const [bothWays, setBothWays] = useState(true);
+  const [lifetime, setLifetime] = useState<LifetimeChoice>(DEFAULT_LIFETIME_CHOICE);
+  const [steps, setSteps] = useState(NO_STEPS);
+  const runBothWays = useBothWaysRunner();
   // Enter then a click can both run before a re-render; this guard is synchronous.
   const inFlight = useRef(false);
   // The failure cause holds the request, and with it the code; keep it out of the console.
-  const quiet = { reportFailure: false, reportDefect: false };
   const link = useAtomCommand(peerLinkEnvironment.linkInBatch, {
     label: "link several environments",
-    ...quiet,
+    reportFailure: false,
+    reportDefect: false,
   });
-  // Each machine links back once, so each refreshes its own list.
-  const linkOn = useAtomCommand(peerLinkEnvironment.link, {
-    label: "link environment back",
-    ...quiet,
-  });
-  const [alsoLinkBack, setAlsoLinkBack] = useState(false);
   const candidates = linkBatchCandidates(machines, writable, linksState);
   const selectable = candidates.flatMap(({ machine, blocked }) =>
     blocked === null && outcomes.get(machine.environmentId)?.kind !== "linked" ? [machine] : [],
   );
   const chosen = selectable.filter((machine) => selected.has(machine.environmentId));
-  const linkBack = useLinkBackOffers(
-    environmentId,
-    selectable.map((machine) => machine.environmentId),
-    open,
-  );
-  const canLinkBack = (machine: { readonly environmentId: EnvironmentId }) =>
-    linkBack.offerFor(machine.environmentId).kind === "offered";
-  const backOffered = linkBack.source !== null && selectable.some(canLinkBack);
-  const oneWayOnly = chosen.filter((machine) => !canLinkBack(machine)).length;
   const busy = linking.size > 0;
   const summary = linkBatchSummary(outcomes);
-  const backFailed = [...outcomes.values()].filter(
-    (outcome) => outcome.kind === "linked" && outcome.back?.kind === "failed",
-  ).length;
   // Picked on the map, but only another machine's link names them: this app has no session there.
   const unlisted = (preset ?? []).filter(
     (id) => !candidates.some(({ machine }) => machine.environmentId === id),
@@ -146,7 +143,9 @@ export function LinkSeveralEnvironmentsDialog({
       setSelected(NO_MACHINES);
       setOutcomes(NO_OUTCOMES);
       setAccess("approval-required");
-      setAlsoLinkBack(false);
+      setBothWays(true);
+      setLifetime(DEFAULT_LIFETIME_CHOICE);
+      setSteps(NO_STEPS);
     }
   };
   const toggle = (id: EnvironmentId, checked: boolean) =>
@@ -156,44 +155,61 @@ export function LinkSeveralEnvironmentsDialog({
       else next.delete(id);
       return next;
     });
+  const finishOne = (id: EnvironmentId, outcome: LinkBatchOutcome) => {
+    setOutcomes((current) => new Map(current).set(id, outcome));
+    setLinking((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  };
+  const submitBothWays = async () => {
+    const results = new Map<EnvironmentId, LinkBatchOutcome>();
+    const queue = [...chosen];
+    const worker = async () => {
+      for (let machine = queue.shift(); machine !== undefined; machine = queue.shift()) {
+        const id = machine.environmentId;
+        const stepOutcomes = await runBothWays({
+          a: environmentId,
+          b: id,
+          aLinksToB: false,
+          access,
+          lifetime,
+          ...(steps.has(id) ? { previous: steps.get(id)! } : {}),
+        });
+        const outcome: LinkBatchOutcome =
+          stepOutcomes !== null && summarizeBothWays(stepOutcomes).complete
+            ? { kind: "linked" }
+            : { kind: "failed", failure: "other", detail: null };
+        if (stepOutcomes !== null) setSteps((current) => new Map(current).set(id, stepOutcomes));
+        results.set(id, outcome);
+        finishOne(id, outcome);
+      }
+    };
+    await Promise.all(Array.from({ length: BOTH_WAYS_CONCURRENCY }, worker));
+    links.refresh();
+    return results;
+  };
   const submit = async () => {
     if (inFlight.current || chosen.length === 0) return;
+    if (bothWays && !isLifetimeChoiceValid(lifetime)) return;
     inFlight.current = true;
     setLinking(new Set(chosen.map((machine) => machine.environmentId)));
-    const results = await runLinkBatch({
-      machines: chosen,
-      access,
-      mint: mintPairingCodeOn,
-      link: async (input) => {
-        const result = await link({ environmentId, input });
-        return result._tag === "Success"
-          ? Result.succeed(result.value)
-          : Result.fail(squashAtomCommandFailure(result));
-      },
-      ...(alsoLinkBack && linkBack.source !== null
-        ? {
-            back: {
-              source: linkBack.source,
-              targets: new Set(chosen.filter(canLinkBack).map((machine) => machine.environmentId)),
-              link: async (targetId, input) => {
-                const result = await linkOn({ environmentId: targetId, input });
-                return result._tag === "Success"
-                  ? Result.succeed(result.value)
-                  : Result.fail(squashAtomCommandFailure(result));
-              },
-            },
-          }
-        : {}),
-      refreshLinks: links.refresh,
-      onOutcome: (id, outcome) => {
-        setOutcomes((current) => new Map(current).set(id, outcome));
-        setLinking((current) => {
-          const next = new Set(current);
-          next.delete(id);
-          return next;
+    const results = bothWays
+      ? await submitBothWays()
+      : await runLinkBatch({
+          machines: chosen,
+          access,
+          mint: mintPairingCodeOn,
+          link: async (input) => {
+            const result = await link({ environmentId, input });
+            return result._tag === "Success"
+              ? Result.succeed(result.value)
+              : Result.fail(squashAtomCommandFailure(result));
+          },
+          refreshLinks: links.refresh,
+          onOutcome: finishOne,
         });
-      },
-    });
     inFlight.current = false;
     setLinking(NO_MACHINES);
     // What failed stays picked, so linking again retries only those.
@@ -297,21 +313,10 @@ export function LinkSeveralEnvironmentsDialog({
                     const id = machine.environmentId;
                     const outcome = outcomes.get(id);
                     const available = blocked === null && outcome?.kind !== "linked";
-                    const back = outcome?.kind === "linked" ? outcome.back : undefined;
                     const status = linking.has(id)
                       ? gt("Linking…")
                       : outcome?.kind === "linked"
-                        ? back?.kind === "linked"
-                          ? gt("Linked both ways", {
-                              $context:
-                                "status of a machine that was just linked in both directions",
-                            })
-                          : back?.kind === "failed"
-                            ? gt("Linked one way", {
-                                $context:
-                                  "status of a machine: the link to it was made, the link back from it failed",
-                              })
-                            : gt("Linked", { $context: "status of a machine that was just linked" })
+                        ? gt("Linked", { $context: "status of a machine that was just linked" })
                         : outcome?.kind === "failed"
                           ? linkBatchFailureLabel(outcome.failure, m)
                           : blocked === null
@@ -331,23 +336,22 @@ export function LinkSeveralEnvironmentsDialog({
                           />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-medium">{machine.label}</span>
-                            {outcome?.kind === "failed" && outcome.detail !== null ? (
+                            {outcome?.kind === "failed" && steps.has(id) ? (
+                              <BothWaysResults
+                                outcomes={steps.get(id)!}
+                                aLabel={sourceLabel ?? environmentId}
+                                bLabel={machine.label}
+                              />
+                            ) : outcome?.kind === "failed" && outcome.detail !== null ? (
                               <span className="block text-xs text-destructive">
                                 {outcome.detail}
-                              </span>
-                            ) : null}
-                            {back?.kind === "failed" ? (
-                              <span className="block text-xs text-destructive">
-                                {gt("Could not link back: {reason}", {
-                                  reason: back.detail ?? linkBatchFailureLabel(back.failure, m),
-                                })}
                               </span>
                             ) : null}
                           </span>
                           {status === null ? null : (
                             <span
                               className={
-                                outcome?.kind === "failed" || back?.kind === "failed"
+                                outcome?.kind === "failed"
                                   ? "shrink-0 text-xs text-destructive"
                                   : "shrink-0 text-xs text-muted-foreground"
                               }
@@ -380,38 +384,16 @@ export function LinkSeveralEnvironmentsDialog({
                       "Linked {linked} of {total}. The ones that failed stay selected, so you can try them again.",
                       { linked: summary.linked, total: outcomes.size },
                     )}
-                {backFailed > 0
-                  ? ` ${gt(
-                      "{count, plural, one {# machine could not link back.} other {# machines could not link back.}}",
-                      { count: backFailed },
-                    )}`
-                  : null}
               </p>
             ) : null}
             <LinkAccessPicker value={access} onChange={setAccess} disabled={busy} />
-            {backOffered && sourceLabel !== undefined ? (
-              <label className="flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default">
-                <Checkbox
-                  checked={alsoLinkBack}
-                  disabled={busy}
-                  onCheckedChange={setAlsoLinkBack}
-                />
-                <span className="min-w-0 space-y-0.5">
-                  <span className="block font-medium text-foreground">
-                    {gt("Also link each machine back to {source}", { source: sourceLabel })}
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    {gt("Agents there can then work on {source} too.", { source: sourceLabel })}
-                    {alsoLinkBack && oneWayOnly > 0
-                      ? ` ${gt(
-                          "{count, plural, one {# machine stays one-way.} other {# machines stay one-way.}}",
-                          { count: oneWayOnly },
-                        )}`
-                      : null}
-                  </span>
-                </span>
-              </label>
-            ) : null}
+            <BothWaysOption
+              checked={bothWays}
+              onCheckedChange={setBothWays}
+              lifetime={lifetime}
+              onLifetimeChange={setLifetime}
+              disabled={busy}
+            />
           </form>
         </DialogPanel>
         <DialogFooter variant="bare">

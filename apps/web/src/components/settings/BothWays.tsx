@@ -1,0 +1,241 @@
+import { useAtomValue } from "@effect/atom-react";
+import type { BothWaysOutcome, BothWaysStep } from "@t3tools/client-runtime/link-both-ways";
+import { linkBatchFailureLabel } from "@t3tools/client-runtime/link-batch";
+import type { AuthMcpClientAccess, EnvironmentId } from "@t3tools/contracts";
+import { T, useGT, useMessages } from "gt-react";
+import { useId } from "react";
+
+import { bothWaysSide, linkEnvironmentsBothWays } from "~/state/bothWays";
+import { relayEnvironmentDiscovery } from "~/state/relay";
+import { Checkbox } from "../ui/checkbox";
+import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import {
+  type LifetimeChoice,
+  type LifetimeMode,
+  isLifetimeChoiceValid,
+  lifetimeFromChoice,
+  linkDoneIn,
+  MAX_CUSTOM_LIFETIME_DAYS,
+} from "./sessionLifetime.logic";
+
+/** How long a device stays signed in: the default 30 days, a number of days, or never. */
+export function SessionLifetimePicker({
+  value,
+  onChange,
+  disabled = false,
+  label,
+}: {
+  readonly value: LifetimeChoice;
+  readonly onChange: (next: LifetimeChoice) => void;
+  readonly disabled?: boolean;
+  readonly label: string;
+}) {
+  const gt = useGT();
+  const labelId = useId();
+  const names: Record<LifetimeMode, string> = {
+    default: gt("30 days"),
+    custom: gt("Custom…"),
+    never: gt("Never"),
+  };
+  return (
+    <div className="space-y-1.5">
+      <span id={labelId} className="block text-xs font-medium text-foreground">
+        {label}
+      </span>
+      <div className="flex items-center gap-2">
+        <Select
+          value={value.mode}
+          disabled={disabled}
+          onValueChange={(next) => {
+            if (next !== null) onChange({ ...value, mode: next as LifetimeMode });
+          }}
+        >
+          <SelectTrigger aria-labelledby={labelId}>
+            <SelectValue>{names[value.mode]}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup alignItemWithTrigger={false}>
+            {(["default", "custom", "never"] as const).map((mode) => (
+              <SelectItem key={mode} value={mode} hideIndicator>
+                {names[mode]}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        {value.mode === "custom" ? (
+          <>
+            <Input
+              value={value.days}
+              onChange={(event) => onChange({ ...value, days: event.target.value })}
+              disabled={disabled}
+              inputMode="numeric"
+              aria-label={gt("Days")}
+              aria-invalid={!isLifetimeChoiceValid(value)}
+              className="w-24"
+              nativeInput
+            />
+            <span className="text-xs text-muted-foreground">
+              {gt("days, up to {max}", { max: MAX_CUSTOM_LIFETIME_DAYS })}
+            </span>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** The "Link both ways" choice with the device lifetime it applies to both links. */
+export function BothWaysOption({
+  checked,
+  onCheckedChange,
+  lifetime,
+  onLifetimeChange,
+  disabled = false,
+}: {
+  readonly checked: boolean;
+  readonly onCheckedChange: (checked: boolean) => void;
+  readonly lifetime: LifetimeChoice;
+  readonly onLifetimeChange: (next: LifetimeChoice) => void;
+  readonly disabled?: boolean;
+}) {
+  const gt = useGT();
+  return (
+    <div className="space-y-3">
+      <label className="flex cursor-pointer items-start gap-2.5">
+        <Checkbox
+          className="mt-0.5"
+          checked={checked}
+          disabled={disabled}
+          onCheckedChange={(next) => onCheckedChange(next === true)}
+        />
+        <span className="min-w-0">
+          <span className="block text-xs font-medium text-foreground">
+            <T>Link both ways</T>
+          </span>
+          <span className="block text-xs text-muted-foreground">
+            <T>
+              Also links the other machine back to this one and invites its desktop app to connect.
+              Turns on Labs → Linked environments on either machine where it is off.
+            </T>
+          </span>
+        </span>
+      </label>
+      {checked ? (
+        <SessionLifetimePicker
+          label={gt("How long both links and the invited app stay signed in")}
+          value={lifetime}
+          onChange={onLifetimeChange}
+          disabled={disabled}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+const STEPS: ReadonlyArray<BothWaysStep> = ["enable_a", "enable_b", "a_to_b", "b_to_a", "invite"];
+
+/** Each step's outcome, with what went wrong for the failed ones. */
+export function BothWaysResults({
+  outcomes,
+  aLabel,
+  bLabel,
+}: {
+  readonly outcomes: ReadonlyMap<BothWaysStep, BothWaysOutcome>;
+  readonly aLabel: string;
+  readonly bLabel: string;
+}) {
+  const gt = useGT();
+  const m = useMessages();
+  const stepLabel = (step: BothWaysStep) => {
+    switch (step) {
+      case "enable_a":
+        return gt("Turn on Linked environments on {label}", { label: aLabel });
+      case "enable_b":
+        return gt("Turn on Linked environments on {label}", { label: bLabel });
+      case "a_to_b":
+        return gt("{from} links to {to}", { from: aLabel, to: bLabel });
+      case "b_to_a":
+        return gt("{from} links to {to}", { from: bLabel, to: aLabel });
+      case "invite":
+        return gt("Invite the desktop app on {label}", { label: bLabel });
+    }
+  };
+  const failureLabel = (outcome: Extract<BothWaysOutcome, { kind: "failed" }>) => {
+    switch (outcome.failure) {
+      case "unsupported":
+        return gt("That machine runs an older T3 Code");
+      case "disabled":
+        return gt("Linked environments could not be turned on");
+      case "no_address":
+        return gt("No address the other machine can reach");
+      default:
+        return linkBatchFailureLabel(outcome.failure, m);
+    }
+  };
+  return (
+    <ul className="space-y-1 rounded-lg border px-3 py-2 text-xs" aria-live="polite">
+      {STEPS.flatMap((step) => {
+        const outcome = outcomes.get(step);
+        if (outcome === undefined || (outcome.kind === "skipped" && step.startsWith("enable"))) {
+          return [];
+        }
+        return [
+          <li key={step} className="flex items-baseline justify-between gap-3">
+            <span className="min-w-0 text-foreground">{stepLabel(step)}</span>
+            <span
+              className={
+                outcome.kind === "failed"
+                  ? "shrink-0 text-right text-destructive"
+                  : "shrink-0 text-muted-foreground"
+              }
+            >
+              {outcome.kind === "done"
+                ? gt("Done")
+                : outcome.kind === "skipped"
+                  ? gt("Already done")
+                  : outcome.detail !== null
+                    ? `${failureLabel(outcome)}: ${outcome.detail}`
+                    : failureLabel(outcome)}
+            </span>
+          </li>,
+        ];
+      })}
+    </ul>
+  );
+}
+
+/** Links `a` and `b` both ways with this client's sessions; finished links of `previous` are left alone. */
+export function useBothWaysRunner() {
+  const gt = useGT();
+  const relays = useAtomValue(relayEnvironmentDiscovery.stateValueAtom).environments;
+  return async (input: {
+    readonly a: EnvironmentId;
+    readonly b: EnvironmentId;
+    readonly aLinksToB: boolean;
+    readonly access: AuthMcpClientAccess;
+    readonly lifetime: LifetimeChoice;
+    readonly previous?: ReadonlyMap<BothWaysStep, BothWaysOutcome>;
+  }) => {
+    const a = bothWaysSide({
+      environmentId: input.a,
+      other: input.b,
+      relays,
+      linksToOther: input.aLinksToB || linkDoneIn(input.previous, "a_to_b"),
+    });
+    const b = bothWaysSide({
+      environmentId: input.b,
+      other: input.a,
+      relays,
+      linksToOther: linkDoneIn(input.previous, "b_to_a"),
+    });
+    if (a === null || b === null) return null;
+    return linkEnvironmentsBothWays({
+      a,
+      b,
+      access: input.access,
+      lifetime: lifetimeFromChoice(input.lifetime),
+      invite: input.previous?.get("invite")?.kind !== "done",
+      appCodeLabel: (label) => gt("App for {label}", { label }),
+    });
+  };
+}

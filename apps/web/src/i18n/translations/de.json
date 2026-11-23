@@ -3213,7 +3213,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "auf dem Computer, der diese Seite geöffnet hat"]
+      "c": [
+        " ",
+        "auf dem Computer, der diese Seite geöffnet hat"
+      ]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3225,7 +3228,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "· wer es ausführt, erhält diesen Zugriff"]
+      "c": [
+        " ",
+        "· wer es ausführt, erhält diesen Zugriff"
+      ]
     }
   ],
   "c54cc9c75db9dc58": "Genehmige nur eine Anmeldung, die du gerade selbst gestartet hast.",
@@ -12975,5 +12981,55 @@
   "201490988858b511": "zurückgezogen von {by}",
   "99451a5d2d40440f": "Zurückgezogen von {by}.",
   "3ee30a50b70fffab": "Zurückgezogen von {by}: {reason}",
-  "92e129bf413a1220": "zurückgezogen"
+  "92e129bf413a1220": "zurückgezogen",
+  "a6a23cdfeab043e4": "Die neue Umgebung",
+  "98c2dcdb49430af2": "Das ist bereits die eigene Umgebung dieser App.",
+  "2bc9803da3548323": "Anmeldung dort noch nicht möglich. Versuche es erneut.",
+  "987dd083ff600aa6": "Dieser Kopplungscode kann dort den Zugriff nicht verwalten und deshalb nicht in beide Richtungen verknüpfen. Erstelle dafür einen Link mit Zugriffsverwaltung.",
+  "cef3e04249cf6f9d": "Diese App kann den Zugriff auf ihrer eigenen Umgebung nicht verwalten.",
+  "2a22283ae14a546f": "Beidseitiges Verknüpfen war nicht möglich.",
+  "51bb7b44a16e7413": "In beide Richtungen verknüpft",
+  "033532163e6d3834": "Beidseitig verknüpfen…",
+  "5d6170336779ed42": "Gerät bleibt angemeldet: läuft nie ab",
+  "5efc829ed4370124": "{days, plural, one {Gerät bleibt {days} Tag angemeldet} other {Gerät bleibt {days} Tage angemeldet}}",
+  "6f8d4d7274376cf6": "1 Jahr",
+  "502ca86119230a02": "Verlängern",
+  "3f698d5e79505a0a": "Läuft nie ab",
+  "ec1e05f70a1e6dc3": "Dieser Rechner nutzt ein älteres T3 Code",
+  "58e825b94e6fcb3c": "Die Gerätelaufzeit wurde ignoriert, das Gerät bleibt daher die üblichen 30 Tage angemeldet.",
+  "cf060d5e1c411769": "Wie lange das Gerät angemeldet bleibt",
+  "68974fa0aa568d45": "App-Einladung: {label}",
+  "82c7bf10b67fc60e": "Tage, höchstens {max}",
+  "0a6ab54e5711001b": "Wie lange beide Verknüpfungen und die eingeladene App angemeldet bleiben",
+  "d28fd0a693772016": "Verknüpfte Umgebungen auf {label} aktivieren",
+  "877eab868bf435c9": "{from} verknüpft mit {to}",
+  "fe7778a97d957f1c": "Desktop-App auf {label} einladen",
+  "6ccdfad04ff27a4d": "Dieser Rechner nutzt ein älteres T3 Code",
+  "991889647f0f391a": "Verknüpfte Umgebungen konnten nicht aktiviert werden",
+  "621917f76e618d34": "Keine Adresse, die der andere Rechner erreichen kann",
+  "78821aeb6235a718": "Bereits erledigt",
+  "4832793f4309ff73": "App für {label}",
+  "0774359db08acd8f": "In beide Richtungen verknüpfen",
+  "314d7b467b50ba88": "Verknüpft auch den anderen Rechner mit diesem und lädt dessen Desktop-App zur Verbindung ein. Aktiviert Labs → Verknüpfte Umgebungen auf jedem Rechner, auf dem es aus ist.",
+  "419f172a19dc331a": "Clientzugriff konnte nicht verlängert werden",
+  "069d9205c8700651": "Diese Sitzung existiert nicht mehr.",
+  "a8e9f58d8faf45f0": "Clientzugriff konnte nicht verlängert werden.",
+  "2541a73e72f9e44a": "App-Einladung konnte nicht widerrufen werden.",
+  "6062346df1f17381": "App-Einladung konnte nicht widerrufen werden",
+  "2bea02a4a288fec6": "Eine Änderung von Tailscale HTTPS startet den Hintergrunddienst neu. Die App verbindet sich automatisch wieder.",
+  "9cde2ab0345b89aa": "Eine Änderung des Netzwerkzugriffs startet den Hintergrunddienst neu und unterbricht laufende Agent-Durchläufe und Verbindungen. Die App verbindet sich automatisch wieder.",
+  "2a56c9df0b9c9467": "Eine Änderung von Tailscale HTTPS startet den Hintergrunddienst neu und unterbricht laufende Agent-Durchläufe und Verbindungen. Die App verbindet sich automatisch wieder.",
+  "b7ff604b0117a7f3": "{label} läuft nie ab",
+  "c5f7f0ec3acd416f": "Nicht jede Verknüpfung konnte verlängert werden",
+  "1a099eba3c8687b9": "Ein Rechner meldet die Sitzung seiner Verknüpfung nicht. Verknüpfe ihn erneut, um zu verlängern.",
+  "86938fc827b974e9": "Prüfe, ob diese App dort mit Zugriffsverwaltung angemeldet ist.",
+  "7c552118dea0baba": "Läuft nie ab (beidseitig)",
+  "417a94d0f381aaf6": "Beide Rechner müssen in dieser App gespeichert sein.",
+  "42ff9ac282ca2ee1": "{label} in beide Richtungen verknüpft",
+  "325b0c35844a559f": "Jedes Mal fragen",
+  "b7155ccb61cda676": "Nur App beenden",
+  "1a9b7ef6139ec759": "App beenden und Dienst stoppen",
+  "092d7ccda12b583e": "Beendigungsverhalten konnte nicht gespeichert werden.",
+  "2f1268d157d95b42": "Lege fest, ob der Hintergrunddienst nach dem Beenden der App weiterläuft.",
+  "b6151aba5c92d5d9": "Beim Beenden, während mit dem Hintergrunddienst verbunden"
 }

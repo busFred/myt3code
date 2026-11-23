@@ -2,6 +2,8 @@ import { errorDisplayMessage, thrownErrorMessage } from "@t3tools/client-runtime
 import { m as resolveMessage } from "~/i18n/messages";
 import { managedCapabilityDenial } from "@t3tools/client-runtime/contract-labels";
 import { SessionPermissions } from "./SessionPermissions";
+import type { AuthSessionLifetime } from "@t3tools/contracts";
+import { isMissingEndpointFailure } from "./sessionLifetime.logic";
 import { useSearch } from "@tanstack/react-router";
 import { ChevronRightIcon, EllipsisIcon } from "lucide-react";
 import { useAtom, useAtomValue } from "@effect/atom-react";
@@ -357,6 +359,10 @@ function ConnectionsSettingsContent({
     string | null
   >(null);
   const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
+  const [renewingClientSessionId, setRenewingClientSessionId] = useState<string | null>(null);
+  const [revokingAppInviteId, setRevokingAppInviteId] = useState<string | null>(null);
+  // The access stream sends invites only with its snapshot, so revoked ones are hidden here.
+  const [revokedAppInviteIds, setRevokedAppInviteIds] = useState<ReadonlySet<string>>(new Set());
   const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
   const [routeTarget, setRouteTarget] = useState<EnvironmentPresentation | null>(null);
   // An address the map already knows for the machine being added; remounts the dialog with it.
@@ -451,6 +457,10 @@ function ConnectionsSettingsContent({
     reportFailure: false,
   });
   const revokeClient = useAtomCommand(authEnvironment.revokeClient, { reportFailure: false });
+  const renewClient = useAtomCommand(authEnvironment.renewClient, { reportFailure: false });
+  const revokeAppInvite = useAtomCommand(authEnvironment.revokeAppInvite, {
+    reportFailure: false,
+  });
   const revokeOtherClients = useAtomCommand(authEnvironment.revokeOtherClients, {
     reportFailure: false,
   });
@@ -492,6 +502,11 @@ function ConnectionsSettingsContent({
         toDesktopClientSessionRecord(clientSession),
       ),
     );
+  })();
+  const appInvites = (() => {
+    const event = authAccessChanges.data;
+    if (event?.type !== "snapshot") return [];
+    return (event.payload.appInvites ?? []).filter((invite) => !revokedAppInviteIds.has(invite.id));
   })();
   const isLocalBackendNetworkAccessible = desktopBridge
     ? desktopServerExposureState?.mode === "network-accessible"
@@ -688,6 +703,78 @@ function ConnectionsSettingsContent({
       );
     }
     setRevokingDesktopClientSessionId(null);
+  };
+
+  const handleRenewDesktopClientSession = async (
+    sessionId: ServerClientSessionRecord["sessionId"],
+    lifetime: AuthSessionLifetime,
+  ) => {
+    if (
+      accessEnvironmentId === null ||
+      !readEnvironmentScope(accessEnvironmentId, AuthAccessWriteScope)
+    )
+      return;
+    setRenewingClientSessionId(sessionId);
+    setDesktopAccessManagementMutationError(null);
+    const result = await renewClient({
+      environmentId: accessEnvironmentId,
+      input: { sessionId, lifetime },
+    });
+    if (result._tag === "Success" && !result.value.renewed) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: gt("Could not renew client access"),
+          description: gt("That session no longer exists."),
+        }),
+      );
+    } else if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      const message = isMissingEndpointFailure(error)
+        ? gt("That machine runs an older T3 Code")
+        : error instanceof Error
+          ? (thrownErrorMessage(error, resolveMessage) ?? error.message)
+          : gt("Failed to renew client access.");
+      setDesktopAccessManagementMutationError(message);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: gt("Could not renew client access"),
+          description: message,
+        }),
+      );
+    }
+    setRenewingClientSessionId(null);
+  };
+
+  const handleRevokeAppInvite = async (id: string) => {
+    if (
+      accessEnvironmentId === null ||
+      !readEnvironmentScope(accessEnvironmentId, AuthAccessWriteScope)
+    )
+      return;
+    setRevokingAppInviteId(id);
+    setDesktopAccessManagementMutationError(null);
+    const result = await revokeAppInvite({ environmentId: accessEnvironmentId, input: { id } });
+    if (result._tag === "Success") {
+      setRevokedAppInviteIds((current) => new Set(current).add(id));
+    } else if (!isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      const message = isMissingEndpointFailure(error)
+        ? gt("That machine runs an older T3 Code")
+        : error instanceof Error
+          ? (thrownErrorMessage(error, resolveMessage) ?? error.message)
+          : gt("Failed to revoke app invite.");
+      setDesktopAccessManagementMutationError(message);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: gt("Could not revoke app invite"),
+          description: message,
+        }),
+      );
+    }
+    setRevokingAppInviteId(null);
   };
 
   const handleRevokeOtherDesktopClients = async () => {
@@ -1199,6 +1286,7 @@ function ConnectionsSettingsContent({
   const renderPairingClientsList = (
     pairingLinks: typeof visibleDesktopPairingLinks,
     clientSessions: typeof desktopClientSessions,
+    invites: typeof appInvites = [],
   ) => (
     <PairingClientsList
       servedByEnvironment={isPrimaryAccess}
@@ -1214,6 +1302,11 @@ function ConnectionsSettingsContent({
       revokingClientSessionId={revokingDesktopClientSessionId}
       onRevokePairingLink={handleRevokeDesktopPairingLink}
       onRevokeClientSession={requestRevokeClientSession}
+      renewingClientSessionId={renewingClientSessionId}
+      onRenewClientSession={handleRenewDesktopClientSession}
+      appInvites={invites}
+      revokingAppInviteId={revokingAppInviteId}
+      onRevokeAppInvite={handleRevokeAppInvite}
       canRevoke={canWriteAccess}
     />
   );
@@ -1224,7 +1317,7 @@ function ConnectionsSettingsContent({
           <p className="text-xs text-destructive">{desktopAccessManagementError}</p>
         </div>
       ) : null}
-      {renderPairingClientsList(visibleDesktopPairingLinks, desktopClientSessions)}
+      {renderPairingClientsList(visibleDesktopPairingLinks, desktopClientSessions, appInvites)}
     </>
   );
   const renderNetworkAccessRow = () => (

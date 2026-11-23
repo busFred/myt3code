@@ -3212,7 +3212,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "sur l’ordinateur qui a ouvert cette page"]
+      "c": [
+        " ",
+        "sur l’ordinateur qui a ouvert cette page"
+      ]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3224,7 +3227,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "· quiconque l’exécute obtient cet accès"]
+      "c": [
+        " ",
+        "· quiconque l’exécute obtient cet accès"
+      ]
     }
   ],
   "c54cc9c75db9dc58": "N’approuvez qu’une connexion que vous venez de lancer.",
@@ -12975,5 +12981,55 @@
   "201490988858b511": "retirée par {by}",
   "99451a5d2d40440f": "Retirée par {by}.",
   "3ee30a50b70fffab": "Retirée par {by} : {reason}",
-  "92e129bf413a1220": "retirée"
+  "92e129bf413a1220": "retirée",
+  "a6a23cdfeab043e4": "Le nouvel environnement",
+  "98c2dcdb49430af2": "C'est déjà l'environnement propre à cette app.",
+  "2bc9803da3548323": "Connexion impossible pour l'instant. Réessayez.",
+  "987dd083ff600aa6": "Ce code d'appairage ne permet pas de gérer l'accès là-bas, il ne peut donc pas associer dans les deux sens. Créez pour cela un lien avec gestion de l'accès.",
+  "cef3e04249cf6f9d": "Cette app ne peut pas gérer l'accès sur son propre environnement.",
+  "2a22283ae14a546f": "Impossible d'associer dans les deux sens.",
+  "51bb7b44a16e7413": "Associé dans les deux sens",
+  "033532163e6d3834": "Association dans les deux sens…",
+  "5d6170336779ed42": "L'appareil reste connecté : n'expire jamais",
+  "5efc829ed4370124": "{days, plural, one {L'appareil reste connecté {days} jour} other {L'appareil reste connecté {days} jours}}",
+  "6f8d4d7274376cf6": "1 an",
+  "502ca86119230a02": "Renouveler",
+  "3f698d5e79505a0a": "N'expire jamais",
+  "ec1e05f70a1e6dc3": "Cette machine utilise une version plus ancienne de T3 Code",
+  "58e825b94e6fcb3c": "La durée de l'appareil a été ignorée : il reste connecté 30 jours, la durée par défaut.",
+  "cf060d5e1c411769": "Durée pendant laquelle l'appareil reste connecté",
+  "68974fa0aa568d45": "Invitation d'app : {label}",
+  "82c7bf10b67fc60e": "jours, au plus {max}",
+  "0a6ab54e5711001b": "Durée pendant laquelle les deux associations et l'app invitée restent connectées",
+  "d28fd0a693772016": "Activer Environnements associés sur {label}",
+  "877eab868bf435c9": "{from} s'associe à {to}",
+  "fe7778a97d957f1c": "Inviter l'app de bureau sur {label}",
+  "6ccdfad04ff27a4d": "Cette machine utilise une version plus ancienne de T3 Code",
+  "991889647f0f391a": "Impossible d'activer Environnements associés",
+  "621917f76e618d34": "Aucune adresse que l'autre machine puisse joindre",
+  "78821aeb6235a718": "Déjà fait",
+  "4832793f4309ff73": "App pour {label}",
+  "0774359db08acd8f": "Associer dans les deux sens",
+  "314d7b467b50ba88": "Associe aussi l'autre machine à celle-ci et invite son app de bureau à s'y connecter. Active Labs → Environnements associés sur chaque machine où c'est désactivé.",
+  "419f172a19dc331a": "Impossible de renouveler l'accès du client",
+  "069d9205c8700651": "Cette session n'existe plus.",
+  "a8e9f58d8faf45f0": "Échec du renouvellement de l'accès du client.",
+  "2541a73e72f9e44a": "Échec de la révocation de l'invitation d'app.",
+  "6062346df1f17381": "Impossible de révoquer l'invitation d'app",
+  "2bea02a4a288fec6": "Modifier Tailscale HTTPS redémarre le service en arrière-plan. L'app se reconnecte automatiquement.",
+  "9cde2ab0345b89aa": "Modifier l'accès réseau redémarre le service en arrière-plan et interrompt ses tours d'agent et connexions en cours. L'app se reconnecte automatiquement.",
+  "2a56c9df0b9c9467": "Modifier Tailscale HTTPS redémarre le service en arrière-plan et interrompt ses tours d'agent et connexions en cours. L'app se reconnecte automatiquement.",
+  "b7ff604b0117a7f3": "{label} n'expire jamais",
+  "c5f7f0ec3acd416f": "Impossible de renouveler toutes les associations",
+  "1a099eba3c8687b9": "Une machine ne signale pas la session de son association. Associez-la de nouveau pour renouveler.",
+  "86938fc827b974e9": "Vérifiez que cette app y est connectée avec la gestion de l'accès.",
+  "7c552118dea0baba": "N'expire jamais (dans les deux sens)",
+  "417a94d0f381aaf6": "Les deux machines doivent être enregistrées dans cette app.",
+  "42ff9ac282ca2ee1": "{label} associé dans les deux sens",
+  "325b0c35844a559f": "Toujours demander",
+  "b7155ccb61cda676": "Quitter l'app uniquement",
+  "1a9b7ef6139ec759": "Quitter l'app et arrêter le service",
+  "092d7ccda12b583e": "Impossible d'enregistrer le comportement à la fermeture.",
+  "2f1268d157d95b42": "Choisissez si le service en arrière-plan reste actif après la fermeture de l'app.",
+  "b6151aba5c92d5d9": "À la fermeture lorsque l'app est connectée au service en arrière-plan"
 }

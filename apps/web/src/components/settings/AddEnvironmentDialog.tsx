@@ -6,9 +6,12 @@ import { useAtomValue } from "@effect/atom-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { T, useGT, useMessages, Var } from "gt-react";
 import {
+  AuthAccessWriteScope,
   type DesktopDiscoveredSshHost,
   type DesktopSshEnvironmentTarget,
+  type EnvironmentId,
 } from "@t3tools/contracts";
+import type { BothWaysOutcome, BothWaysStep } from "@t3tools/client-runtime/link-both-ways";
 import {
   RelayConnectionRegistration,
   RelayConnectionTarget,
@@ -45,14 +48,28 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { AnimatedHeight } from "../AnimatedHeight";
+import { BothWaysOption, BothWaysResults, useBothWaysRunner } from "./BothWays";
+import {
+  DEFAULT_LIFETIME_CHOICE,
+  type LifetimeChoice,
+  isLifetimeChoiceValid,
+  summarizeBothWays,
+} from "./sessionLifetime.logic";
 import { environmentCatalog } from "~/connection/catalog";
 import {
   connectPairing as connectPairingAtom,
   connectSshEnvironment as connectSshEnvironmentAtom,
 } from "~/connection/onboarding";
+import { waitForEnvironmentSession } from "~/state/bothWays";
 import { useEnvironmentQuery } from "~/state/query";
+import { readEnvironmentScope } from "~/state/session";
 import { desktopSshHostsStateAtom, filterDiscoveredSshHosts } from "~/state/desktopSshHosts";
-import { type EnvironmentPresentation, useRelayEnvironmentDiscovery } from "~/state/environments";
+import {
+  type EnvironmentPresentation,
+  readEnvironment,
+  readPrimaryEnvironmentId,
+  useRelayEnvironmentDiscovery,
+} from "~/state/environments";
 import type { AddEnvironmentPrefill } from "~/state/linkedThreadView";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { primaryServerKeybindingsAtom } from "~/state/server";
@@ -135,6 +152,17 @@ export function AddEnvironmentDialog({
   const highlightedSshHostRef = useRef<DesktopDiscoveredSshHost | undefined>(undefined);
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
   const savedBackendSessionRef = useRef(0);
+  const [bothWays, setBothWays] = useState(true);
+  const [lifetime, setLifetime] = useState<LifetimeChoice>(DEFAULT_LIFETIME_CHOICE);
+  // Set once an environment was added with "Link both ways" on, until the dialog closes.
+  const [bothWaysRun, setBothWaysRun] = useState<{
+    readonly environmentId: EnvironmentId;
+    readonly label: string;
+    readonly running: boolean;
+    readonly outcomes: ReadonlyMap<BothWaysStep, BothWaysOutcome> | null;
+    readonly reason: string | null;
+  } | null>(null);
+  const runBothWays = useBothWaysRunner();
   const isSshDiscoveryActive = desktopBridge !== undefined && open && savedBackendMode === "ssh";
   const desktopSshHosts = useEnvironmentQuery(
     isSshDiscoveryActive ? desktopSshHostsStateAtom : null,
@@ -173,8 +201,75 @@ export function AddEnvironmentDialog({
       setSavedBackendSshHost("");
       setSavedBackendSshUsername("");
       setSavedBackendSshPort("");
+      setBothWays(true);
+      setLifetime(DEFAULT_LIFETIME_CHOICE);
+      setBothWaysRun(null);
     }
     onOpenChange(nextOpen);
+  };
+  const primaryEnvironmentId = readPrimaryEnvironmentId();
+  const offersBothWays = routeTarget === null && primaryEnvironmentId !== null;
+  const linkBothWays = async (
+    environmentId: EnvironmentId,
+    previous?: ReadonlyMap<BothWaysStep, BothWaysOutcome>,
+  ) => {
+    const session = savedBackendSessionRef.current;
+    const label = savedEnvironments.find((entry) => entry.environmentId === environmentId)?.label;
+    const current = (patch: Partial<NonNullable<typeof bothWaysRun>>) =>
+      session === savedBackendSessionRef.current
+        ? setBothWaysRun((run) => (run === null ? null : { ...run, ...patch }))
+        : undefined;
+    setBothWaysRun({
+      environmentId,
+      label: label ?? gt("The new environment"),
+      running: true,
+      outcomes: previous ?? null,
+      reason: null,
+    });
+    const loaded =
+      primaryEnvironmentId !== null && (await waitForEnvironmentSession(environmentId));
+    const savedLabel = readEnvironment(environmentId)?.label;
+    if (savedLabel !== undefined) current({ label: savedLabel });
+    if (primaryEnvironmentId === null || primaryEnvironmentId === environmentId) {
+      current({ running: false, reason: gt("This is already this app's own environment.") });
+      return;
+    }
+    if (!loaded) {
+      current({ running: false, reason: gt("Could not sign in to it yet. Try again.") });
+      return;
+    }
+    if (!readEnvironmentScope(environmentId, AuthAccessWriteScope)) {
+      current({
+        running: false,
+        reason: gt(
+          "This pairing code cannot manage access there, so it cannot link both ways. Create a link with access management to do that.",
+        ),
+      });
+      return;
+    }
+    if (!readEnvironmentScope(primaryEnvironmentId, AuthAccessWriteScope)) {
+      current({
+        running: false,
+        reason: gt("This app cannot manage access on its own environment."),
+      });
+      return;
+    }
+    const outcomes = await runBothWays({
+      a: primaryEnvironmentId,
+      b: environmentId,
+      aLinksToB: false,
+      access: "approval-required",
+      lifetime,
+      ...(previous === undefined ? {} : { previous }),
+    });
+    current({
+      running: false,
+      outcomes,
+      reason: outcomes === null ? gt("Could not link both ways.") : null,
+    });
+    if (outcomes !== null && summarizeBothWays(outcomes).complete) {
+      toastManager.add({ type: "success", title: gt("Linked both ways") });
+    }
   };
   const connectSavedBackendSshTarget = async (target: DesktopSshEnvironmentTarget) => {
     const session = savedBackendSessionRef.current;
@@ -275,6 +370,16 @@ export function AddEnvironmentDialog({
       return;
     }
 
+    if (bothWays && offersBothWays) {
+      setIsAddingSavedBackend(false);
+      toastManager.add({
+        type: "success",
+        title: gt("Backend added"),
+        description: gt("The environment is saved and will reconnect on app startup."),
+      });
+      await linkBothWays(result.value);
+      return;
+    }
     handleOpenChange(false);
     toastManager.add(
       routeTarget
@@ -453,8 +558,56 @@ export function AddEnvironmentDialog({
           <T>Paste a full pairing URL here to fill both fields automatically.</T>
         </span>
       </div>
+      {offersBothWays ? (
+        <BothWaysOption
+          checked={bothWays}
+          onCheckedChange={setBothWays}
+          lifetime={lifetime}
+          onLifetimeChange={setLifetime}
+          disabled={isAddingSavedBackend || bothWaysRun !== null}
+        />
+      ) : null}
     </div>
   );
+  const renderBothWaysRun = () =>
+    bothWaysRun === null ? null : (
+      <div className="space-y-3" role="status">
+        {bothWaysRun.outcomes !== null ? (
+          <BothWaysResults
+            outcomes={bothWaysRun.outcomes}
+            aLabel={
+              savedEnvironments.find((entry) => entry.environmentId === primaryEnvironmentId)
+                ?.label ?? gt("This machine")
+            }
+            bLabel={bothWaysRun.label}
+          />
+        ) : null}
+        {bothWaysRun.running ? (
+          <p className="text-xs text-muted-foreground">
+            <T>Linking both ways…</T>
+          </p>
+        ) : bothWaysRun.reason !== null ? (
+          <p className="text-xs text-destructive">{bothWaysRun.reason}</p>
+        ) : null}
+        <div className="flex justify-end gap-2">
+          {bothWaysRun.running ||
+          (bothWaysRun.outcomes !== null &&
+            summarizeBothWays(bothWaysRun.outcomes).complete) ? null : (
+            <Button
+              variant="outline"
+              onClick={() =>
+                void linkBothWays(bothWaysRun.environmentId, bothWaysRun.outcomes ?? undefined)
+              }
+            >
+              <T>Retry</T>
+            </Button>
+          )}
+          <Button disabled={bothWaysRun.running} onClick={() => handleOpenChange(false)}>
+            <T>Done</T>
+          </Button>
+        </div>
+      </div>
+    );
   const relayRouteOffer =
     routeTarget !== null &&
     !routeTarget.relayManaged &&
@@ -512,11 +665,16 @@ export function AddEnvironmentDialog({
         </div>
       ) : null}
       {renderRemoteFields()}
+      {renderBothWaysRun()}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
       <Button
         variant="outline"
         className="w-full"
-        disabled={isAddingSavedBackend}
+        disabled={
+          isAddingSavedBackend ||
+          bothWaysRun !== null ||
+          (bothWays && offersBothWays && !isLifetimeChoiceValid(lifetime))
+        }
         onClick={() => void handleAddSavedBackend()}
       >
         <PlusIcon className="size-3.5" />

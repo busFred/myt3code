@@ -4,6 +4,7 @@ import type { PeerLinkHealth } from "@t3tools/client-runtime/state/peerLinks";
 import {
   AuthMcpClientAccess,
   type EnvironmentId,
+  isNeverExpiring,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -844,12 +845,14 @@ function LinkDetails({
           )}
         >
           <HealthGlyph health={health} />
-          {peerLinkStatusText(health, gt)}
+          {peerLinkStatusText(health, gt, isNeverExpiring(link.expiresAt))}
         </dd>
         <dt className={term}>
           {gt("Expires", { $context: "label before the date a link expires" })}
         </dt>
-        <dd className="text-foreground">{when(link.expiresAt)}</dd>
+        <dd className="text-foreground">
+          {isNeverExpiring(link.expiresAt) ? gt("Never") : when(link.expiresAt)}
+        </dd>
         <dt className={term}>{gt("Addresses")}</dt>
         <dd className="min-w-0 font-mono text-2xs break-all text-foreground">
           {link.urls.map((url) => (

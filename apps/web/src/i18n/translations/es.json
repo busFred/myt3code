@@ -3212,7 +3212,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "en el ordenador que abrió esta página"]
+      "c": [
+        " ",
+        "en el ordenador que abrió esta página"
+      ]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3224,7 +3227,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "· quien lo ejecute obtiene este acceso"]
+      "c": [
+        " ",
+        "· quien lo ejecute obtiene este acceso"
+      ]
     }
   ],
   "c54cc9c75db9dc58": "Aprueba solo un inicio de sesión que acabes de iniciar.",
@@ -12970,5 +12976,55 @@
   "201490988858b511": "retirada por {by}",
   "99451a5d2d40440f": "Retirada por {by}.",
   "3ee30a50b70fffab": "Retirada por {by}: {reason}",
-  "92e129bf413a1220": "retirada"
+  "92e129bf413a1220": "retirada",
+  "a6a23cdfeab043e4": "El nuevo entorno",
+  "98c2dcdb49430af2": "Este ya es el propio entorno de esta app.",
+  "2bc9803da3548323": "Aún no se pudo iniciar sesión allí. Inténtalo de nuevo.",
+  "987dd083ff600aa6": "Este código de emparejamiento no puede administrar el acceso allí, así que no puede vincular en ambos sentidos. Crea un enlace con administración de acceso para hacerlo.",
+  "cef3e04249cf6f9d": "Esta app no puede administrar el acceso en su propio entorno.",
+  "2a22283ae14a546f": "No se pudo vincular en ambos sentidos.",
+  "51bb7b44a16e7413": "Vinculado en ambos sentidos",
+  "033532163e6d3834": "Vinculando en ambos sentidos…",
+  "5d6170336779ed42": "El dispositivo mantiene la sesión: nunca caduca",
+  "5efc829ed4370124": "{days, plural, one {El dispositivo mantiene la sesión {days} día} other {El dispositivo mantiene la sesión {days} días}}",
+  "6f8d4d7274376cf6": "1 año",
+  "502ca86119230a02": "Renovar",
+  "3f698d5e79505a0a": "Nunca caduca",
+  "ec1e05f70a1e6dc3": "Esta máquina usa una versión anterior de T3 Code",
+  "58e825b94e6fcb3c": "Ignoró la duración del dispositivo, así que este inicia sesión durante los 30 días predeterminados.",
+  "cf060d5e1c411769": "Cuánto tiempo mantiene la sesión el dispositivo",
+  "68974fa0aa568d45": "Invitación de app: {label}",
+  "82c7bf10b67fc60e": "días, hasta {max}",
+  "0a6ab54e5711001b": "Cuánto tiempo mantienen la sesión ambos vínculos y la app invitada",
+  "d28fd0a693772016": "Activar Entornos vinculados en {label}",
+  "877eab868bf435c9": "{from} se vincula con {to}",
+  "fe7778a97d957f1c": "Invitar a la app de escritorio de {label}",
+  "6ccdfad04ff27a4d": "Esa máquina usa una versión anterior de T3 Code",
+  "991889647f0f391a": "No se pudieron activar los Entornos vinculados",
+  "621917f76e618d34": "Ninguna dirección a la que pueda llegar la otra máquina",
+  "78821aeb6235a718": "Ya hecho",
+  "4832793f4309ff73": "App para {label}",
+  "0774359db08acd8f": "Vincular en ambos sentidos",
+  "314d7b467b50ba88": "También vincula la otra máquina con esta e invita a su app de escritorio a conectarse. Activa Labs → Entornos vinculados en la máquina donde esté desactivado.",
+  "419f172a19dc331a": "No se pudo renovar el acceso del cliente",
+  "069d9205c8700651": "Esa sesión ya no existe.",
+  "a8e9f58d8faf45f0": "No se pudo renovar el acceso del cliente.",
+  "2541a73e72f9e44a": "No se pudo revocar la invitación de la app.",
+  "6062346df1f17381": "No se pudo revocar la invitación de la app",
+  "2bea02a4a288fec6": "Cambiar Tailscale HTTPS reinicia el servicio en segundo plano. La app se reconecta automáticamente.",
+  "9cde2ab0345b89aa": "Cambiar el acceso a la red reinicia el servicio en segundo plano e interrumpe los turnos de agente y las conexiones en curso. La app se reconecta automáticamente.",
+  "2a56c9df0b9c9467": "Cambiar Tailscale HTTPS reinicia el servicio en segundo plano e interrumpe los turnos de agente y las conexiones en curso. La app se reconecta automáticamente.",
+  "b7ff604b0117a7f3": "{label} nunca caduca",
+  "c5f7f0ec3acd416f": "No se pudieron renovar todos los vínculos",
+  "1a099eba3c8687b9": "Una máquina no informa de la sesión de su vínculo. Vuelve a vincularla para renovar.",
+  "86938fc827b974e9": "Comprueba que esta app haya iniciado sesión allí con administración de acceso.",
+  "7c552118dea0baba": "Nunca caduca (en ambos sentidos)",
+  "417a94d0f381aaf6": "Ambas máquinas deben estar guardadas en esta app.",
+  "42ff9ac282ca2ee1": "{label} vinculado en ambos sentidos",
+  "325b0c35844a559f": "Preguntar siempre",
+  "b7155ccb61cda676": "Salir solo de la app",
+  "1a9b7ef6139ec759": "Salir de la app y detener el servicio",
+  "092d7ccda12b583e": "No se pudo guardar el comportamiento al salir.",
+  "2f1268d157d95b42": "Elige si el servicio en segundo plano sigue en ejecución al salir de la app.",
+  "b6151aba5c92d5d9": "Al salir estando conectado al servicio en segundo plano"
 }

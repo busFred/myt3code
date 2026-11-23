@@ -118,6 +118,11 @@ export function createPeerLinkEnvironmentAtoms<R, E>(
       if (wanted.every((id) => known.has(id))) return;
       registry.refresh(atom);
     },
+    // Reads the links once without joining the shared list: a renewal needs the other side's.
+    listNow: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:peer-links:list-now",
+      tag: WS_METHODS.peerLinksList,
+    }),
     link: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:peer-links:link",
       tag: WS_METHODS.peerLinksLink,

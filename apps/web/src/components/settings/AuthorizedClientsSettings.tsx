@@ -3,9 +3,12 @@ import { m as resolveMessage } from "~/i18n/messages";
 import { managedCapabilityDenial } from "@t3tools/client-runtime/contract-labels";
 import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
 import { PlugIcon, PlusIcon, QrCodeIcon } from "lucide-react";
+import type { AuthAppInvite, AuthSessionLifetime } from "@t3tools/contracts";
 import { type ReactNode, memo, useId, useRef, useState } from "react";
+import * as DateTime from "effect/DateTime";
 import { T, useGT, useMessages } from "gt-react";
 import {
+  isNeverExpiring,
   AuthAccessWriteScope,
   AuthDiagnosticsReadScope,
   AuthOrchestrationReadScope,
@@ -53,6 +56,18 @@ import { QRCodeSvg } from "../ui/qr-code";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { SessionLifetimePicker } from "./BothWays";
+import {
+  DEFAULT_LIFETIME_CHOICE,
+  type LifetimeChoice,
+  RENEW_LIFETIMES,
+  type RenewLifetimeId,
+  canRenewSession,
+  describeLifetime,
+  isLifetimeChoiceValid,
+  lifetimeFromChoice,
+} from "./sessionLifetime.logic";
 import { Textarea } from "../ui/textarea";
 import {
   type ServerClientSessionRecord,
@@ -123,6 +138,54 @@ function AccessScopeSummary({
         </div>
       </PopoverPopup>
     </Popover>
+  );
+}
+
+/** How long the device a link signs in stays signed in, when not the default. */
+function DeviceLifetimeLabel({ lifetime }: { readonly lifetime: AuthSessionLifetime }) {
+  const gt = useGT();
+  const described = describeLifetime(lifetime);
+  return (
+    <span>
+      {described.kind === "never"
+        ? gt("Device stays signed in: never expires")
+        : gt(
+            "{days, plural, one {Device stays signed in for {days} day} other {Device stays signed in for {days} days}}",
+            { days: described.days },
+          )}
+    </span>
+  );
+}
+
+const RENEW_LABELS = (gt: ReturnType<typeof useGT>): Record<RenewLifetimeId, string> => ({
+  "30-days": gt("30 days"),
+  "1-year": gt("1 year"),
+  never: gt("Never"),
+});
+
+/** Gives a signed-in device a new lifetime counted from now. */
+function RenewMenu({
+  disabled,
+  onRenew,
+}: {
+  readonly disabled: boolean;
+  readonly onRenew: (lifetime: AuthSessionLifetime) => void;
+}) {
+  const gt = useGT();
+  const labels = RENEW_LABELS(gt);
+  return (
+    <Menu>
+      <MenuTrigger render={<Button size="xs" variant="outline" disabled={disabled} />}>
+        {gt("Renew", { $context: "verb, gives a device a new lifetime" })}
+      </MenuTrigger>
+      <MenuPopup align="end">
+        {RENEW_LIFETIMES.map(({ id, lifetime }) => (
+          <MenuItem key={id} onClick={() => onRenew(lifetime)}>
+            {labels[id]}
+          </MenuItem>
+        ))}
+      </MenuPopup>
+    </Menu>
   );
 }
 
@@ -289,12 +352,20 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
           <p className="text-xs text-muted-foreground">
             <Tooltip>
               <TooltipTrigger render={<span />}>
-                {formatExpiresInLabel(pairingLink.expiresAt, nowMs, m)}
+                {isNeverExpiring(expiresAtMs)
+                  ? gt("Never expires")
+                  : formatExpiresInLabel(pairingLink.expiresAt, nowMs, m)}
               </TooltipTrigger>
               <TooltipPopup side="top">{expiresAbsolute}</TooltipPopup>
             </Tooltip>
             <span aria-hidden> · </span>
             <AccessScopeSummary scopes={pairingLink.scopes} label={gt("Pairing link scopes")} />
+            {pairingLink.lifetime !== undefined ? (
+              <>
+                <span aria-hidden> · </span>
+                <DeviceLifetimeLabel lifetime={pairingLink.lifetime} />
+              </>
+            ) : null}
           </p>
           {!credential ? (
             <p className="text-2xs text-muted-foreground/70">
@@ -506,6 +577,11 @@ type ConnectedClientListRowProps = {
   clientSession: ServerClientSessionRecord;
   revokingClientSessionId: string | null;
   onRevokeSession: (sessionId: ServerClientSessionRecord["sessionId"]) => void;
+  renewingClientSessionId: string | null;
+  onRenewSession: (
+    sessionId: ServerClientSessionRecord["sessionId"],
+    lifetime: AuthSessionLifetime,
+  ) => void;
   canRevoke: boolean;
 };
 
@@ -513,6 +589,8 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
   clientSession,
   revokingClientSessionId,
   onRevokeSession,
+  renewingClientSessionId,
+  onRenewSession,
   canRevoke,
 }: ConnectedClientListRowProps) {
   const gt = useGT();
@@ -567,9 +645,19 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
               </>
             ) : null}
             <AccessScopeSummary scopes={clientSession.scopes} label={gt("Client scopes")} />
+            <span aria-hidden> · </span>
+            {isNeverExpiring(new Date(clientSession.expiresAt).getTime())
+              ? gt("Never expires")
+              : formatExpiresInLabel(clientSession.expiresAt, nowMs, m)}
           </p>
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
+          {canRevoke && canRenewSession(clientSession) ? (
+            <RenewMenu
+              disabled={renewingClientSessionId === clientSession.sessionId}
+              onRenew={(lifetime) => onRenewSession(clientSession.sessionId, lifetime)}
+            />
+          ) : null}
           {!clientSession.current ? (
             <Button
               size="xs"
@@ -623,12 +711,14 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
   const terminalSelected = selectedScopes.includes(AuthTerminalOperateScope);
   const relayAdminSelected = selectedScopes.includes(AuthRelayConfigureScope);
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
+  const [lifetimeChoice, setLifetimeChoice] = useState<LifetimeChoice>(DEFAULT_LIFETIME_CHOICE);
 
   const handlePairingDialogOpenChange = (open: boolean) => {
     setDialogOpen(open);
     if (!open) {
       pairingDialogSessionRef.current += 1;
       setPairingLabel("");
+      setLifetimeChoice(DEFAULT_LIFETIME_CHOICE);
       setPairingScopes(
         AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope)),
       );
@@ -645,12 +735,27 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
     const dialogSession = pairingDialogSessionRef.current;
     setIsCreatingPairingLink(true);
     const trimmedLabel = pairingLabel.trim();
+    const lifetime = lifetimeFromChoice(lifetimeChoice);
     const result = await createPairingCredential({
       environmentId,
-      input: { ...(trimmedLabel ? { label: trimmedLabel } : {}), scopes: selectedScopes },
+      input: {
+        ...(trimmedLabel ? { label: trimmedLabel } : {}),
+        scopes: selectedScopes,
+        ...(lifetime === undefined ? {} : { lifetime }),
+      },
     });
     if (result._tag === "Success") {
       onPairingLinkCreated(result.value);
+      // An older server drops the lifetime and the result then carries none.
+      if (lifetime !== undefined && result.value.lifetime === undefined) {
+        toastManager.add({
+          type: "warning",
+          title: gt("This machine runs an older T3 Code"),
+          description: gt(
+            "It ignored the device lifetime, so the device signs in for the default 30 days.",
+          ),
+        });
+      }
       if (dialogSession === pairingDialogSessionRef.current) {
         handlePairingDialogOpenChange(false);
       }
@@ -736,6 +841,12 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
                 autoFocus
               />
             </label>
+            <SessionLifetimePicker
+              label={gt("How long the device stays signed in")}
+              value={lifetimeChoice}
+              onChange={setLifetimeChoice}
+              disabled={isCreatingPairingLink}
+            />
             <section className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -837,7 +948,11 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
               <T>Cancel</T>
             </Button>
             <Button
-              disabled={isCreatingPairingLink || selectedScopes.length === 0}
+              disabled={
+                isCreatingPairingLink ||
+                selectedScopes.length === 0 ||
+                !isLifetimeChoiceValid(lifetimeChoice)
+              }
               onClick={() => void handleCreatePairingLink()}
             >
               {isCreatingPairingLink ? gt("Creating…") : gt("Create link")}
@@ -863,6 +978,14 @@ type PairingClientsListProps = {
   revokingClientSessionId: string | null;
   onRevokePairingLink: (id: string) => void;
   onRevokeClientSession: (sessionId: ServerClientSessionRecord["sessionId"]) => void;
+  renewingClientSessionId: string | null;
+  onRenewClientSession: (
+    sessionId: ServerClientSessionRecord["sessionId"],
+    lifetime: AuthSessionLifetime,
+  ) => void;
+  appInvites: ReadonlyArray<AuthAppInvite>;
+  revokingAppInviteId: string | null;
+  onRevokeAppInvite: (id: string) => void;
   canRevoke: boolean;
 };
 
@@ -880,6 +1003,11 @@ export const PairingClientsList = memo(function PairingClientsList({
   revokingClientSessionId,
   onRevokePairingLink,
   onRevokeClientSession,
+  renewingClientSessionId,
+  onRenewClientSession,
+  appInvites,
+  revokingAppInviteId,
+  onRevokeAppInvite,
   canRevoke,
 }: PairingClientsListProps) {
   return (
@@ -906,11 +1034,26 @@ export const PairingClientsList = memo(function PairingClientsList({
           clientSession={clientSession}
           revokingClientSessionId={revokingClientSessionId}
           onRevokeSession={onRevokeClientSession}
+          renewingClientSessionId={renewingClientSessionId}
+          onRenewSession={onRenewClientSession}
           canRevoke={canRevoke}
         />
       ))}
 
-      {pairingLinks.length === 0 && clientSessions.length === 0 && !isLoading ? (
+      {appInvites.map((invite) => (
+        <AppInviteListRow
+          key={invite.id}
+          invite={invite}
+          revoking={revokingAppInviteId === invite.id}
+          onRevoke={onRevokeAppInvite}
+          canRevoke={canRevoke}
+        />
+      ))}
+
+      {pairingLinks.length === 0 &&
+      clientSessions.length === 0 &&
+      appInvites.length === 0 &&
+      !isLoading ? (
         <div className={ITEM_ROW_CLASSNAME}>
           <p className="text-xs text-muted-foreground/60">
             <T>No pairing links or client sessions.</T>
@@ -918,6 +1061,55 @@ export const PairingClientsList = memo(function PairingClientsList({
         </div>
       ) : null}
     </>
+  );
+});
+
+/** An environment this machine's own desktop app is invited to connect to. */
+const AppInviteListRow = memo(function AppInviteListRow({
+  invite,
+  revoking,
+  onRevoke,
+  canRevoke,
+}: {
+  invite: AuthAppInvite;
+  revoking: boolean;
+  onRevoke: (id: string) => void;
+  canRevoke: boolean;
+}) {
+  const gt = useGT();
+  const m = useMessages();
+  const nowMs = useNowSecond();
+  const expiresAt = DateTime.formatIso(invite.expiresAt);
+  return (
+    <div className={ITEM_ROW_CLASSNAME}>
+      <div className={ITEM_ROW_INNER_CLASSNAME}>
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex min-h-5 items-center gap-1.5">
+            <h3 className="text-sm font-medium text-foreground">
+              {gt("App invite: {label}", { label: invite.label })}
+            </h3>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            <Tooltip>
+              <TooltipTrigger render={<span />}>
+                {formatExpiresInLabel(expiresAt, nowMs, m)}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{formatAccessTimestamp(expiresAt)}</TooltipPopup>
+            </Tooltip>
+          </p>
+        </div>
+        <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
+          <Button
+            size="xs"
+            variant="destructive-outline"
+            disabled={!canRevoke || revoking}
+            onClick={() => onRevoke(invite.id)}
+          >
+            {revoking ? gt("Revoking…") : gt("Revoke")}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 });
 

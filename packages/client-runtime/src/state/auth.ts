@@ -161,6 +161,18 @@ export function createAuthEnvironmentAtoms<R, E>(
           request: ({ client, headers }) => client.revokeAppInvite({ headers, payload: input }),
         }),
     }),
+    /** Hands out and deletes the invites left for this environment's desktop app; older servers answer 404. */
+    takePendingAppInvites: createEnvironmentCommand(runtime, {
+      label: "environment-data:server:access-take-pending-app-invites",
+      execute: (_input: null) =>
+        executeConnectedEnvironmentHttpRequest({
+          group: "access",
+          method: "POST",
+          url: (urls) => urls.takePendingAppInvites(),
+          timeoutMs: ACCESS_REQUEST_TIMEOUT_MS,
+          request: ({ client, headers }) => client.takePendingAppInvites({ headers }),
+        }),
+    }),
     /** `peerLinks.link` over HTTP, optionally turning Linked environments on there first. */
     linkPeer: createEnvironmentCommand(runtime, {
       label: "environment-data:server:access-link-peer",
