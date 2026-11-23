@@ -108,6 +108,7 @@ export function AutoSettleSettingsRows(props: {
     patch: Partial<AutoSettleSettings> & {
       autoResumeLimitedThreads?: boolean;
       snoozeLimitedThreads?: boolean;
+      batchQueuedAgentMessages?: boolean;
     },
   ) => props.write(patch);
 
@@ -153,6 +154,20 @@ export function AutoSettleSettingsRows(props: {
             value={uniformMobileSetting(displayTargets, "snoozeLimitedThreads")}
             disabled={disabledFor("snoozeLimitedThreads")}
             onValueChange={(value) => writeToAll({ snoozeLimitedThreads: value })}
+          />
+        </SettingsSection>
+      ) : null}
+      {!projectSelected ? (
+        <SettingsSection title={gt("Queue", { $context: "settings section for queued messages" })}>
+          <SettingsSwitchRow
+            icon="tray.and.arrow.down"
+            label={gt("Batch queued messages from other threads")}
+            subtitle={gt(
+              "When messages from other threads wait at the front of a thread's queue, send them to the agent together as one turn. Your own messages always get their own turn.",
+            )}
+            value={uniformMobileSetting(displayTargets, "batchQueuedAgentMessages")}
+            disabled={disabledFor("batchQueuedAgentMessages")}
+            onValueChange={(value) => writeToAll({ batchQueuedAgentMessages: value })}
           />
         </SettingsSection>
       ) : null}

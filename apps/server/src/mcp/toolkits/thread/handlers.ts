@@ -38,6 +38,8 @@ function queueEntry(
   const characters = Array.from(message.text);
   return {
     queuedRunId: run.id,
+    createdBy: message.createdBy,
+    ...(message.senderThreadId === undefined ? {} : { senderThreadId: message.senderThreadId }),
     text: characters.slice(0, limit).join(""),
     truncated: characters.length > limit,
   };

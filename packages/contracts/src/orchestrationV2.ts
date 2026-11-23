@@ -604,6 +604,9 @@ export function isCompactionCommandMessage(message: CompactionMessageFields): bo
 
 const LEADING_COMMAND = /^\s*(?:\/|\p{Sc}[a-zA-Z0-9:_-]*[a-zA-Z])/u;
 
+/** Providers parse a slash command or skill mention such as `$deploy` at the start of a prompt. */
+export const startsWithProviderCommand = (text: string): boolean => LEADING_COMMAND.test(text);
+
 /**
  * Who sent a message, in a line the model reads before its text, or the text unchanged when a
  * person typed it. Providers parse slash commands and skill mentions such as `$deploy` from the
@@ -630,7 +633,7 @@ export function withMessageSenderNote(
           : agent && message.creationSource === "mcp"
             ? "[T3 Code: this message came through T3 Code's tools, not from the user typing in this chat.]"
             : undefined;
-  if (note === undefined || LEADING_COMMAND.test(text)) return text;
+  if (note === undefined || startsWithProviderCommand(text)) return text;
   return text === "" ? note : `${note}\n\n${text}`;
 }
 

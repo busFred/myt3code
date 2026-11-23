@@ -193,7 +193,12 @@ import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
-import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
+import {
+  batchedAgentMessage,
+  isAutomaticCompletionRun,
+  queuedAgentMessageBatch,
+  queuedRunsInDeliveryOrder,
+} from "./QueuedRunOrder.ts";
 import { isRuntimePolicyAboveCeilingError, RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
   endOrphanedNativeSubagent,
@@ -2518,7 +2523,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (storedQueuedRun === undefined) {
         return;
       }
-      const queuedMessage = projection.messages.find(
+      const storedQueuedMessage = projection.messages.find(
         (candidate) => candidate.id === storedQueuedRun.userMessageId,
       );
       const modelSelection = queuedRunModelSelection(projection, storedQueuedRun);
@@ -2606,6 +2611,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
         return wakes.length > 0;
       }
+      // Messages from other threads waiting at the head start as one run. A send-now names its run.
+      const batch =
+        options?.queuedRunId === undefined && settings.batchQueuedAgentMessages
+          ? queuedAgentMessageBatch(projection, storedQueuedRun)
+          : [];
+      const queuedMessage =
+        batch.length === 0 ? storedQueuedMessage : batchedAgentMessage(batch, yield* DateTime.now);
       // Move queued ordinals after runs that started while they waited to preserve transcript and checkpoint order.
       // Started runs have prompts; cancelled queued messages do not.
       const newerRunIds = projection.runs
@@ -3045,7 +3057,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           {
             createdBy: queuedMessage.createdBy,
             creationSource: queuedMessage.creationSource,
-            senderThreadId: queuedMessage.senderThreadId,
+            senderThreadId: batch[0]?.message.senderThreadId ?? queuedMessage.senderThreadId,
             notification: queuedMessage.notification,
             delegatedCompletion: queuedMessage.delegatedCompletion,
             restartContinuationOfRunId: queuedRun.restartContinuationOfRunId,
@@ -3295,6 +3307,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             },
           })),
           ...executionIdentityEvents,
+          ...batch.slice(1).flatMap(({ run }) => queuedRunCancellationEvents(projection, run, now)),
+          ...(batch.length === 0
+            ? []
+            : [
+                {
+                  type: "message.updated" as const,
+                  threadId,
+                  runId: queuedRun.id,
+                  nodeId: rootNodeId,
+                  providerInstanceId: queuedRun.providerInstanceId,
+                  occurredAt: now,
+                  payload: queuedMessage,
+                },
+              ]),
           {
             type: "provider-thread.updated",
             threadId,
