@@ -1122,6 +1122,10 @@ export interface DesktopBridge {
   /** False when the OS turned off middle-click PRIMARY paste (`gtk-enable-primary-paste`). */
   getPrimaryPasteEnabled?: () => boolean;
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
+  /** Windows and Linux only; absent or false elsewhere. */
+  getCloseToTray?: () => boolean;
+  /** Keeps T3 Code running in the system tray after its window is closed. */
+  setCloseToTray?: (enabled: boolean) => Promise<void>;
   getLocalEnvironmentEnabled: () => boolean;
   getServiceQuitBehavior: () => DesktopServiceQuitBehavior;
   setServiceQuitBehavior: (behavior: DesktopServiceQuitBehavior) => Promise<void>;

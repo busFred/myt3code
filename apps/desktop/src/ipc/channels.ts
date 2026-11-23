@@ -154,3 +154,5 @@ export const START_FILE_DRAG_CHANNEL = "desktop:start-file-drag";
 
 export const GET_SERVICE_QUIT_BEHAVIOR_CHANNEL = "desktop:get-service-quit-behavior";
 export const SET_SERVICE_QUIT_BEHAVIOR_CHANNEL = "desktop:set-service-quit-behavior";
+export const GET_CLOSE_TO_TRAY_CHANNEL = "desktop:get-close-to-tray";
+export const SET_CLOSE_TO_TRAY_CHANNEL = "desktop:set-close-to-tray";

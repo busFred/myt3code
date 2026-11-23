@@ -292,9 +292,17 @@ export const make = DesktopLifecycle.of({
         desktopWindow.syncAppearance.pipe(Effect.withSpan("desktop.lifecycle.themeUpdated")),
       );
     });
-    yield* electronApp.onSystemShutdown(() => {
+    // The OS is ending the session, so a tray-hidden window must really close.
+    const markSessionEnding = () => {
       quit.phase = "allowed";
-    });
+      // Synchronous, so it lands before the windows' close events that follow.
+      Effect.runSyncWith(context)(
+        Effect.gen(function* () {
+          yield* Ref.set((yield* DesktopState.DesktopState).quitting, true);
+        }),
+      );
+    };
+    yield* electronApp.onSystemShutdown(markSessionEnding);
     yield* electronApp.onBeforeQuitForUpdate(() => {
       // Electron's updater owns the remaining quit/install/relaunch sequence.
       // Cancelling the following app "before-quit" event breaks that sequence,
@@ -320,9 +328,7 @@ export const make = DesktopLifecycle.of({
         window.on("query-session-end", () => {
           quit.phase = "allowed";
         });
-        window.on("session-end", () => {
-          quit.phase = "allowed";
-        });
+        window.on("session-end", markSessionEnding);
       },
     );
     yield* electronApp.on("before-quit", (event: Electron.Event) => {

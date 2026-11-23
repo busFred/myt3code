@@ -71,6 +71,7 @@ export function LocalEnvironmentSetting() {
           />
         }
       />
+      <CloseToTraySetting />
       <ServiceQuitSetting />
       <AlertDialog
         open={confirmOpen}
@@ -171,6 +172,47 @@ function ServiceQuitSetting() {
             ))}
           </SelectPopup>
         </Select>
+      }
+    />
+  );
+}
+
+function CloseToTraySetting() {
+  const gt = useGT();
+  const searchableSetting = useSearchableSetting();
+  const bridge = window.desktopBridge;
+  const [enabled, setEnabled] = useState(() => bridge?.getCloseToTray?.() ?? false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const setCloseToTray = bridge?.setCloseToTray;
+  if (!setCloseToTray) return null;
+  const save = async (value: boolean) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await setCloseToTray(value);
+      setEnabled(value);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : gt("Couldn't change this setting."));
+    }
+    setSaving(false);
+  };
+  return (
+    <SettingsRow
+      {...searchableSetting("close-to-tray")}
+      description={
+        error ??
+        gt(
+          "Closing the window keeps T3 Code running in the system tray. Use the tray icon to show it again or quit. On GNOME, tray icons need the AppIndicator extension; launching T3 Code again also brings the window back.",
+        )
+      }
+      control={
+        <Switch
+          checked={enabled}
+          disabled={saving}
+          onCheckedChange={(checked) => void save(checked)}
+          aria-label={gt("Close to system tray")}
+        />
       }
     />
   );

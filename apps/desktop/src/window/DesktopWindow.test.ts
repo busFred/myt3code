@@ -109,6 +109,7 @@ function makeFakeBrowserWindow() {
     focus: vi.fn(),
     getBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
     getNormalBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
+    hide: vi.fn(),
     isDestroyed: vi.fn(() => false),
     isFullScreen: vi.fn(() => false),
     isMaximized: vi.fn(() => false),
@@ -138,6 +139,7 @@ function makeFakeBrowserWindow() {
     window: window as unknown as Electron.BrowserWindow,
     getBounds: window.getBounds,
     getNormalBounds: window.getNormalBounds,
+    hide: window.hide,
     isDestroyed: window.isDestroyed,
     isFullScreen: window.isFullScreen,
     isMaximized: window.isMaximized,
@@ -288,6 +290,7 @@ function layerTest(input: {
     setWslDistro: () => Effect.die("unexpected WSL distro change"),
     setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
     setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
+    setCloseToTray: () => Effect.die("unexpected close-to-tray toggle"),
     applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
     applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
   } satisfies DesktopAppSettings.DesktopAppSettings["Service"]);
@@ -1083,6 +1086,33 @@ describe("DesktopWindow", () => {
         assert.equal(fakeWindow.getNormalBounds.mock.calls.length, 1);
       }).pipe(Effect.provide(layer));
     }),
+  );
+
+  it.effect.each([
+    { trayActive: true, quitting: false, hidden: true },
+    { trayActive: true, quitting: true, hidden: false },
+    { trayActive: false, quitting: false, hidden: false },
+  ])(
+    "hides instead of closing only while the tray is active and the app is not quitting ($trayActive, $quitting)",
+    ({ trayActive, quitting, hidden }) =>
+      Effect.gen(function* () {
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          const state = yield* DesktopState.DesktopState;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+          yield* Ref.set(state.trayActive, trayActive);
+          yield* Ref.set(state.quitting, quitting);
+
+          const preventDefault = vi.fn();
+          fakeWindow.windowListeners.get("close")?.({ preventDefault });
+
+          assert.equal(preventDefault.mock.calls.length, hidden ? 1 : 0);
+          assert.equal(fakeWindow.hide.mock.calls.length, hidden ? 1 : 0);
+        }).pipe(Effect.provide(layerTest({ window: fakeWindow.window, createCount, mainWindow })));
+      }),
   );
 
   it.effect.each([
