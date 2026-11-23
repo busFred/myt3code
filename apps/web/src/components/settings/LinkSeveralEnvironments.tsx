@@ -7,6 +7,7 @@ import {
   linkListState,
   runLinkBatch,
 } from "@t3tools/client-runtime/link-batch";
+import type { BothWaysOutcome, BothWaysStep } from "@t3tools/client-runtime/link-both-ways";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   AuthAccessWriteScope,
@@ -36,10 +37,20 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../ui/dialog";
+import { BothWaysOption, BothWaysResults, useBothWaysRunner } from "./BothWays";
 import { LinkAccessPicker } from "./LinkAccessPicker";
+import {
+  DEFAULT_LIFETIME_CHOICE,
+  type LifetimeChoice,
+  isLifetimeChoiceValid,
+  summarizeBothWays,
+} from "./sessionLifetime.logic";
 
 const NO_MACHINES: ReadonlySet<EnvironmentId> = new Set();
 const NO_OUTCOMES: ReadonlyMap<EnvironmentId, LinkBatchOutcome> = new Map();
+const NO_STEPS: ReadonlyMap<EnvironmentId, ReadonlyMap<BothWaysStep, BothWaysOutcome>> = new Map();
+// Each machine signs in to two others at once, so fewer run together than a plain batch.
+const BOTH_WAYS_CONCURRENCY = 2;
 
 /**
  * Links the machines this app already reaches in one go. Each pairing code is
@@ -48,8 +59,10 @@ const NO_OUTCOMES: ReadonlyMap<EnvironmentId, LinkBatchOutcome> = new Map();
  */
 export function LinkSeveralEnvironmentsAction({
   environmentId,
+  environmentLabel,
 }: {
   readonly environmentId: EnvironmentId;
+  readonly environmentLabel: string;
 }) {
   const gt = useGT();
   const m = useMessages();
@@ -66,6 +79,10 @@ export function LinkSeveralEnvironmentsAction({
   const [access, setAccess] = useState<AuthMcpClientAccess>("approval-required");
   const [outcomes, setOutcomes] = useState(NO_OUTCOMES);
   const [linking, setLinking] = useState(NO_MACHINES);
+  const [bothWays, setBothWays] = useState(true);
+  const [lifetime, setLifetime] = useState<LifetimeChoice>(DEFAULT_LIFETIME_CHOICE);
+  const [steps, setSteps] = useState(NO_STEPS);
+  const runBothWays = useBothWaysRunner();
   // Enter then a click can both run before a re-render; this guard is synchronous.
   const inFlight = useRef(false);
   const link = useAtomCommand(peerLinkEnvironment.linkInBatch, {
@@ -88,6 +105,9 @@ export function LinkSeveralEnvironmentsAction({
       setSelected(NO_MACHINES);
       setOutcomes(NO_OUTCOMES);
       setAccess("approval-required");
+      setBothWays(true);
+      setLifetime(DEFAULT_LIFETIME_CHOICE);
+      setSteps(NO_STEPS);
     }
   };
   const toggle = (id: EnvironmentId, checked: boolean) =>
@@ -97,30 +117,61 @@ export function LinkSeveralEnvironmentsAction({
       else next.delete(id);
       return next;
     });
+  const finishOne = (id: EnvironmentId, outcome: LinkBatchOutcome) => {
+    setOutcomes((current) => new Map(current).set(id, outcome));
+    setLinking((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  };
+  const submitBothWays = async () => {
+    const results = new Map<EnvironmentId, LinkBatchOutcome>();
+    const queue = [...chosen];
+    const worker = async () => {
+      for (let machine = queue.shift(); machine !== undefined; machine = queue.shift()) {
+        const id = machine.environmentId;
+        const stepOutcomes = await runBothWays({
+          a: environmentId,
+          b: id,
+          aLinksToB: false,
+          access,
+          lifetime,
+          ...(steps.has(id) ? { previous: steps.get(id)! } : {}),
+        });
+        const outcome: LinkBatchOutcome =
+          stepOutcomes !== null && summarizeBothWays(stepOutcomes).complete
+            ? { kind: "linked" }
+            : { kind: "failed", failure: "other", detail: null };
+        if (stepOutcomes !== null) setSteps((current) => new Map(current).set(id, stepOutcomes));
+        results.set(id, outcome);
+        finishOne(id, outcome);
+      }
+    };
+    await Promise.all(Array.from({ length: BOTH_WAYS_CONCURRENCY }, worker));
+    links.refresh();
+    return results;
+  };
   const submit = async () => {
     if (inFlight.current || chosen.length === 0) return;
+    if (bothWays && !isLifetimeChoiceValid(lifetime)) return;
     inFlight.current = true;
     setLinking(new Set(chosen.map((machine) => machine.environmentId)));
-    const results = await runLinkBatch({
-      machines: chosen,
-      access,
-      mint: mintPairingCodeOn,
-      link: async (input) => {
-        const result = await link({ environmentId, input });
-        return result._tag === "Success"
-          ? Result.succeed(result.value)
-          : Result.fail(squashAtomCommandFailure(result));
-      },
-      refreshLinks: links.refresh,
-      onOutcome: (id, outcome) => {
-        setOutcomes((current) => new Map(current).set(id, outcome));
-        setLinking((current) => {
-          const next = new Set(current);
-          next.delete(id);
-          return next;
+    const results = bothWays
+      ? await submitBothWays()
+      : await runLinkBatch({
+          machines: chosen,
+          access,
+          mint: mintPairingCodeOn,
+          link: async (input) => {
+            const result = await link({ environmentId, input });
+            return result._tag === "Success"
+              ? Result.succeed(result.value)
+              : Result.fail(squashAtomCommandFailure(result));
+          },
+          refreshLinks: links.refresh,
+          onOutcome: finishOne,
         });
-      },
-    });
     inFlight.current = false;
     setLinking(NO_MACHINES);
     // What failed stays picked, so linking again retries only those.
@@ -248,7 +299,13 @@ export function LinkSeveralEnvironmentsAction({
                           />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-medium">{machine.label}</span>
-                            {outcome?.kind === "failed" && outcome.detail !== null ? (
+                            {outcome?.kind === "failed" && steps.has(id) ? (
+                              <BothWaysResults
+                                outcomes={steps.get(id)!}
+                                aLabel={environmentLabel}
+                                bLabel={machine.label}
+                              />
+                            ) : outcome?.kind === "failed" && outcome.detail !== null ? (
                               <span className="block text-xs text-destructive">
                                 {outcome.detail}
                               </span>
@@ -285,6 +342,13 @@ export function LinkSeveralEnvironmentsAction({
               </p>
             ) : null}
             <LinkAccessPicker value={access} onChange={setAccess} disabled={busy} />
+            <BothWaysOption
+              checked={bothWays}
+              onCheckedChange={setBothWays}
+              lifetime={lifetime}
+              onLifetimeChange={setLifetime}
+              disabled={busy}
+            />
           </form>
         </DialogPanel>
         <DialogFooter variant="bare">

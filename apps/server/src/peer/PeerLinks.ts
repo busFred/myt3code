@@ -104,6 +104,8 @@ export class PeerLinks extends Context.Service<
     readonly linkUnlessLinked: (
       input: PeerLinkCreateInput,
     ) => Effect.Effect<{ readonly link: PeerLink; readonly alreadyLinked: boolean }, PeerLinkError>;
+    /** Turns on Linked environments here when it is off; true when this call turned it on. */
+    readonly turnOn: Effect.Effect<boolean, PeerLinkError>;
     /** Links unless linked, first turning on Linked environments here when asked and it is off. */
     readonly linkEnabling: (
       input: PeerLinkCreateInput,
@@ -633,23 +635,26 @@ const make = Effect.gen(function* () {
   const linkUnlessLinked: PeerLinks["Service"]["linkUnlessLinked"] = (input) =>
     linkWith(input, true);
 
+  const turnOn: PeerLinks["Service"]["turnOn"] = Effect.gen(function* () {
+    if (yield* enabled) return false;
+    yield* serverSettings.updateSettings({ linkedEnvironmentsEnabled: true }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new PeerLinkError({
+            reason: "storage",
+            message: "Linked environments could not be turned on here.",
+            cause,
+          }),
+      ),
+    );
+    return true;
+  }).pipe(Effect.withSpan("PeerLinks.turnOn"));
+
   const linkEnabling: PeerLinks["Service"]["linkEnabling"] = Effect.fn("PeerLinks.linkEnabling")(
     function* (input, enableFirst) {
-      const turnOn = enableFirst && !(yield* enabled);
-      if (turnOn) {
-        yield* serverSettings.updateSettings({ linkedEnvironmentsEnabled: true }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new PeerLinkError({
-                reason: "storage",
-                message: "Linked environments could not be turned on here.",
-                cause,
-              }),
-          ),
-        );
-      }
+      const turnedOn = enableFirst ? yield* turnOn : false;
       const linked = yield* linkWith(input, true);
-      return { ...linked, enabledLinkedEnvironments: turnOn };
+      return { ...linked, enabledLinkedEnvironments: turnedOn };
     },
   );
 
@@ -814,6 +819,7 @@ const make = Effect.gen(function* () {
     enabled,
     link,
     linkUnlessLinked,
+    turnOn,
     linkEnabling,
     list,
     get,

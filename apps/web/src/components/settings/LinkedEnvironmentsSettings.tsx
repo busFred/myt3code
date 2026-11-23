@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { ANOTHER_ADDRESS, linkRequestFailureMessage } from "@t3tools/client-runtime/link-request";
 import {
+  isNeverExpiring,
   AuthAccessWriteScope,
   type AuthMcpClientAccess,
   type EnvironmentId,
@@ -14,14 +15,16 @@ import { peerLinkHealth } from "@t3tools/client-runtime/state/peerLinks";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
+import type { BothWaysOutcome, BothWaysStep } from "@t3tools/client-runtime/link-both-ways";
 import { PlusIcon } from "lucide-react";
 import { T, useGT, useMessages, Var } from "gt-react";
 import { useId, useRef, useState } from "react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
+import { readPeerLinks, renewLinksBothWays } from "~/state/bothWays";
 import { mintPairingCodeOn } from "~/state/peerPairingCode";
 import { peerLinkEnvironment, useLinkableMachines } from "~/state/peerLinks";
-import { useEnvironments } from "~/state/environments";
+import { useEnvironment, useEnvironments } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -43,7 +46,15 @@ import { Input } from "../ui/input";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import { LinkAccessPicker } from "./LinkAccessPicker";
+import { BothWaysOption, BothWaysResults, useBothWaysRunner } from "./BothWays";
 import { LinkAddressWarning, LinkMachineSelect } from "./LinkMachineSelect";
+import {
+  DEFAULT_LIFETIME_CHOICE,
+  type LifetimeChoice,
+  isLifetimeChoiceValid,
+  renewFailedSteps,
+  summarizeBothWays,
+} from "./sessionLifetime.logic";
 import { LinkSeveralEnvironmentsAction } from "./LinkSeveralEnvironments";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useLiveRefresh } from "../../hooks/useLiveRefresh";
@@ -98,9 +109,15 @@ export function LinkedEnvironmentsSettings({
         canLink ? (
           <div className="flex items-center gap-2">
             {otherMachines > 1 ? (
-              <LinkSeveralEnvironmentsAction environmentId={environmentId} />
+              <LinkSeveralEnvironmentsAction
+                environmentId={environmentId}
+                environmentLabel={environmentLabel ?? gt("This machine")}
+              />
             ) : null}
-            <LinkEnvironmentAction environmentId={environmentId} />
+            <LinkEnvironmentAction
+              environmentId={environmentId}
+              environmentLabel={environmentLabel}
+            />
           </div>
         ) : null
       }
@@ -143,6 +160,45 @@ function LinkedEnvironmentRow({
   const unlink = useAtomCommand(peerLinkEnvironment.unlink, { label: UNLINK_COMMAND_LABEL });
   const canUnlink = useAtomValue(peerLinkEnvironment.unlink.permissionAtom(environmentId));
   const [busy, setBusy] = useState(false);
+  const [renewing, setRenewing] = useState(false);
+  // The link's session lives on the machine it links to, and renewing it needs access
+  // management there, so only machines this app is signed in to offer it.
+  const savedPeer = useEnvironment(link.environmentId);
+  const mayManagePeer = useEnvironmentScope(link.environmentId, AuthAccessWriteScope);
+  const canNeverExpire = link.peerSessionId !== undefined && savedPeer !== null && mayManagePeer;
+  const neverExpire = async () => {
+    setRenewing(true);
+    const theirLinks = await readPeerLinks(link.environmentId);
+    const theirLink = theirLinks?.find((candidate) => candidate.environmentId === environmentId);
+    const outcomes = await renewLinksBothWays({
+      a: { environmentId, linkToOther: link },
+      b: {
+        environmentId: link.environmentId,
+        ...(theirLink === undefined ? {} : { linkToOther: theirLink }),
+      },
+      lifetime: { _tag: "never" },
+    });
+    setRenewing(false);
+    const failed = renewFailedSteps(outcomes);
+    if (failed.length === 0) {
+      toastManager.add({
+        type: "success",
+        title: gt("{label} never expires", { label: link.label }),
+      });
+      return;
+    }
+    const failures = [...outcomes.values()].flatMap((outcome) =>
+      outcome.kind === "failed" ? [outcome.failure] : [],
+    );
+    failureToast(
+      gt("Could not renew every link"),
+      failures.includes("unsupported")
+        ? gt("That machine runs an older T3 Code")
+        : failures.includes("unknown_session")
+          ? gt("A machine does not report its link's session. Link it again to renew.")
+          : gt("Check that this app is signed in there with access management."),
+    );
+  };
   const forget = async () => {
     const confirmed = await (requestConfirmDialog(
       gt(
@@ -171,7 +227,9 @@ function LinkedEnvironmentRow({
                 "{days, plural, one {Expires in {days} day. Link it again to renew.} other {Expires in {days} days. Link it again to renew.}}",
                 { days: health.expiresInDays },
               )
-            : gt("Reachable");
+            : isNeverExpiring(link.expiresAt)
+              ? gt("Never expires")
+              : gt("Reachable");
   return (
     <div className={ITEM_ROW_CLASSNAME}>
       <div className={ITEM_ROW_INNER_CLASSNAME}>
@@ -199,6 +257,16 @@ function LinkedEnvironmentRow({
         </div>
         {canUnlink ? (
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
+            {canNeverExpire && health.kind !== "expired" ? (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={busy || renewing}
+                onClick={() => void neverExpire()}
+              >
+                {renewing ? gt("Updating…") : gt("Never expire (both ways)")}
+              </Button>
+            ) : null}
             <Button
               size="xs"
               variant="destructive-outline"
@@ -214,7 +282,13 @@ function LinkedEnvironmentRow({
   );
 }
 
-function LinkEnvironmentAction({ environmentId }: { readonly environmentId: EnvironmentId }) {
+function LinkEnvironmentAction({
+  environmentId,
+  environmentLabel,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly environmentLabel: string | null;
+}) {
   const gt = useGT();
   const [open, setOpen] = useState(false);
   const machines = useLinkableMachines(environmentId, open);
@@ -224,6 +298,13 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
   const [pairingCode, setPairingCode] = useState("");
   const [access, setAccess] = useState<AuthMcpClientAccess>("approval-required");
   const [busy, setBusy] = useState(false);
+  const [bothWays, setBothWays] = useState(true);
+  const [lifetime, setLifetime] = useState<LifetimeChoice>(DEFAULT_LIFETIME_CHOICE);
+  const [bothWaysOutcomes, setBothWaysOutcomes] = useState<ReadonlyMap<
+    BothWaysStep,
+    BothWaysOutcome
+  > | null>(null);
+  const runBothWays = useBothWaysRunner();
   // Machines whose minting already failed, so the dialog asks for a code instead.
   const [mintFailed, setMintFailed] = useState<ReadonlySet<EnvironmentId>>(new Set());
   // Enter then a click can both run before a re-render; this guard is synchronous.
@@ -246,10 +327,15 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
     Option.isSome(connected) &&
     mayMint &&
     !mintFailed.has(targetId);
+  // Both ways mints a code on each machine with this app's own sessions, so only a
+  // machine this app is signed in to offers it.
+  const canLinkBothWays = machine !== null && canMint;
+  const linkingBothWays = canLinkBothWays && bothWays;
   const ready =
     selected !== null &&
     (!needsAddress || address.trim().length > 0) &&
-    (canMint || pairingCode.trim().length > 0);
+    (canMint || pairingCode.trim().length > 0) &&
+    (!linkingBothWays || isLifetimeChoiceValid(lifetime));
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     if (!next) {
@@ -258,6 +344,9 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
       setPairingCode("");
       setAccess("approval-required");
       setMintFailed(new Set());
+      setBothWays(true);
+      setLifetime(DEFAULT_LIFETIME_CHOICE);
+      setBothWaysOutcomes(null);
     }
   };
   // Settles to the code to link with, or null after reporting why there is none.
@@ -272,7 +361,40 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
     );
     return null;
   };
+  const submitBothWays = async (target: NonNullable<typeof machine>) => {
+    inFlight.current = true;
+    setBusy(true);
+    const outcomes = await runBothWays({
+      a: environmentId,
+      b: target.environmentId,
+      aLinksToB: target.linked,
+      access,
+      lifetime,
+      ...(bothWaysOutcomes === null ? {} : { previous: bothWaysOutcomes }),
+    });
+    inFlight.current = false;
+    setBusy(false);
+    if (outcomes === null) {
+      failureToast(
+        gt("Could not link the environment"),
+        gt("Both machines must be saved in this app."),
+      );
+      return;
+    }
+    setBothWaysOutcomes(outcomes);
+    if (summarizeBothWays(outcomes).complete) {
+      toastManager.add({
+        type: "success",
+        title: gt("Linked {label} both ways", { label: target.label }),
+      });
+      handleOpenChange(false);
+    }
+  };
   const submit = async () => {
+    if (linkingBothWays && machine !== null) {
+      if (!inFlight.current && ready) await submitBothWays(machine);
+      return;
+    }
     const [url, ...alternateUrls] =
       machine === null || needsAddress ? [address.trim()] : machine.urls;
     if (inFlight.current || !ready || url === undefined) return;
@@ -417,6 +539,22 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
               </label>
             )}
             <LinkAccessPicker value={access} onChange={setAccess} disabled={busy} />
+            {canLinkBothWays ? (
+              <BothWaysOption
+                checked={bothWays}
+                onCheckedChange={setBothWays}
+                lifetime={lifetime}
+                onLifetimeChange={setLifetime}
+                disabled={busy}
+              />
+            ) : null}
+            {bothWaysOutcomes !== null && machine !== null ? (
+              <BothWaysResults
+                outcomes={bothWaysOutcomes}
+                aLabel={environmentLabel ?? gt("This machine")}
+                bLabel={machine.label}
+              />
+            ) : null}
           </form>
         </DialogPanel>
         <DialogFooter variant="bare">
@@ -424,7 +562,11 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
             <T>Cancel</T>
           </DialogClose>
           <Button form={formId} type="submit" disabled={busy || !ready}>
-            {busy ? gt("Linking…") : gt("Link", { $context: "verb, links an environment" })}
+            {busy
+              ? gt("Linking…")
+              : bothWaysOutcomes !== null
+                ? gt("Retry")
+                : gt("Link", { $context: "verb, links an environment" })}
           </Button>
         </DialogFooter>
       </DialogPopup>

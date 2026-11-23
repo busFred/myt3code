@@ -107,6 +107,10 @@
       "types": "./src/linkBatch.ts",
       "default": "./src/linkBatch.ts"
     },
+    "./link-both-ways": {
+      "types": "./src/linkBothWays.ts",
+      "default": "./src/linkBothWays.ts"
+    },
     "./link-request": {
       "types": "./src/linkRequest.ts",
       "default": "./src/linkRequest.ts"
