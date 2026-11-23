@@ -190,12 +190,17 @@ it.effect("links with a pairing code, and the peer holds its agents to the limit
         access: "auto",
       });
       // B lists the link under A's name, where it can be revoked.
-      expect((yield* linkedSessions(b)).map((session) => session.client.label)).toEqual([
-        "T3 Code · Laptop",
-      ]);
+      const sessionsOnB = yield* linkedSessions(b);
+      expect(sessionsOnB.map((session) => session.client.label)).toEqual(["T3 Code · Laptop"]);
+      // A names that session, so a client can renew it on B.
+      expect(linked.peerSessionId).toBe(sessionsOnB[0]?.sessionId);
       expect(
-        (yield* a.links.list).map(({ environmentId, status }) => [environmentId, status]),
-      ).toEqual([[box.environmentId, "reachable"]]);
+        (yield* a.links.list).map(({ environmentId, status, peerSessionId }) => [
+          environmentId,
+          status,
+          peerSessionId,
+        ]),
+      ).toEqual([[box.environmentId, "reachable", sessionsOnB[0]?.sessionId]]);
 
       // The caller's limits narrow the link's access; they never widen it.
       expect(

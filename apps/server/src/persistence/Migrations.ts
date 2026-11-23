@@ -110,6 +110,7 @@ import Migration0099 from "./Migrations/099_BackgroundRecoveryIndexes.ts";
 import Migration0100 from "./Migrations/100_TurnStartReadIndexes.ts";
 import Migration0101 from "./Migrations/101_DelegatedTaskReadIndexes.ts";
 import Migration0102 from "./Migrations/102_ThreadItemCounts.ts";
+import { applyForkSchema, forkSchemaPending } from "./Migrations/ForkAuthLifetimes.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -289,7 +290,11 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
     FROM effect_sql_migrations
   `;
   const row = rows[0];
-  return (row?.latestId ?? 0) < latestMigrationId || (row?.previewRows ?? 0) > 0;
+  return (
+    (row?.latestId ?? 0) < latestMigrationId ||
+    (row?.previewRows ?? 0) > 0 ||
+    (yield* forkSchemaPending)
+  );
 });
 
 const run = Migrator.make({});
@@ -339,6 +344,10 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
       );
     }
     executedMigrations.push(...(yield* run({ loader: makeMigrationLoader(id) })));
+  }
+  // Only a missing part takes the write lock; CLI startup runs this on the live database.
+  if (toMigrationInclusive === undefined && (yield* forkSchemaPending)) {
+    yield* sql.withTransaction(applyForkSchema);
   }
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0

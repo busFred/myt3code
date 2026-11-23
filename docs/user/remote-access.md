@@ -136,6 +136,28 @@ created in Settings can only be copied from the client that created them while
 its Sharing & access page stays open. If you leave or reload that page, create
 another link to share.
 
+To choose how long the device stays signed in, pass `--expire` with a duration
+such as `90d` or `1y`, or `never`:
+
+```bash
+t3 pair --expire never
+```
+
+`--ttl` still sets how long the code itself can be used. `t3 auth pairing create`
+takes `--expire` too. A device paired with `never` stays signed in until you
+revoke it. A browser keeps its sign-in cookie for at most about 400 days, so T3
+Code sets it again each time the app loads there.
+
+To change a device that is already paired, find its session id with
+`t3 auth session list` and run:
+
+```bash
+t3 auth session renew <session-id> --expire never
+```
+
+A duration counts from now and can also end a session sooner. T3 Connect and
+desktop app sessions keep their own lifetimes.
+
 ### Reach one machine several ways
 
 A machine can have more than one route: LAN, Tailscale, another VPN, a public
@@ -474,7 +496,28 @@ an address you trust: the code is sent there.
   removes it here.
 - A link stays valid while agents use it. One unused for 30 days expires, as
   does one to a machine on an older T3 Code after 30 days; link again with a
-  new pairing code.
+  new pairing code. A link made with a code from `t3 pair --expire` lasts that
+  long instead, and `t3 auth session renew` on the machine it links to changes
+  it later.
+
+### Link both ways
+
+A link works in one direction. To link two machines both ways from a terminal
+on one of them, make a code with `t3 pair` on the other machine and run:
+
+```bash
+t3 environment link <address> --pairing-code <code> --both-ways --expire never
+```
+
+It links each machine to the other, turns on Linked environments on both, and
+invites the other machine's desktop app to connect to this one; the invite lasts
+7 days. The code must be able to manage access there, as a plain `t3 pair` code
+can; it is spent once for a session that ends when the command does. `--expire`
+sets how long both links and the invited app stay signed in. The other machine
+reaches this one at its Tailscale address; pass `--self-url <url>` to give
+another. Each step prints its result. Run the command again with a fresh code to
+retry the steps that failed; finished ones are left as they are. A machine on an
+older T3 Code cannot link both ways, and the command says so.
 
 An agent can also hand a task to a linked machine with `delegate_task`: it runs
 there as an ordinary thread, in the project with the same repository (or the

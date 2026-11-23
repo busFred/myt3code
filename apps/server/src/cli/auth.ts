@@ -26,8 +26,11 @@ import { authScopesFlag } from "./authScopes.ts";
 import {
   authLocationFlags,
   type CliAuthLocationFlags,
+  describeSessionLifetime,
   DurationFromString,
+  expireFlag,
   resolveCliAuthConfig,
+  SessionLifetimeFromString,
 } from "./config.ts";
 import * as RunningServer from "./runningServer.ts";
 
@@ -104,6 +107,7 @@ const pairingCreateCommand = Command.make("create", {
   ...authLocationFlags,
   scopes: authScopesFlag(AuthStandardClientScopes),
   ttl: ttlFlag,
+  expire: expireFlag,
   label: labelFlag,
   baseUrl: baseUrlFlag,
   json: jsonFlag,
@@ -119,6 +123,7 @@ const pairingCreateCommand = Command.make("create", {
             subject: "one-time-token",
             ...(Option.isSome(flags.ttl) ? { ttl: flags.ttl.value } : {}),
             ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
+            ...(Option.isSome(flags.expire) ? { lifetime: flags.expire.value } : {}),
           });
           const output = formatIssuedPairingCredential(issued, {
             json: flags.json,
@@ -375,9 +380,53 @@ const sessionRevokeCommand = Command.make("revoke", {
   ),
 );
 
+const sessionRenewCommand = Command.make("renew", {
+  ...authLocationFlags,
+  sessionId: Argument.String("session-id").pipe(
+    Argument.withDescription("Session id to renew, from `t3 auth session list`."),
+    Argument.withSchema(AuthSessionId),
+  ),
+  expire: Flag.String("expire").pipe(
+    Flag.withSchema(SessionLifetimeFromString),
+    Flag.withDescription(
+      "When the session ends, from now: `never`, or a duration such as `90d` or `1y`. A device that renews its own sign-in keeps this as its window.",
+    ),
+  ),
+}).pipe(
+  Command.withDescription(
+    "Set when an active session ends, earlier or later. T3 Connect and desktop app sessions keep their own lifetimes.",
+  ),
+  Command.withHandler((flags) =>
+    runWithEnvironmentAuth(flags, (environmentAuth) =>
+      Effect.gen(function* () {
+        const lifetime = flags.expire;
+        const renewed = yield* changeAccess({
+          viaServer: (client) =>
+            client.auth
+              .renewClient({ headers: {}, payload: { sessionId: flags.sessionId, lifetime } })
+              .pipe(Effect.map((result) => Option.fromNullishOr(result.expiresAt))),
+          locally: environmentAuth.renewSession(flags.sessionId, lifetime),
+        });
+        yield* Console.log(
+          Option.match(renewed, {
+            onNone: () => `No active session found for ${flags.sessionId}.\n`,
+            onSome: () =>
+              `Session ${flags.sessionId} now ${lifetime._tag === "never" ? "never expires" : `lasts ${describeSessionLifetime(lifetime)} from now`}.\n`,
+          }),
+        );
+      }),
+    ),
+  ),
+);
+
 const sessionCommand = Command.make("session").pipe(
   Command.withDescription("Manage bearer sessions."),
-  Command.withSubcommands([sessionIssueCommand, sessionListCommand, sessionRevokeCommand]),
+  Command.withSubcommands([
+    sessionIssueCommand,
+    sessionListCommand,
+    sessionRenewCommand,
+    sessionRevokeCommand,
+  ]),
 );
 
 export const authCommand = Command.make("auth").pipe(

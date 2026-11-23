@@ -173,6 +173,107 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
   }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
+it.effect("sets a renewed or long session's cookie again on load, capped at 400 days", () =>
+  Effect.gen(function* () {
+    const random = yield* SecureRandom.SecureRandom;
+    const unusedSecretStore = ServerSecretStore.ServerSecretStore.of({
+      get: () => Effect.succeedNone,
+      set: () => Effect.void,
+      create: () => Effect.void,
+      getOrCreateRandom: () => Effect.die("Not used by these routes."),
+      remove: () => Effect.void,
+    });
+    const requestContext = Context.make(SecureRandom.SecureRandom, random).pipe(
+      Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
+    );
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      (environment) =>
+        Effect.promise(async () => {
+          const day = 24 * 60 * 60 * 1000;
+          const cookieOf = (response: Response) =>
+            response.headers.getSetCookie().find((cookie) => cookie.startsWith("t3_session_"));
+          const expiresAt = (cookie: string | undefined) =>
+            Date.parse(/Expires=([^;]+)/.exec(cookie ?? "")?.[1] ?? "");
+          const admin = await environment.handler(
+            postJson("/api/auth/browser-session", { credential: DEV_TOKEN }),
+            requestContext,
+          );
+          const adminCookie =
+            admin.headers
+              .getSetCookie()
+              .find((cookie) => cookie.startsWith("t3_dev_session_"))
+              ?.split(";", 1)[0] ?? "";
+          const pairAndSignIn = async (body: unknown) => {
+            const pairing = (await (
+              await environment.handler(
+                postJson("/api/auth/pairing-token", body, { cookie: adminCookie }),
+                requestContext,
+              )
+            ).json()) as { credential: string };
+            return environment.handler(
+              postJson("/api/auth/browser-session", { credential: pairing.credential }),
+              requestContext,
+            );
+          };
+          const load = (cookie: string | undefined) =>
+            environment.handler(
+              new Request("http://127.0.0.1/api/auth/session", {
+                headers: { cookie: cookie?.split(";", 1)[0] ?? "" },
+              }),
+              requestContext,
+            );
+
+          const forever = await pairAndSignIn({ lifetime: { _tag: "never" } });
+          const foreverCookie = cookieOf(forever);
+          // A default session's cookie already matches it, so loading sets nothing.
+          const ordinary = await pairAndSignIn({ scopes: ["orchestration:read"] });
+          const ordinaryCookie = cookieOf(ordinary);
+          expect(cookieOf(await load(ordinaryCookie))).toBeUndefined();
+          // Browsers keep 400 days; the 30-day cookie set just after shows where that lands.
+          const capDays = (expiresAt(foreverCookie) - expiresAt(ordinaryCookie)) / day + 30;
+          expect(capDays).toBeGreaterThan(399.9);
+          expect(capDays).toBeLessThanOrEqual(400);
+          expect(expiresAt(cookieOf(await load(foreverCookie)))).toBeGreaterThanOrEqual(
+            expiresAt(foreverCookie),
+          );
+
+          // Only access management may renew, as only it may revoke.
+          const ordinaryId = await (async () => {
+            const token = decodeURIComponent(ordinaryCookie?.split(";", 1)[0]?.split("=")[1] ?? "");
+            const payload = JSON.parse(
+              Buffer.from(token.split(".")[0] ?? "", "base64url").toString("utf8"),
+            ) as { sid: string };
+            return payload.sid;
+          })();
+          const renew = (cookie: string) =>
+            environment.handler(
+              postJson(
+                "/api/auth/clients/renew",
+                { sessionId: ordinaryId, lifetime: { _tag: "duration", millis: 90 * day } },
+                { cookie },
+              ),
+              requestContext,
+            );
+          const refused = await renew(ordinaryCookie?.split(";", 1)[0] ?? "");
+          expect(refused.status).toBe(403);
+          expect(await refused.json()).toMatchObject({ requiredPermission: "access:write" });
+          const renewed = await renew(adminCookie);
+          expect(renewed.status).toBe(200);
+          const result = (await renewed.json()) as { renewed: boolean; expiresAt: string };
+          expect(result.renewed).toBe(true);
+          // Cookie expiries keep whole seconds.
+          expect(
+            Math.abs(
+              expiresAt(cookieOf(await load(ordinaryCookie))) - Date.parse(result.expiresAt),
+            ),
+          ).toBeLessThan(1000);
+        }),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
 it.effect.each(["DPoP", "dpop"])("challenges a refused %s request with DPoP", (scheme) =>
   Effect.gen(function* () {
     const random = yield* SecureRandom.SecureRandom;

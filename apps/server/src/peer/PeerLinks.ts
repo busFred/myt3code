@@ -2,6 +2,7 @@ import {
   AuthMcpClientAccess,
   AuthMcpRegistrationError,
   AuthMcpTokenError,
+  AuthSessionId,
   EnvironmentHttpApi,
   EnvironmentId,
   type ExecutionEnvironmentCapabilities,
@@ -103,6 +104,18 @@ export class PeerLinks extends Context.Service<
     readonly linkUnlessLinked: (
       input: PeerLinkCreateInput,
     ) => Effect.Effect<{ readonly link: PeerLink; readonly alreadyLinked: boolean }, PeerLinkError>;
+    /** Links unless linked, first turning on Linked environments here when asked and it is off. */
+    readonly linkEnabling: (
+      input: PeerLinkCreateInput,
+      enableFirst: boolean,
+    ) => Effect.Effect<
+      {
+        readonly link: PeerLink;
+        readonly alreadyLinked: boolean;
+        readonly enabledLinkedEnvironments: boolean;
+      },
+      PeerLinkError
+    >;
     readonly list: Effect.Effect<ReadonlyArray<PeerLinkSummary>, PeerLinkError>;
     /** The stored link, without asking the peer whether it answers. */
     readonly get: (
@@ -143,6 +156,20 @@ interface PeerLinkRow {
 const decodeUrls = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 const encodeUrls = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 const decodeAccess = Schema.decodeUnknownEffect(AuthMcpClientAccess);
+const decodeTokenClaims = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ sid: AuthSessionId })),
+);
+
+/** The session a peer's token names there. T3 Code signs its session claims but does not encrypt them. */
+export const peerSessionIdOf = (token: string) => {
+  const [payload] = token.split(".");
+  return payload === undefined
+    ? Option.none()
+    : Option.map(
+        decodeTokenClaims(Buffer.from(payload, "base64url").toString("utf8")),
+        (claims) => claims.sid,
+      );
+};
 
 /** Fails with a fixed storage error that keeps its cause; the log gets the details. */
 const failStorage = (cause: unknown) =>
@@ -549,6 +576,7 @@ const make = Effect.gen(function* () {
     }
     const issued = yield* signIn(primary, input, `T3 Code · ${self.label}`);
     const now = yield* DateTime.now;
+    const peerSessionId = peerSessionIdOf(issued.access_token);
     const linked: PeerLink = {
       environmentId: peer.environmentId,
       label: peer.label,
@@ -558,6 +586,7 @@ const make = Effect.gen(function* () {
       expiresAt: DateTime.add(now, { seconds: issued.expires_in }),
       lastReachedAt: now,
       lastError: null,
+      ...(Option.isSome(peerSessionId) ? { peerSessionId: peerSessionId.value } : {}),
     };
     // The token goes under a name of its own before the row points at it,
     // so the row and its token are replaced together.
@@ -604,6 +633,26 @@ const make = Effect.gen(function* () {
   const linkUnlessLinked: PeerLinks["Service"]["linkUnlessLinked"] = (input) =>
     linkWith(input, true);
 
+  const linkEnabling: PeerLinks["Service"]["linkEnabling"] = Effect.fn("PeerLinks.linkEnabling")(
+    function* (input, enableFirst) {
+      const turnOn = enableFirst && !(yield* enabled);
+      if (turnOn) {
+        yield* serverSettings.updateSettings({ linkedEnvironmentsEnabled: true }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new PeerLinkError({
+                reason: "storage",
+                message: "Linked environments could not be turned on here.",
+                cause,
+              }),
+          ),
+        );
+      }
+      const linked = yield* linkWith(input, true);
+      return { ...linked, enabledLinkedEnvironments: turnOn };
+    },
+  );
+
   /** A peer's label follows its machine name, so the link takes the one its own address answers with. */
   const withLabel = (link: PeerLink, label: string) =>
     label === link.label
@@ -629,8 +678,24 @@ const make = Effect.gen(function* () {
     return { ...(yield* withLabel(link, answered.value.label)), status: "reachable" };
   });
 
+  /** Adds the session the stored token names on the peer; an unreadable token adds nothing. */
+  const withPeerSessionId = (link: PeerLink, secretName: string) =>
+    secrets.get(secretName).pipe(
+      Effect.map((stored) => {
+        const peerSessionId = Option.flatMap(stored, (token) =>
+          peerSessionIdOf(new TextDecoder().decode(token)),
+        );
+        return Option.isSome(peerSessionId)
+          ? { ...link, peerSessionId: peerSessionId.value }
+          : link;
+      }),
+      Effect.orElseSucceed(() => link),
+    );
+
   const list: PeerLinks["Service"]["list"] = Effect.gen(function* () {
-    const links = yield* Effect.forEach(yield* readRows, toLink);
+    const links = yield* Effect.forEach(yield* readRows, (row) =>
+      toLink(row).pipe(Effect.flatMap((link) => withPeerSessionId(link, row.secret_name))),
+    );
     const now = yield* DateTime.now;
     return yield* Effect.forEach(links, (link) => statusOf(link, now), {
       concurrency: "unbounded",
@@ -749,6 +814,7 @@ const make = Effect.gen(function* () {
     enabled,
     link,
     linkUnlessLinked,
+    linkEnabling,
     list,
     get,
     unlink,

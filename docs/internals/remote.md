@@ -107,7 +107,19 @@ Unlinking on the linking side only forgets the token.
   link is used and answers each call with `T3-Link-Expires-At`; the linking
   side stores that and never extends a link on its own. A receiving side that
   predates renewal sends no header, so the link keeps its original 30 days on
-  both sides.
+  both sides. The pairing code can give the session a longer lifetime or
+  never, and renewal never shortens one. The linking side reads the session id
+  from its token's signed but unencrypted claims and reports it as
+  `peerSessionId`, so a client with access on the receiving side can renew that
+  session there.
+- **Both ways is two links.** Each is made as a single link is, with a code
+  minted on the side being linked to.
+  [`runLinkBothWays`](../../packages/client-runtime/src/linkBothWays.ts) runs
+  both for a client connected to each side, turns Linked environments on first
+  where it is off, and leaves an [app invite](environment-auth.md#app-invites).
+  `t3 environment link --both-ways` spends one standard code for a session that
+  must manage access there, shortened to minutes, and has the other side link
+  back through `POST /api/peer-links/link`, the HTTP form of `peerLinks.link`.
 - **All callers on one side share the link's single session on the other**,
   so idempotency keys are hashed with the caller's namespace before they
   leave. Without that, two agents reusing a key would collide on the far side.

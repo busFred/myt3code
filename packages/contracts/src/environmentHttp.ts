@@ -29,6 +29,13 @@ import {
   AuthMcpTokenResult,
   AuthPairingCredentialResult,
   AuthRevokeClientSessionInput,
+  AuthRenewClientSessionInput,
+  AuthRenewClientSessionResult,
+  AuthCreateAppInviteInput,
+  AuthAppInvite,
+  AuthRevokeAppInviteInput,
+  AuthRevokeAppInviteResult,
+  AuthTakePendingAppInvitesResult,
   AuthRevokePairingLinkInput,
   AuthApproveConnectDeviceInput,
   AuthApproveConnectDeviceResult,
@@ -79,6 +86,7 @@ import {
   OrchestrationV2ThreadHistoryPage,
   OrchestrationV2ThreadTranscript,
 } from "./orchestrationV2.ts";
+import { PeerLink, PeerLinkCreateInput, PeerLinkError } from "./peerLink.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import {
   PullRequestDiffInput,
@@ -131,6 +139,8 @@ export type EnvironmentAuthInvalidReason = typeof EnvironmentAuthInvalidReason.T
 
 export const EnvironmentOperationForbiddenReason = Schema.Literals([
   "current_session_revoke_not_allowed",
+  "desktop_app_only",
+  "session_not_renewable",
 ]);
 export type EnvironmentOperationForbiddenReason = typeof EnvironmentOperationForbiddenReason.Type;
 
@@ -145,6 +155,8 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "pairing_link_revoke_failed",
   "client_sessions_load_failed",
   "client_session_revoke_failed",
+  "client_session_renew_failed",
+  "app_invite_failed",
   "connect_device_approve_failed",
   "connect_device_revoke_failed",
   "project_snapshot_failed",
@@ -172,6 +184,26 @@ export class EnvironmentRequestInvalidError extends Schema.TaggedError<Environme
 
   override get message(): string {
     return `The environment rejected the request (${this.reason}).`;
+  }
+}
+
+/** A link the environment was asked to make failed; `reason` is the peer link's own. */
+export class EnvironmentPeerLinkFailedError extends Schema.TaggedError<EnvironmentPeerLinkFailedError>()(
+  "EnvironmentPeerLinkFailedError",
+  {
+    code: Schema.Literal("peer_link_failed"),
+    reason: PeerLinkError.fields.reason,
+    detail: Schema.String,
+    answeredAs: Schema.optionalKey(Schema.String),
+  },
+  { httpApiStatus: 422 },
+) {
+  [HttpServerRespondable.symbol]() {
+    return HttpServerResponse.schemaJson(EnvironmentPeerLinkFailedError)(this, { status: 422 });
+  }
+
+  override get message(): string {
+    return this.detail;
   }
 }
 
@@ -582,6 +614,23 @@ export const AuthOtherClientSessionsRevokeResult = Schema.Struct({
 });
 export type AuthOtherClientSessionsRevokeResult = typeof AuthOtherClientSessionsRevokeResult.Type;
 
+/** Links this environment to another, as `peerLinks.link` does, for clients without its socket. */
+export const AuthLinkPeerInput = Schema.Struct({
+  ...PeerLinkCreateInput.fields,
+  /** Turns on Linked environments here first when it is off; that also needs settings access. */
+  enableLinkedEnvironments: Schema.optionalKey(Schema.Boolean),
+});
+export type AuthLinkPeerInput = typeof AuthLinkPeerInput.Type;
+
+export const AuthLinkPeerResult = Schema.Struct({
+  link: PeerLink,
+  /** The environment was linked already; its pairing code was left unused. */
+  alreadyLinked: Schema.Boolean,
+  /** Linked environments was off here and this request turned it on. */
+  enabledLinkedEnvironments: Schema.Boolean,
+});
+export type AuthLinkPeerResult = typeof AuthLinkPeerResult.Type;
+
 class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata").add(
   HttpApiEndpoint.get("descriptor", "/.well-known/t3/environment", {
     success: ExecutionEnvironmentDescriptor,
@@ -651,6 +700,14 @@ class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
+    HttpApiEndpoint.post("renewClient", "/api/auth/clients/renew", {
+      headers: OptionalBearerHeaders,
+      payload: AuthRenewClientSessionInput,
+      success: AuthRenewClientSessionResult,
+      error: EnvironmentSessionRevokeErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
     HttpApiEndpoint.post("approveConnectDevice", "/api/auth/connect-devices/approve", {
       headers: OptionalBearerHeaders,
       payload: AuthApproveConnectDeviceInput,
@@ -671,6 +728,41 @@ class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
       headers: OptionalBearerHeaders,
       success: AuthOtherClientSessionsRevokeResult,
       error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+/** Fork-only access endpoints; older servers answer 404. */
+class EnvironmentAccessHttpApi extends HttpApiGroup.make("access")
+  .add(
+    HttpApiEndpoint.post("createAppInvite", "/api/app-invites", {
+      headers: OptionalBearerHeaders,
+      payload: AuthCreateAppInviteInput,
+      success: AuthAppInvite,
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("revokeAppInvite", "/api/app-invites/revoke", {
+      headers: OptionalBearerHeaders,
+      payload: AuthRevokeAppInviteInput,
+      success: AuthRevokeAppInviteResult,
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    // Only this environment's own desktop app may take its invites.
+    HttpApiEndpoint.post("takePendingAppInvites", "/api/app-invites/take", {
+      headers: OptionalBearerHeaders,
+      success: AuthTakePendingAppInvitesResult,
+      error: [EnvironmentOperationForbiddenError, EnvironmentInternalError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("linkPeer", "/api/peer-links/link", {
+      headers: OptionalBearerHeaders,
+      payload: AuthLinkPeerInput,
+      success: AuthLinkPeerResult,
+      error: [EnvironmentPeerLinkFailedError, ...EnvironmentScopedOperationErrors],
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
@@ -1075,6 +1167,7 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
+  .add(EnvironmentAccessHttpApi)
   .add(EnvironmentMcpOAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)

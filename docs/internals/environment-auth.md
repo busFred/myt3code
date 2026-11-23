@@ -38,12 +38,52 @@ CLI and desktop sessions never renew, so unlinking Connect or rotating
 their credential still cuts a device off.
 
 A [peer link](remote.md#peer-links)'s session renews on use instead: its
-bearer token is never reissued, so the session row alone holds its deadline and
-the token's own expiry is ignored. Authenticating a call from it moves the
+bearer token is never reissued. Authenticating a call from it moves the
 row 30 days out, at most once a day so a busy link does not write on every
 call. Only an unexpired, unrevoked row moves, so an idle link still ends after
-30 days and a revoke is final. Other MCP clients keep the fixed 30 days their
-token carries.
+30 days and a revoke is final. Other MCP clients keep the fixed 30 days they
+were issued.
+
+### The session row holds the deadline
+
+Verification takes a session's expiry from its row, not from the token's
+`exp`. The two are equal at issue, so this changes nothing until something
+moves the row: peer-link use, a renewing device, or `renew` (`t3 auth session
+renew`, `POST /api/auth/clients/renew`, `access:write` like revoke). Only a
+renewing device's token (`rnw`) is also bound by its own short `exp`. WebSocket
+tickets already checked the row, and a live socket's watcher wakes on any
+change to its session, so a renew that shortens a session closes its sockets
+on time. Renew refuses T3 Connect and desktop app sessions, whose short fixed
+lifetimes are what make unlinking Connect or rotating the desktop secret cut
+them off.
+
+A pairing link can carry a lifetime for the session it creates: a duration or
+never. It applies to browser, bearer, renewing-device and peer-link sessions,
+never to T3 Connect or the desktop app. For a renewing device the lifetime is
+its window, stored on the row, so renewals keep sliding by it. Never is a fixed
+far-future expiry (`NEVER_EXPIRES_AT_MILLIS`, 9999-12-31), not a null, so every
+`expiresAt` field, token claim and `expires_at > now` query keeps working;
+`isNeverExpiring` tests a threshold because a linking side derives its copy
+from `expires_in`. Extending a session never moves its expiry earlier, so peer
+renewal cannot shorten a never or long link; only `renew` can.
+
+Browsers keep a cookie at most 400 days (RFC 6265bis) whatever its expiry. The
+session endpoint a web client calls on load sets the cookie again, capped at
+400 days, when the row no longer matches the token's own expiry or the session
+outlives the cap. A default session's cookie already matches, so it is not
+rewritten.
+
+### App invites
+
+A client that links two environments can leave an invite on one for that
+machine's own desktop app to connect to the other
+([AppInvites](../../apps/server/src/auth/AppInvites.ts)). The invite holds a
+one-time pairing code from the other environment, so the code lives in the
+secret store like a peer link's token, and the access stream lists invites
+without it. Only a desktop-bootstrap session can take invites, each once; a
+newer invite for the same environment replaces the pending one. Invite changes
+reach the access stream as a fresh snapshot, because older clients cannot
+decode a new event type.
 
 ### Guest links are not sessions
 

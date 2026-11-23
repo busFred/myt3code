@@ -12,6 +12,7 @@ import {
   EnvironmentInternalError,
   type EnvironmentInternalErrorReason,
   EnvironmentOperationForbiddenError,
+  type EnvironmentOperationForbiddenReason,
   EnvironmentRequestInvalidError,
   type EnvironmentRequestInvalidReason,
   EnvironmentResourceNotFoundError,
@@ -38,7 +39,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as SessionStore from "./SessionStore.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
-import { deriveAuthClientMetadata } from "./utils.ts";
+import { cappedCookieExpiry, deriveAuthClientMetadata } from "./utils.ts";
 import { checkRequestDpopProof } from "./dpop.ts";
 import { requestUrl } from "../requestUrl.ts";
 
@@ -138,7 +139,7 @@ export function failEnvironmentScopeRequired(requiredScope: AuthEnvironmentScope
   );
 }
 
-function failEnvironmentOperationForbidden(reason: "current_session_revoke_not_allowed") {
+export function failEnvironmentOperationForbidden(reason: EnvironmentOperationForbiddenReason) {
   return currentEnvironmentTraceId.pipe(
     Effect.flatMap((traceId) =>
       Effect.fail(
@@ -288,23 +289,29 @@ export const layer = HttpApiBuilder.group(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const request = yield* HttpServerRequest.HttpServerRequest;
-            const result = yield* serverAuth.getSessionState(request);
+            const { state: result, refreshCookie } =
+              yield* serverAuth.getBrowserSessionState(request);
             const credential = EnvironmentAuth.selectRequestCredential(
               request,
               sessions.cookieName,
               sessions.legacyCookieName,
             );
-            if (
-              credential?.source === "legacy-cookie" &&
+            // A renewed or long session outlives the cookie set at sign-in, so set it again.
+            const cookieExpiresAt =
+              refreshCookie?.expiresAt ??
+              (credential?.source === "legacy-cookie" &&
               result.authenticated &&
               result.sessionMethod === "browser-session-cookie" &&
               result.expiresAt
-            ) {
+                ? cappedCookieExpiry(result.expiresAt, yield* DateTime.now)
+                : undefined);
+            const cookieToken = refreshCookie?.token ?? credential?.token;
+            if (cookieExpiresAt !== undefined && cookieToken !== undefined) {
               yield* appendSessionCookie(
                 request,
                 sessions.cookieName,
-                credential.token,
-                result.expiresAt,
+                cookieToken,
+                cookieExpiresAt,
               );
               yield* appendCredentialResponseHeaders;
             }
@@ -338,7 +345,9 @@ export const layer = HttpApiBuilder.group(
             const selectedCookie = yield* Effect.fromResult(
               Cookies.set(Cookies.empty, cookieName, result.sessionToken, {
                 ...sessionCookieOptions(request),
-                expires: DateTime.toDate(result.response.expiresAt),
+                expires: DateTime.toDate(
+                  cappedCookieExpiry(result.response.expiresAt, yield* DateTime.now),
+                ),
               }),
             ).pipe(Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")));
             const sessionCookies = result.expireNormalCookie
@@ -549,6 +558,30 @@ export const layer = HttpApiBuilder.group(
           }),
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("client_session_revoke_failed", error),
+          ),
+        ),
+      )
+      .handle(
+        "renewClient",
+        Effect.fn("environment.auth.renewClient")(
+          function* (args) {
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            yield* requireEnvironmentScope(AuthAccessWriteScope);
+            const renewed = yield* serverAuth.renewSession(
+              args.payload.sessionId,
+              args.payload.lifetime,
+            );
+            return Option.match(renewed, {
+              onNone: () => ({ renewed: false }),
+              onSome: (expiresAt) => ({ renewed: true, expiresAt }),
+            });
+          },
+          Effect.catchTags({
+            ServerAuthSessionNotRenewableError: () =>
+              failEnvironmentOperationForbidden("session_not_renewable"),
+          }),
+          Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+            failEnvironmentInternal("client_session_renew_failed", error),
           ),
         ),
       )

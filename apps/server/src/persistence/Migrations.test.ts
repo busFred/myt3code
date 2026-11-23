@@ -77,6 +77,16 @@ describe("runMigrations", () => {
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.isAbove(yield* v2TableCount, 0);
 
+      // The fork's schema sits outside the ledger, so upstream's next id still runs.
+      const forkColumns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('auth_pairing_links') WHERE name = 'session_lifetime_json'
+        UNION ALL
+        SELECT name FROM pragma_table_info('auth_sessions') WHERE name = 'renewal_window_json'
+        UNION ALL
+        SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'auth_app_invites'
+      `;
+      assert.lengthOf(forkColumns, 3);
+
       // query_only rejects BEGIN IMMEDIATE, which CLI startup would otherwise take on the live database.
       yield* sql`PRAGMA query_only = ON`;
       assert.deepStrictEqual(yield* runMigrations(), []);
