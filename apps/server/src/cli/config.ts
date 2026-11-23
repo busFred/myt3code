@@ -6,7 +6,7 @@ import {
 } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
-import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
+import { AuthSessionLifetime, DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -573,7 +573,7 @@ export const resolveCliAuthConfig = (
     : resolved;
 };
 
-const DurationShorthandPattern = /^(?<value>\d+)(?<unit>ms|s|m|h|d|w)$/i;
+const DurationShorthandPattern = /^(?<value>\d+)(?<unit>ms|s|m|h|d|w|y)$/i;
 
 const parseDurationInput = (value: string): Duration.Duration | null => {
   const trimmed = value.trim();
@@ -604,6 +604,8 @@ const parseDurationInput = (value: string): Duration.Duration | null => {
             return `${amount} days`;
           case "w":
             return `${amount} weeks`;
+          case "y":
+            return `${amount * 365} days`;
           default:
             return null;
         }
@@ -627,7 +629,7 @@ export const DurationFromString = Schema.String.pipe(
         }
         return Effect.fail(
           new SchemaIssue.InvalidValue({
-            message: "Invalid duration. Use values like 5m, 1h, 30d, or 15 minutes.",
+            message: "Invalid duration. Use values like 5m, 1h, 30d, 1y, or 15 minutes.",
           }),
         );
       },
@@ -635,3 +637,46 @@ export const DurationFromString = Schema.String.pipe(
     }),
   ),
 );
+
+/** `--expire`: how long a paired device's session lasts, as a duration or `never`. */
+export const SessionLifetimeFromString = Schema.String.pipe(
+  Schema.decodeTo(
+    AuthSessionLifetime,
+    SchemaTransformation.transformEffect({
+      decode: (value): Effect.Effect<AuthSessionLifetime, SchemaIssue.Issue> => {
+        if (value.trim().toLowerCase() === "never") {
+          return Effect.succeed({ _tag: "never" } as const);
+        }
+        const duration = parseDurationInput(value);
+        const millis = duration === null ? 0 : Duration.toMillis(duration);
+        if (millis > 0 && Number.isFinite(millis)) {
+          return Effect.succeed({ _tag: "duration", millis: Math.round(millis) } as const);
+        }
+        return Effect.fail(
+          new SchemaIssue.InvalidValue({
+            message: "Invalid expiry. Use `never` or a duration like 90d, 1y, or 12h.",
+          }),
+        );
+      },
+      encode: (lifetime: AuthSessionLifetime) =>
+        Effect.succeed(
+          lifetime._tag === "never" ? "never" : Duration.format(Duration.millis(lifetime.millis)),
+        ),
+    }),
+  ),
+);
+
+export const expireFlag = Flag.String("expire").pipe(
+  Flag.withSchema(SessionLifetimeFromString),
+  Flag.withDescription(
+    "How long the paired device stays signed in: `never`, or a duration such as `90d` or `1y`. Defaults to 30 days.",
+  ),
+  Flag.optional,
+);
+
+export const describeSessionLifetime = (lifetime: AuthSessionLifetime | undefined) =>
+  lifetime === undefined
+    ? "the default 30 days"
+    : lifetime._tag === "never"
+      ? "never expires"
+      : Duration.format(Duration.millis(lifetime.millis));

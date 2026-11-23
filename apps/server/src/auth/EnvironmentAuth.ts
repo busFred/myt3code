@@ -15,6 +15,7 @@ import {
   type AuthPairingLink,
   type AuthPairingCredentialResult,
   type AuthSessionId,
+  type AuthSessionLifetime,
   type AuthSessionState,
   authScopeResponse,
   type ServerAuthDescriptor,
@@ -48,6 +49,7 @@ import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
 import { REUSABLE_DEV_SESSION_EXPIRES_AT, resolveReusableDevAuth } from "./ReusableDevAuth.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
+import { browserCookieRefreshExpiry } from "./utils.ts";
 import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ManagedLimits from "../policy/managedLimits.ts";
@@ -71,6 +73,7 @@ export interface IssuedPairingLink {
   readonly label?: string;
   readonly createdAt: DateTime.Utc;
   readonly expiresAt: DateTime.Utc;
+  readonly lifetime?: AuthSessionLifetime;
 }
 
 export interface IssuedBearerSession {
@@ -95,6 +98,22 @@ const PEER_LINK_RENEWAL_STEP = Duration.days(1);
 const RENEWABLE_ACCESS_TOKEN_TTL = Duration.hours(1);
 const RENEWABLE_SESSION_WINDOW = Duration.days(30);
 const PAIRING_LINK_SUBJECT = "one-time-token";
+const DESKTOP_BOOTSTRAP_SUBJECT = "desktop-bootstrap";
+
+/**
+ * A pairing link's lifetime goes to the session it creates. T3 Connect and the desktop app keep
+ * their own lifetimes, so unlinking Connect or rotating the desktop secret still cuts them off.
+ */
+const grantLifetime = (grant: {
+  readonly method: string;
+  readonly subject: string;
+  readonly lifetime?: AuthSessionLifetime;
+}) =>
+  grant.lifetime !== undefined &&
+  grant.method === "one-time-token" &&
+  grant.subject !== CLOUD_CONNECT_SUBJECT
+    ? { lifetime: grant.lifetime }
+    : {};
 
 export interface McpClientSession {
   readonly sessionId: AuthSessionId;
@@ -119,6 +138,8 @@ export interface AuthenticatedSession {
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
   readonly expiresAt?: DateTime.DateTime;
+  readonly tokenIssuedAt?: DateTime.Utc;
+  readonly tokenExpiresAt?: DateTime.Utc;
 }
 
 const serverAuthInternalErrorContext = {
@@ -232,6 +253,17 @@ export class ServerAuthSessionRevocationError extends Schema.TaggedError<ServerA
 ) {
   override get message(): string {
     return "Failed to revoke session.";
+  }
+}
+
+export class ServerAuthSessionRenewalError extends Schema.TaggedError<ServerAuthSessionRenewalError>()(
+  "ServerAuthSessionRenewalError",
+  {
+    ...serverAuthInternalErrorContext,
+  },
+) {
+  override get message(): string {
+    return "Failed to renew session.";
   }
 }
 
@@ -383,6 +415,7 @@ export const ServerAuthInternalError = Schema.Union([
   ServerAuthSessionTokenIssueError,
   ServerAuthSessionsListError,
   ServerAuthSessionRevocationError,
+  ServerAuthSessionRenewalError,
   ServerAuthOtherSessionsRevocationError,
   ServerAuthWebSocketTokenIssueError,
   ServerAuthDpopReplayStateRecordError,
@@ -490,6 +523,15 @@ export class ServerAuthMcpApprovalCodeError extends Schema.TaggedError<ServerAut
   }
 }
 
+export class ServerAuthSessionNotRenewableError extends Schema.TaggedError<ServerAuthSessionNotRenewableError>()(
+  "ServerAuthSessionNotRenewableError",
+  {},
+) {
+  override get message(): string {
+    return "T3 Connect and desktop app sessions keep their own lifetimes.";
+  }
+}
+
 export class ServerAuthForbiddenOperationError extends Schema.TaggedError<ServerAuthForbiddenOperationError>()(
   "ServerAuthForbiddenOperationError",
   {},
@@ -506,6 +548,16 @@ export class EnvironmentAuth extends Context.Service<
     readonly getSessionState: (
       request: HttpServerRequest.HttpServerRequest,
     ) => Effect.Effect<AuthSessionState, ServerAuthInternalError>;
+    /** The session state, and the expiry a browser's session cookie should be set to again, if any. */
+    readonly getBrowserSessionState: (
+      request: HttpServerRequest.HttpServerRequest,
+    ) => Effect.Effect<
+      {
+        readonly state: AuthSessionState;
+        readonly refreshCookie?: { readonly token: string; readonly expiresAt: DateTime.Utc };
+      },
+      ServerAuthInternalError
+    >;
     readonly createBrowserSession: (
       credential: string,
       requestMetadata: AuthClientMetadata,
@@ -550,6 +602,8 @@ export class EnvironmentAuth extends Context.Service<
       readonly purpose?: "startup";
       readonly mcpApproval?: AuthMcpClientAccess;
       readonly requiresConnectApproval?: boolean;
+      /** The lifetime of the session the link creates. */
+      readonly lifetime?: AuthSessionLifetime;
     }) => Effect.Effect<
       IssuedPairingLink,
       ServerAuthInternalError | ManagedLimits.ManagedPolicyRefusedError
@@ -611,6 +665,14 @@ export class EnvironmentAuth extends Context.Service<
     readonly revokeSession: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<boolean, ServerAuthInternalError>;
+    /** Sets a live session's expiry; None when it is not live. Refuses T3 Connect and desktop sessions. */
+    readonly renewSession: (
+      sessionId: AuthSessionId,
+      lifetime: AuthSessionLifetime,
+    ) => Effect.Effect<
+      Option.Option<DateTime.Utc>,
+      ServerAuthSessionNotRenewableError | ServerAuthInternalError
+    >;
     readonly listClientSessions: (
       currentSessionId: AuthSessionId,
     ) => Effect.Effect<ReadonlyArray<AuthClientSession>, ServerAuthInternalError>;
@@ -658,6 +720,7 @@ export class EnvironmentAuth extends Context.Service<
        * refused when "revoke all others" has run since.
        */
       readonly approvedAtRevocationCount?: number;
+      readonly lifetime?: AuthSessionLifetime;
     }) => Effect.Effect<
       {
         readonly sessionId: AuthSessionId;
@@ -675,7 +738,7 @@ export class EnvironmentAuth extends Context.Service<
       access: AuthMcpClientAccess,
       peerLink?: boolean,
     ) => Effect.Effect<
-      AuthMcpClientAccess,
+      { readonly access: AuthMcpClientAccess; readonly lifetime?: AuthSessionLifetime },
       ServerAuthMcpApprovalCodeError | ServerAuthInternalError
     >;
   }
@@ -855,6 +918,8 @@ export const make = Effect.gen(function* () {
         scopes: session.scopes,
         ...(session.proofKeyThumbprint ? { proofKeyThumbprint: session.proofKeyThumbprint } : {}),
         ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
+        ...(session.tokenIssuedAt ? { tokenIssuedAt: session.tokenIssuedAt } : {}),
+        ...(session.tokenExpiresAt ? { tokenExpiresAt: session.tokenExpiresAt } : {}),
       })),
     );
 
@@ -933,26 +998,45 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  const getSessionState: EnvironmentAuth["Service"]["getSessionState"] = (request) =>
+  const getBrowserSessionState: EnvironmentAuth["Service"]["getBrowserSessionState"] = (request) =>
     authenticateRequest(request).pipe(
-      Effect.map(
-        (session) =>
-          ({
-            authenticated: true,
-            auth: descriptor,
-            ...authScopeResponse(session.scopes),
-            sessionMethod: session.method,
-            sessionId: session.sessionId,
-            ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
-          }) satisfies AuthSessionState,
+      Effect.flatMap((session) =>
+        DateTime.now.pipe(
+          Effect.map((now) => {
+            const state = {
+              authenticated: true,
+              auth: descriptor,
+              ...authScopeResponse(session.scopes),
+              sessionMethod: session.method,
+              sessionId: session.sessionId,
+              ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
+            } satisfies AuthSessionState;
+            const credential = resolveRequestCredential(request);
+            const refreshAt =
+              session.method === "browser-session-cookie" &&
+              (credential?.source === "cookie" || credential?.source === "legacy-cookie") &&
+              session.expiresAt !== undefined &&
+              session.tokenIssuedAt !== undefined &&
+              session.tokenExpiresAt !== undefined
+                ? browserCookieRefreshExpiry({
+                    now,
+                    sessionExpiresAt: DateTime.toUtc(session.expiresAt),
+                    tokenIssuedAt: session.tokenIssuedAt,
+                    tokenExpiresAt: session.tokenExpiresAt,
+                  })
+                : undefined;
+            return credential !== undefined && refreshAt !== undefined
+              ? { state, refreshCookie: { token: credential.token, expiresAt: refreshAt } }
+              : { state };
+          }),
+        ),
       ),
       Effect.catchIf(isServerAuthCredentialError, () =>
         Effect.succeed({
-          authenticated: false,
-          auth: descriptor,
-        } satisfies AuthSessionState),
+          state: { authenticated: false, auth: descriptor } satisfies AuthSessionState,
+        }),
       ),
-      Effect.withSpan("EnvironmentAuth.getSessionState"),
+      Effect.withSpan("EnvironmentAuth.getBrowserSessionState"),
     );
 
   // T3 Connect credential issuance, DPoP exchanges and device revocation take turns. Two mints
@@ -976,6 +1060,9 @@ export const make = Effect.gen(function* () {
       ),
       connectTrustLock.withPermits(1),
     );
+
+  const getSessionState: EnvironmentAuth["Service"]["getSessionState"] = (request) =>
+    getBrowserSessionState(request).pipe(Effect.map((result) => result.state));
 
   const createBrowserSession: EnvironmentAuth["Service"]["createBrowserSession"] = Effect.fn(
     "EnvironmentAuth.createBrowserSession",
@@ -1022,6 +1109,7 @@ export const make = Effect.gen(function* () {
           method: "browser-session-cookie",
           subject: grant.subject,
           scopes: grant.scopes,
+          ...grantLifetime(grant),
           ...(previousSession?.method === "browser-session-cookie"
             ? { replaceSessionId: previousSession.sessionId }
             : {}),
@@ -1045,7 +1133,7 @@ export const make = Effect.gen(function* () {
 
   type ResolvedBootstrapGrant = Pick<
     PairingGrantStore.BootstrapGrant,
-    "scopes" | "subject" | "label"
+    "scopes" | "subject" | "label" | "lifetime"
   > & {
     readonly method: PairingGrantStore.BootstrapGrant["method"] | "reusable-dev-token";
   };
@@ -1184,6 +1272,7 @@ export const make = Effect.gen(function* () {
                       }
                     : {}),
                   ...(renewable ? { renewalWindow: RENEWABLE_SESSION_WINDOW } : {}),
+                  ...grantLifetime(grant),
                   replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
                   client: {
                     ...requestMetadata,
@@ -1216,6 +1305,7 @@ export const make = Effect.gen(function* () {
     credential: issued.credential,
     ...(issued.label ? { label: issued.label } : {}),
     expiresAt: issued.expiresAt,
+    ...(issued.lifetime ? { lifetime: issued.lifetime } : {}),
   });
 
   const issuePairingLink = Effect.fn("EnvironmentAuth.issuePairingLink")(
@@ -1230,6 +1320,7 @@ export const make = Effect.gen(function* () {
         ...(input?.purpose ? { purpose: input.purpose } : {}),
         ...(input?.mcpApproval ? { mcpApproval: input.mcpApproval } : {}),
         ...(input?.requiresConnectApproval ? { requiresConnectApproval: true } : {}),
+        ...(input?.lifetime ? { lifetime: input.lifetime } : {}),
       });
       return {
         id: issued.id,
@@ -1239,6 +1330,7 @@ export const make = Effect.gen(function* () {
         ...(issued.label ? { label: issued.label } : {}),
         createdAt: DateTime.toUtc(createdAt),
         expiresAt: DateTime.toUtc(issued.expiresAt),
+        ...(input?.lifetime ? { lifetime: input.lifetime } : {}),
       } satisfies IssuedPairingLink;
     },
     Effect.mapError((cause) => new ServerAuthPairingLinkCreationError({ cause })),
@@ -1420,6 +1512,19 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("EnvironmentAuth.revokeSession"),
     );
 
+  const renewSession: EnvironmentAuth["Service"]["renewSession"] = Effect.fn(
+    "EnvironmentAuth.renewSession",
+  )(function* (sessionId, lifetime) {
+    const target = (yield* listSessions()).find((session) => session.sessionId === sessionId);
+    if (target === undefined) return Option.none<DateTime.Utc>();
+    if (target.subject === CLOUD_CONNECT_SUBJECT || target.subject === DESKTOP_BOOTSTRAP_SUBJECT) {
+      return yield* new ServerAuthSessionNotRenewableError({});
+    }
+    return yield* sessions
+      .setExpiry(sessionId, lifetime)
+      .pipe(Effect.mapError((cause) => new ServerAuthSessionRenewalError({ cause })));
+  });
+
   const revokeOtherSessionsExcept = (sessionId: AuthSessionId) =>
     sessions.revokeAllExcept(sessionId).pipe(
       Effect.mapError((cause) => new ServerAuthOtherSessionsRevocationError({ cause })),
@@ -1437,6 +1542,8 @@ export const make = Effect.gen(function* () {
           : "one-time-token",
       ...(input?.label ? { label: input.label } : {}),
       ...(input?.access && input.purpose !== "peer-link" ? { mcpApproval: input.access } : {}),
+      ...(input?.lifetime ? { lifetime: input.lifetime } : {}),
+      ...(input?.linkTtlMillis ? { ttl: Duration.millis(input.linkTtlMillis) } : {}),
     }).pipe(
       Effect.map((issued) => ({
         ...toPairingCredential(issued),
@@ -1715,6 +1822,7 @@ export const make = Effect.gen(function* () {
         method: "bearer-access-token",
         scopes: mcpClientScopes(input.access),
         ttl: MCP_CLIENT_SESSION_TTL,
+        ...(input.lifetime ? { lifetime: input.lifetime } : {}),
         ...(input.access === "read-only" ? {} : { runtimeModeCeiling: input.access }),
         peerLink: input.peerLink,
         client: { ...input.client, label: input.label, deviceType: "bot" },
@@ -1754,7 +1862,10 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((grant) =>
         grant.method !== "one-time-token" && grant.method !== "reusable-dev-token"
           ? Effect.fail(new ServerAuthMcpApprovalCodeError({ reason: "not_a_pairing_code" }))
-          : Effect.succeed(mcpApprovalLevel(grant.subject) ?? access),
+          : Effect.succeed({
+              access: mcpApprovalLevel(grant.subject) ?? access,
+              ...grantLifetime(grant),
+            }),
       ),
       Effect.withSpan("EnvironmentAuth.consumeMcpApprovalCode"),
     );
@@ -1769,6 +1880,7 @@ export const make = Effect.gen(function* () {
       return Effect.succeed(descriptor);
     }),
     getSessionState,
+    getBrowserSessionState,
     createBrowserSession,
     exchangeBootstrapCredentialForAccessToken,
     renewAccessToken,
@@ -1786,6 +1898,7 @@ export const make = Effect.gen(function* () {
     issueSession,
     listSessions,
     revokeSession,
+    renewSession,
     listClientSessions,
     revokeClient,
     revokeClientSession,

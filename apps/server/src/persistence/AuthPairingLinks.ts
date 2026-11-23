@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 
-import { AuthClientMetadata, AuthEnvironmentScopes } from "@t3tools/contracts";
+import { AuthClientMetadata, AuthEnvironmentScopes, AuthSessionLifetime } from "@t3tools/contracts";
 
 import {
   type AuthPairingLinkRepositoryError,
@@ -41,6 +41,8 @@ export const AuthPairingLinkRecord = Schema.Struct({
   requiresConnectApproval: SqliteFlag,
   connectApproved: SqliteFlag,
   requestedClient: Schema.NullOr(Schema.fromJsonString(AuthClientMetadata)),
+  /** The lifetime of the session the link creates; NULL is the default for its kind. */
+  sessionLifetime: Schema.NullOr(Schema.fromJsonString(AuthSessionLifetime)),
 });
 export type AuthPairingLinkRecord = typeof AuthPairingLinkRecord.Type;
 
@@ -53,6 +55,7 @@ export const CreateAuthPairingLinkInput = Schema.Struct({
   label: Schema.NullOr(Schema.String),
   proofKeyThumbprint: Schema.NullOr(Schema.String),
   requiresConnectApproval: Schema.optionalKey(Schema.Boolean),
+  sessionLifetime: Schema.optionalKey(Schema.fromJsonString(AuthSessionLifetime)),
   createdAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
 });
@@ -131,6 +134,7 @@ const AuthPairingLinkRawDbRow = Schema.Struct({
   requiresConnectApproval: Schema.Unknown,
   connectApproved: Schema.Unknown,
   requestedClient: Schema.Unknown,
+  sessionLifetime: Schema.Unknown,
 });
 
 const decodeAuthPairingLinkDbRow = Schema.decodeUnknownEffect(AuthPairingLinkRecord);
@@ -202,6 +206,7 @@ export const make = Effect.gen(function* () {
           label,
           proof_key_thumbprint,
           requires_connect_approval,
+          session_lifetime_json,
           created_at,
           expires_at,
           consumed_at,
@@ -216,6 +221,7 @@ export const make = Effect.gen(function* () {
           ${input.label},
           ${input.proofKeyThumbprint},
           ${input.requiresConnectApproval ? 1 : 0},
+          ${input.sessionLifetime ?? null},
           ${input.createdAt},
           ${input.expiresAt},
           NULL,
@@ -286,7 +292,8 @@ export const make = Effect.gen(function* () {
             SELECT 1 FROM auth_connect_devices
             WHERE auth_connect_devices.proof_key_thumbprint = auth_pairing_links.proof_key_thumbprint
           ) AS "connectApproved",
-          requested_client_json AS "requestedClient"
+          requested_client_json AS "requestedClient",
+          session_lifetime_json AS "sessionLifetime"
       `,
   });
 
@@ -312,7 +319,8 @@ export const make = Effect.gen(function* () {
             SELECT 1 FROM auth_connect_devices
             WHERE auth_connect_devices.proof_key_thumbprint = auth_pairing_links.proof_key_thumbprint
           ) AS "connectApproved",
-          requested_client_json AS "requestedClient"
+          requested_client_json AS "requestedClient",
+          session_lifetime_json AS "sessionLifetime"
         FROM auth_pairing_links
         WHERE revoked_at IS NULL
           AND consumed_at IS NULL
@@ -364,7 +372,8 @@ export const make = Effect.gen(function* () {
             SELECT 1 FROM auth_connect_devices
             WHERE auth_connect_devices.proof_key_thumbprint = auth_pairing_links.proof_key_thumbprint
           ) AS "connectApproved",
-          requested_client_json AS "requestedClient"
+          requested_client_json AS "requestedClient",
+          session_lifetime_json AS "sessionLifetime"
         FROM auth_pairing_links
         WHERE credential = ${credential}
       `,
@@ -388,7 +397,8 @@ export const make = Effect.gen(function* () {
         SELECT 1 FROM auth_connect_devices
         WHERE auth_connect_devices.proof_key_thumbprint = auth_pairing_links.proof_key_thumbprint
       ) AS "connectApproved",
-      requested_client_json AS "requestedClient"
+      requested_client_json AS "requestedClient",
+          session_lifetime_json AS "sessionLifetime"
     FROM auth_pairing_links
   `;
 

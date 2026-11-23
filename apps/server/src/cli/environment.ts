@@ -2,6 +2,7 @@ import {
   AuthMcpClientAccess,
   EnvironmentId,
   PeerLinkError,
+  isNeverExpiring,
   peerLinkFailureKind,
   type PeerLinkSummary,
 } from "@t3tools/contracts";
@@ -22,6 +23,7 @@ import * as Flag from "effect/cli/Flag";
 import * as GlobalFlag from "effect/cli/GlobalFlag";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 
+import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -30,47 +32,52 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { expandHomePath } from "../os-jank.ts";
-import { authLocationFlags, type CliAuthLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import {
+  authLocationFlags,
+  type CliAuthLocationFlags,
+  expireFlag,
+  resolveCliAuthConfig,
+} from "./config.ts";
+import { linkBothWays } from "./environmentBothWays.ts";
 
-/**
- * Links live in this environment's database and secret store, so these
- * commands work whether or not its server is running.
- */
-const runWithPeerLinks = Effect.fn("environment.runWithPeerLinks")(function* <A, E>(
+const layerPeerLinks = PeerLinks.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      ServerSecretStore.layer,
+      SqlitePersistence.layerCliConfig,
+      FetchHttpClient.layer,
+    ),
+  ),
+  Layer.provideMerge(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+  Layer.provide(
+    ServerSettings.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          ServerSecretStore.layer,
+          SqlitePersistence.layerCliConfig,
+          ManagedPolicy.layer,
+        ),
+      ),
+    ),
+  ),
+);
+
+const runWithLayer = Effect.fn("environment.runWithLayer")(function* <A, E, R, ROut, LE, RIn>(
   flags: CliAuthLocationFlags,
-  run: (links: PeerLinks.PeerLinks["Service"]) => Effect.Effect<A, E>,
+  layer: Layer.Layer<ROut, LE, RIn>,
+  run: Effect.Effect<A, E, R>,
   options?: { readonly quietLogs?: boolean },
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel, options);
-  return yield* PeerLinks.PeerLinks.pipe(
-    Effect.flatMap(run),
+  return yield* run.pipe(
     // A refused or unreachable link is an expected outcome: print its message, not a stack.
     Effect.catchIf(Schema.is(PeerLinkError), (error) =>
       Effect.fail(new CliError.UserError({ cause: error, userMessage: error.message })),
     ),
     Effect.provide(
-      PeerLinks.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            ServerSecretStore.layer,
-            SqlitePersistence.layerCliConfig,
-            FetchHttpClient.layer,
-          ),
-        ),
-        Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),
-        Layer.provide(
-          ServerSettings.layer.pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                ServerSecretStore.layer,
-                SqlitePersistence.layerCliConfig,
-                ManagedPolicy.layer,
-              ),
-            ),
-          ),
-        ),
-        Layer.provide(ServerConfig.layer(config)),
+      layer.pipe(
+        Layer.provideMerge(ServerConfig.layer(config)),
         Layer.provide(
           Layer.succeed(References.MinimumLogLevel, options?.quietLogs ? "Error" : config.logLevel),
         ),
@@ -78,6 +85,16 @@ const runWithPeerLinks = Effect.fn("environment.runWithPeerLinks")(function* <A,
     ),
   );
 });
+
+/**
+ * Links live in this environment's database and secret store, so these
+ * commands work whether or not its server is running.
+ */
+const runWithPeerLinks = <A, E>(
+  flags: CliAuthLocationFlags,
+  run: (links: PeerLinks.PeerLinks["Service"]) => Effect.Effect<A, E>,
+  options?: { readonly quietLogs?: boolean },
+) => runWithLayer(flags, layerPeerLinks, PeerLinks.PeerLinks.pipe(Effect.flatMap(run)), options);
 
 const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
@@ -94,7 +111,7 @@ const formatLinks = (links: ReadonlyArray<PeerLinkSummary>) =>
     : `${links
         .map(
           (link) =>
-            `${link.label} (${link.environmentId})\n  ${link.status}, access ${link.access}, expires ${DateTime.formatIso(link.expiresAt)}\n  ${link.urls.join(", ")}${link.lastError === null ? "" : `\n  last error: ${link.lastError}`}`,
+            `${link.label} (${link.environmentId})\n  ${link.status}, access ${link.access}, ${isNeverExpiring(link.expiresAt) ? "never expires" : `expires ${DateTime.formatIso(link.expiresAt)}`}\n  ${link.urls.join(", ")}${link.lastError === null ? "" : `\n  last error: ${link.lastError}`}`,
         )
         .join("\n\n")}\n`;
 
@@ -233,6 +250,23 @@ const environmentLinkCommand = Command.make("link", {
     ),
     Flag.withDefault("approval-required" as const),
   ),
+  bothWays: Flag.Boolean("both-ways").pipe(
+    Flag.withDescription(
+      "Also link the other environment to this one, turn on Linked environments on both, and invite its desktop app to connect here. The pairing code must be a standard one from `t3 pair` there.",
+    ),
+    Flag.withDefault(false),
+  ),
+  expire: expireFlag.pipe(
+    Flag.withDescription(
+      "With --both-ways: how long both links and the desktop app invite last, `never` or a duration such as `90d`. Defaults to 30 days.",
+    ),
+  ),
+  selfUrl: Flag.String("self-url").pipe(
+    Flag.withDescription(
+      "With --both-ways: an address of this environment the other one can reach. Defaults to this machine's Tailscale addresses.",
+    ),
+    Flag.atLeast(0),
+  ),
 }).pipe(
   Command.withDescription(
     "Link another T3 Code environment, so agents here can work there. It shows up there under Authorized clients in Settings → Sharing & access, where it can be revoked.",
@@ -259,6 +293,26 @@ const environmentLinkCommand = Command.make("link", {
       }
       const url = flags.url.value;
       const pairingCode = flags.pairingCode.value;
+      if (flags.bothWays) {
+        return yield* runWithLayer(
+          flags,
+          Layer.mergeAll(layerPeerLinks, EnvironmentAuth.layerRuntime, FetchHttpClient.layer),
+          linkBothWays({
+            url,
+            alternateUrls: flags.alternateUrl,
+            pairingCode,
+            access: flags.access,
+            lifetime: flags.expire,
+            selfUrls: flags.selfUrl,
+          }),
+        );
+      }
+      if (Option.isSome(flags.expire) || flags.selfUrl.length > 0) {
+        return yield* new EnvironmentLinkUsageError({
+          detail:
+            "--expire and --self-url need --both-ways. A one-way link lasts as long as its pairing code says; set that with `t3 pair --expire` there.",
+        });
+      }
       return yield* runWithPeerLinks(flags, (links) =>
         Effect.gen(function* () {
           const linked = yield* links.link({

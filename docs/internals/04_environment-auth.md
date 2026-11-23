@@ -25,6 +25,28 @@ model.
   bearer auth. Plain paired DPoP sessions renew in place so live sockets and Sharing & access rows
   stay stable; T3 Connect, CLI, and desktop sessions never self-renew so revoking/unlinking cuts
   them off.
+- **The session row holds the deadline.** Verification takes a session's expiry from its row, not
+  the token's `exp`, so peer-link use, a renewing device, or `renew` (`t3 auth session renew`,
+  `POST /api/auth/clients/renew`, `access:write` like revoke) can move it. Only a renewing device's
+  token (`rnw`) is also bound by its own short `exp`. A live socket's watcher wakes on any change
+  to its session, so a renew that shortens a session closes its sockets on time. Renew refuses
+  T3 Connect and desktop app sessions, whose short fixed lifetimes are what make unlinking Connect
+  or rotating the desktop secret cut them off.
+- **Pairing links can set a session lifetime.** A duration or never, for browser, bearer,
+  renewing-device and peer-link sessions, never T3 Connect or the desktop app. For a renewing
+  device it is the stored renewal window. Never is a fixed far-future expiry
+  (`NEVER_EXPIRES_AT_MILLIS`, 9999-12-31), not a null, so every `expiresAt` field, token claim and
+  `expires_at > now` query keeps working; `isNeverExpiring` tests a threshold because a linking
+  side derives its copy from `expires_in`. Extending a session never moves its expiry earlier;
+  only `renew` can. Browsers keep a cookie at most 400 days, so the session endpoint sets it again,
+  capped at 400 days, when the row no longer matches the token's expiry or outlives the cap.
+- **App invites.** A client that links two environments can leave an invite on one for that
+  machine's desktop app to connect to the other
+  ([AppInvites](../../apps/server/src/auth/AppInvites.ts)). The invite holds a one-time pairing code,
+  so the code lives in the secret store like a peer link's token and the access stream lists
+  invites without it. Only a desktop-bootstrap session can take invites, each once; a newer invite
+  for the same environment replaces the pending one. Invite changes reach the access stream as a
+  fresh snapshot because older clients cannot decode a new event type.
 - **WebSocket tickets and per-RPC authorization.** Bearer and DPoP clients mint short-lived tickets
   over authenticated HTTP so long-lived tokens never appear in socket URLs. DPoP RPC tickets stay
   proof-key bound at upgrade. A successful handshake grants no extra authority: every RPC declares

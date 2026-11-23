@@ -1,7 +1,13 @@
 import * as Schema from "effect/Schema";
 
 import { AuthEnvironmentScope, AuthMcpClientAccess } from "./auth.ts";
-import { EnvironmentId, ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
+import {
+  AuthSessionId,
+  EnvironmentId,
+  ThreadId,
+  TrimmedNonEmptyString,
+  TurnItemId,
+} from "./baseSchemas.ts";
 
 /**
  * A link from this environment to another one (the peer). This environment
@@ -19,6 +25,8 @@ export const PeerLink = Schema.Struct({
   expiresAt: Schema.DateTimeUtc,
   lastReachedAt: Schema.NullOr(Schema.DateTimeUtc),
   lastError: Schema.NullOr(Schema.String),
+  /** The link's session on the peer, which a client with access there can renew. Absent when unknown. */
+  peerSessionId: Schema.optionalKey(AuthSessionId),
 });
 export type PeerLink = typeof PeerLink.Type;
 

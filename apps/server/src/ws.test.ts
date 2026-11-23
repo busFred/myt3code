@@ -112,6 +112,7 @@ import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerThreadRelay from "./peer/PeerThreadRelay.ts";
 import * as PeerClientPairing from "./peer/PeerClientPairing.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
+import * as AppInvites from "./auth/AppInvites.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -865,6 +866,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(OtlpEndpointCheck.OtlpEndpointCheck)({}),
   Layer.mock(PairingGrantStore.PairingGrantStore)({}),
   Layer.mock(PeerLinks.PeerLinks)({}),
+  Layer.mock(AppInvites.AppInvites)({ list: Effect.succeed([]), changes: Stream.empty }),
   Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
   Layer.mock(PeerThreadRelay.PeerThreadRelay)({}),
   Layer.mock(PeerClientPairing.PeerClientPairing)({}),
@@ -1295,6 +1297,7 @@ it.effect("access changes made while the snapshot loads reach the client after i
   Effect.gen(function* () {
     const pairingChanges = yield* PubSub.unbounded<PairingGrantStore.BootstrapCredentialChange>();
     const sessionChanges = yield* PubSub.unbounded<SessionStore.SessionCredentialChange>();
+    const inviteChanges = yield* PubSub.unbounded<void>();
     const subscribed = yield* Queue.unbounded<void>();
     const subscribe = <A>(changes: PubSub.PubSub<A>) =>
       Stream.unwrap(
@@ -1363,6 +1366,10 @@ it.effect("access changes made while the snapshot loads reach the client after i
                 legacyCookieName: undefined,
                 streamChanges: subscribe(sessionChanges),
               }),
+              Layer.mock(AppInvites.AppInvites)({
+                list: Effect.succeed([]),
+                changes: subscribe(inviteChanges),
+              }),
             ),
           ),
         ),
@@ -1379,6 +1386,7 @@ it.effect("access changes made while the snapshot loads reach the client after i
     const snapshot = yield* Queue.take(responses);
     assert.equal(snapshot.type, "snapshot");
     yield* server.write(0, { _tag: "Ack", requestId });
+    yield* Queue.take(subscribed);
     yield* Queue.take(subscribed);
     yield* Queue.take(subscribed);
 
@@ -1401,7 +1409,19 @@ it.effect("access changes made while the snapshot loads reach the client after i
       version: 1,
       revision: 4,
       type: "snapshot",
-      payload: { pairingLinks: [], clientSessions: [], connectDevices: [] },
+      payload: { pairingLinks: [], clientSessions: [], connectDevices: [], appInvites: [] },
+    });
+    yield* server.write(0, { _tag: "Ack", requestId });
+    // Reloading the snapshot read the sessions again, which revoked one more time.
+    assert.equal((yield* Queue.take(responses)).type, "clientRemoved");
+    yield* server.write(0, { _tag: "Ack", requestId });
+    // Nor do app invites, which older clients could not decode.
+    yield* PubSub.publish(inviteChanges, undefined);
+    assert.deepEqual(yield* Queue.take(responses), {
+      version: 1,
+      revision: 6,
+      type: "snapshot",
+      payload: { pairingLinks: [], clientSessions: [], connectDevices: [], appInvites: [] },
     });
     yield* server.write(0, { _tag: "Interrupt", requestId, interruptors: [] });
   }).pipe(

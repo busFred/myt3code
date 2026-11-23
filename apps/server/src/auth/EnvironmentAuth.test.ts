@@ -4,11 +4,13 @@ import {
   authScopeResponse,
   AuthAdministrativeClientScopes,
   connectDeviceVerificationCode,
+  NEVER_EXPIRES_AT_MILLIS,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -592,6 +594,140 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
       }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
     );
 
+    it.effect(
+      "gives each session a pairing link creates the link's lifetime, but not T3 Connect's",
+      () =>
+        Effect.gen(function* () {
+          const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+          const sessions = yield* SessionStore.SessionStore;
+          const day = 24 * 60 * 60 * 1000;
+          const never = { _tag: "never" } as const;
+          const listedExpiry = (sessionId: string) =>
+            serverAuth
+              .listSessions()
+              .pipe(
+                Effect.map(
+                  (listed) =>
+                    listed.find((session) => session.sessionId === sessionId)?.expiresAt
+                      .epochMilliseconds,
+                ),
+              );
+          const pairedAt = (yield* DateTime.now).epochMilliseconds;
+
+          const browserCode = yield* serverAuth.issuePairingCredential({ lifetime: never });
+          expect(browserCode.lifetime).toEqual(never);
+          const browser = yield* serverAuth.createBrowserSession(
+            browserCode.credential,
+            requestMetadata,
+          );
+          expect(browser.response.expiresAt.epochMilliseconds).toBe(NEVER_EXPIRES_AT_MILLIS);
+
+          const bearerCode = yield* serverAuth.createPairingLink({
+            lifetime: { _tag: "duration", millis: 90 * day },
+          });
+          const bearer = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+            bearerCode.credential,
+            undefined,
+            requestMetadata,
+          );
+          expect(bearer.expires_in).toBe((90 * day) / 1000);
+
+          // A renewing device keeps its short token; the lifetime is its window.
+          const key = makeDpopKey();
+          const dpopCode = yield* serverAuth.issuePairingCredential({ lifetime: never });
+          const dpop = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+            dpopCode.credential,
+            undefined,
+            requestMetadata,
+            { proofKeyThumbprint: key.thumbprint },
+          );
+          expect(dpop.expires_in).toBe(60 * 60);
+          const dpopSession = (yield* sessions.verify(dpop.access_token)).sessionId;
+          expect(yield* listedExpiry(dpopSession)).toBe(NEVER_EXPIRES_AT_MILLIS);
+
+          const peerCode = yield* serverAuth.issuePairingCredential({
+            access: "auto",
+            purpose: "peer-link",
+            lifetime: never,
+          });
+          const approved = yield* serverAuth.consumeMcpApprovalCode(
+            peerCode.credential,
+            "auto",
+            true,
+          );
+          expect(approved).toEqual({ access: "auto", lifetime: never });
+          const peer = yield* serverAuth.issueMcpClientSession({
+            label: "T3 Code · A",
+            peerLink: true,
+            client: requestMetadata,
+            ...approved,
+          });
+
+          const connectKey = makeDpopKey();
+          const connect = yield* serverAuth.createPairingLink({
+            subject: EnvironmentAuth.CLOUD_CONNECT_SUBJECT,
+            lifetime: never,
+          });
+          const connected = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+            connect.credential,
+            undefined,
+            requestMetadata,
+            { proofKeyThumbprint: connectKey.thumbprint },
+          );
+          const connectSession = (yield* sessions.verify(connected.access_token)).sessionId;
+          expect(yield* listedExpiry(connectSession)).toBe(pairedAt + 60 * 60 * 1000);
+
+          // A year on, the never sessions still work, and using the peer link never shortens it.
+          yield* TestClock.adjust("365 days");
+          const verifiedBrowser = yield* sessions.verify(browser.sessionToken);
+          expect(verifiedBrowser.expiresAt?.epochMilliseconds).toBe(NEVER_EXPIRES_AT_MILLIS);
+          const used = yield* serverAuth.authenticateMcpClient(makeBearerRequest(peer.token));
+          expect(used.linkExpiresAt?.epochMilliseconds).toBe(NEVER_EXPIRES_AT_MILLIS);
+          expect(yield* listedExpiry(peer.sessionId)).toBe(NEVER_EXPIRES_AT_MILLIS);
+          const renewed = yield* serverAuth.renewAccessToken(
+            dpop.access_token,
+            key.thumbprint,
+            Effect.void,
+          );
+          expect(renewed.expires_in).toBe(60 * 60);
+          expect(yield* listedExpiry(dpopSession)).toBe(NEVER_EXPIRES_AT_MILLIS);
+        }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
+    );
+
+    it.effect("renews a live session either way, but not T3 Connect or desktop sessions", () =>
+      Effect.gen(function* () {
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const sessions = yield* SessionStore.SessionStore;
+        // Paired the way every session was before lifetimes: a 30-day cookie.
+        const pairing = yield* serverAuth.issuePairingCredential();
+        const browser = yield* serverAuth.createBrowserSession(pairing.credential, requestMetadata);
+        const { sessionId } = yield* sessions.verify(browser.sessionToken);
+
+        const renewed = yield* serverAuth.renewSession(sessionId, { _tag: "never" });
+        expect(Option.getOrNull(renewed)?.epochMilliseconds).toBe(NEVER_EXPIRES_AT_MILLIS);
+        // The token says 30 days; the session row decides.
+        yield* TestClock.adjust("40 days");
+        expect((yield* sessions.verify(browser.sessionToken)).sessionId).toBe(sessionId);
+
+        yield* serverAuth.renewSession(sessionId, { _tag: "duration", millis: 60_000 });
+        yield* TestClock.adjust("2 minutes");
+        expect((yield* Effect.flip(sessions.verify(browser.sessionToken)))._tag).toBe(
+          "SessionTokenExpiredError",
+        );
+        expect(Option.isNone(yield* serverAuth.renewSession(sessionId, { _tag: "never" }))).toBe(
+          true,
+        );
+
+        for (const subject of [EnvironmentAuth.CLOUD_CONNECT_SUBJECT, "desktop-bootstrap"]) {
+          const issued = yield* serverAuth.issueSession({ subject });
+          const refused = yield* Effect.flip(
+            serverAuth.renewSession(issued.sessionId, { _tag: "never" }),
+          );
+          expect(refused._tag).toBe("ServerAuthSessionNotRenewableError");
+        }
+      }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
+    );
+
     it.effect("preserves pairing grants after rejecting scopes they do not grant", () =>
       Effect.gen(function* () {
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -716,7 +852,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
 
         expect(
           yield* serverAuth.consumeMcpApprovalCode(pairing.credential, "approval-required", true),
-        ).toBe("approval-required");
+        ).toEqual({ access: "approval-required" });
       }).pipe(Effect.provide(layerEnvironmentAuth())),
     );
 

@@ -128,6 +128,7 @@ import Migration0114 from "./Migrations/114_WorkflowRunIndexes.ts";
 import Migration0115 from "./Migrations/115_WorkflowRunTags.ts";
 import Migration0116 from "./Migrations/116_ForkHistoryMembership.ts";
 import Migration0117 from "./Migrations/117_WorkflowMailSender.ts";
+import { applyForkSchema, forkSchemaPending } from "./Migrations/ForkAuthLifetimes.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -322,7 +323,11 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
     FROM effect_sql_migrations
   `;
   const row = rows[0];
-  return (row?.latestId ?? 0) < latestMigrationId || (row?.previewRows ?? 0) > 0;
+  return (
+    (row?.latestId ?? 0) < latestMigrationId ||
+    (row?.previewRows ?? 0) > 0 ||
+    (yield* forkSchemaPending)
+  );
 });
 
 const run = Migrator.make({});
@@ -383,6 +388,10 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   }).pipe(
     Effect.ensuring(Option.isSome(progress) ? Ref.set(progress.value.current, null) : Effect.void),
   );
+  // Only a missing part takes the write lock; CLI startup runs this on the live database.
+  if (toMigrationInclusive === undefined && (yield* forkSchemaPending)) {
+    yield* sql.withTransaction(applyForkSchema);
+  }
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")

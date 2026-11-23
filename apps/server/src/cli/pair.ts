@@ -1,5 +1,6 @@
 import {
   type AuthEnvironmentScope,
+  AuthSessionLifetime,
   AuthStandardClientScopes,
   ExecutionEnvironmentDescriptor,
   ORCHESTRATION_PROTOCOL_VERSION,
@@ -47,7 +48,7 @@ import {
   resolveHeadlessConnectionString,
 } from "../startupAccess.ts";
 import { authScopesFlag } from "./authScopes.ts";
-import { baseDirFlag, DurationFromString } from "./config.ts";
+import { baseDirFlag, describeSessionLifetime, DurationFromString, expireFlag } from "./config.ts";
 import { hostShellWord, resolveHostCliCommand } from "./invocation.ts";
 
 const WELL_KNOWN_ENVIRONMENT_PATH = "/.well-known/t3/environment";
@@ -57,6 +58,7 @@ const encodePairResult = Schema.encodeEffect(
       credential: Schema.String,
       expiresAt: Schema.String,
       httpBaseUrl: Schema.String,
+      sessionLifetime: Schema.optionalKey(AuthSessionLifetime),
     }),
   ),
 );
@@ -226,6 +228,7 @@ const formatPairOutput = (input: {
   readonly pairingUrl: string;
   readonly token: string;
   readonly expiresAt: DateTime.Utc;
+  readonly lifetime: AuthSessionLifetime | undefined;
   readonly notes: ReadonlyArray<string>;
 }): string =>
   [
@@ -237,6 +240,7 @@ const formatPairOutput = (input: {
     `App link: ${buildPairingAppLink(input.pairingUrl)}`,
     `Token: ${input.token}`,
     `Expires: ${DateTime.formatIso(input.expiresAt)}`,
+    `Device stays signed in: ${describeSessionLifetime(input.lifetime)}`,
     ...input.notes.flatMap((note) => ["", `Note: ${note}`]),
     "",
   ].join("\n");
@@ -492,6 +496,7 @@ const mintPairingLink = Effect.fn("pair.mintPairingLink")(function* (input: {
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly ttl: Option.Option<Duration.Duration>;
   readonly label: Option.Option<string>;
+  readonly lifetime: Option.Option<AuthSessionLifetime>;
 }) {
   return yield* Effect.gen(function* () {
     const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -500,6 +505,7 @@ const mintPairingLink = Effect.fn("pair.mintPairingLink")(function* (input: {
       subject: "one-time-token",
       label: Option.getOrElse(input.label, () => "t3 pair"),
       ...(Option.isSome(input.ttl) ? { ttl: input.ttl.value } : {}),
+      ...(Option.isSome(input.lifetime) ? { lifetime: input.lifetime.value } : {}),
     });
   }).pipe(
     Effect.provide(
@@ -514,7 +520,7 @@ const mintPairingLink = Effect.fn("pair.mintPairingLink")(function* (input: {
 const ttlFlag = Flag.String("ttl").pipe(
   Flag.withSchema(DurationFromString),
   Flag.withDescription(
-    "Token TTL, for example `5m`, `1h`, or `15 minutes`. Defaults to 5 minutes.",
+    "How long the pairing token can be used, for example `5m`, `1h`, or `15 minutes`. Defaults to 5 minutes. --expire sets how long the paired device stays signed in.",
   ),
   Flag.optional,
 );
@@ -542,6 +548,7 @@ export const pairCommand = Command.make("pair", {
   json: Flag.Boolean("json").pipe(Flag.withDefault(false)),
   scopes: authScopesFlag(AuthStandardClientScopes),
   ttl: ttlFlag,
+  expire: expireFlag,
   label: labelFlag,
   tailscale: tailscaleFlag,
   tailscaleServePort: tailscaleServePortFlag,
@@ -614,6 +621,7 @@ export const pairCommand = Command.make("pair", {
         scopes: flags.scopes,
         ttl: flags.ttl,
         label: flags.label,
+        lifetime: flags.expire,
       });
       if (flags.json) {
         yield* Console.log(
@@ -621,6 +629,7 @@ export const pairCommand = Command.make("pair", {
             credential: issued.credential,
             expiresAt: DateTime.formatIso(issued.expiresAt),
             httpBaseUrl: target.state.origin,
+            ...(issued.lifetime ? { sessionLifetime: issued.lifetime } : {}),
           }),
         );
         return;
@@ -634,6 +643,7 @@ export const pairCommand = Command.make("pair", {
           pairingUrl,
           token: issued.credential,
           expiresAt: issued.expiresAt,
+          lifetime: issued.lifetime,
           notes,
         }),
       );

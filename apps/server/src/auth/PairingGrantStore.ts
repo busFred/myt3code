@@ -6,6 +6,7 @@ import {
   type AuthEnvironmentScope,
   type AuthMcpClientAccess,
   type AuthPairingLink,
+  type AuthSessionLifetime,
   mcpApprovalCode,
   PAIRING_CODE_ALPHABET,
   PAIRING_CODE_LENGTH,
@@ -41,6 +42,8 @@ export interface BootstrapGrant {
   readonly label?: string;
   readonly proofKeyThumbprint?: string;
   readonly expiresAt: DateTime.DateTime;
+  /** The lifetime the session made from this grant gets; absent is the default. */
+  readonly lifetime?: AuthSessionLifetime;
 }
 
 export class UnknownBootstrapCredentialError extends Schema.TaggedError<UnknownBootstrapCredentialError>()(
@@ -258,6 +261,7 @@ export class PairingGrantStore extends Context.Service<
       readonly mcpApproval?: AuthMcpClientAccess;
       /** Spendable only after someone trusts `proofKeyThumbprint` as a T3 Connect device. */
       readonly requiresConnectApproval?: boolean;
+      readonly lifetime?: AuthSessionLifetime;
     }) => Effect.Effect<IssuedBootstrapCredential, BootstrapCredentialInternalError>;
     /** A device's open or denied request, reused so retries keep one request and one code. */
     readonly findPendingConnect: (
@@ -340,6 +344,7 @@ const toPairingLink = (row: AuthPairingLinks.AuthPairingLinkRecord): AuthPairing
         },
       }
     : {}),
+  ...(row.sessionLifetime ? { lifetime: row.sessionLifetime } : {}),
 });
 const DESKTOP_BOOTSTRAP_TTL_HOURS = Duration.hours(24);
 const DEV_STARTUP_TTL_HOURS = Duration.hours(24);
@@ -495,6 +500,7 @@ const make = Effect.gen(function* () {
         label: input?.label ?? null,
         proofKeyThumbprint: input?.proofKeyThumbprint ?? null,
         ...(input?.requiresConnectApproval ? { requiresConnectApproval: true } : {}),
+        ...(input?.lifetime ? { sessionLifetime: input.lifetime } : {}),
         createdAt: now,
         expiresAt: expiresAt,
       })
@@ -525,6 +531,7 @@ const make = Effect.gen(function* () {
               },
             }
           : {}),
+        ...(input?.lifetime ? { lifetime: input.lifetime } : {}),
       });
     }
     return issued;
@@ -671,6 +678,7 @@ const make = Effect.gen(function* () {
             ? { proofKeyThumbprint: consumed.value.proofKeyThumbprint }
             : {}),
           expiresAt: consumed.value.expiresAt,
+          ...(consumed.value.sessionLifetime ? { lifetime: consumed.value.sessionLifetime } : {}),
         } satisfies BootstrapGrant;
       }
 

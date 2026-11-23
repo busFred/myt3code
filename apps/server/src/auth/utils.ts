@@ -9,6 +9,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeNet from "node:net";
 import { normalizeHostname } from "@t3tools/shared/hostClassification";
 import * as Mac from "effect/crypto/Mac";
+import * as DateTime from "effect/DateTime";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as Result from "effect/Result";
 
@@ -195,4 +196,33 @@ export function deriveAuthClientMetadata(input: {
     ...(os ? { os } : {}),
     ...(browser ? { browser } : {}),
   };
+}
+
+/** Browsers keep a cookie at most 400 days (RFC 6265bis), whatever expiry it is set with. */
+const MAX_COOKIE_LIFETIME_MS = 400 * 24 * 60 * 60 * 1000;
+
+export const cappedCookieExpiry = (
+  expiresAt: DateTime.DateTime,
+  now: DateTime.DateTime,
+): DateTime.Utc =>
+  DateTime.makeUnsafe(
+    Math.min(expiresAt.epochMilliseconds, now.epochMilliseconds + MAX_COOKIE_LIFETIME_MS),
+  );
+
+/**
+ * The expiry to set a browser's session cookie to again, or undefined while the cookie set at
+ * sign-in, from the token's own claims, still matches: renewal moved the session, or the
+ * session outlives what a browser keeps.
+ */
+export function browserCookieRefreshExpiry(input: {
+  readonly now: DateTime.DateTime;
+  readonly sessionExpiresAt: DateTime.DateTime;
+  readonly tokenIssuedAt: DateTime.DateTime;
+  readonly tokenExpiresAt: DateTime.DateTime;
+}): DateTime.Utc | undefined {
+  const asIssued =
+    input.sessionExpiresAt.epochMilliseconds === input.tokenExpiresAt.epochMilliseconds &&
+    input.tokenExpiresAt.epochMilliseconds - input.tokenIssuedAt.epochMilliseconds <=
+      MAX_COOKIE_LIFETIME_MS;
+  return asIssued ? undefined : cappedCookieExpiry(input.sessionExpiresAt, input.now);
 }

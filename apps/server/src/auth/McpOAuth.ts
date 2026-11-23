@@ -10,6 +10,7 @@ import {
   type AuthMcpTokenRequest,
   type AuthMcpTokenResult,
   type AuthMcpClientAccess,
+  type AuthSessionLifetime,
   type AuthEnvironmentScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -198,6 +199,8 @@ interface PendingCode {
   readonly resource: string;
   readonly access: AuthMcpClientAccess;
   readonly approvedAtRevocationCount: number;
+  /** From the pairing code that approved the sign-in, when it carried one. */
+  readonly lifetime?: AuthSessionLifetime;
   readonly expiresAtMs: number;
 }
 
@@ -447,6 +450,7 @@ const make = Effect.gen(function* () {
     authorization: AuthorizationRequest,
     access: AuthMcpClientAccess,
     approvedAtRevocationCount: number,
+    lifetime: AuthSessionLifetime | undefined,
   ) {
     const now = yield* Clock.currentTimeMillis;
     const code = Buffer.from(yield* random.randomBytes(32)).toString("base64url");
@@ -461,6 +465,7 @@ const make = Effect.gen(function* () {
         resource: authorization.resource,
         access,
         approvedAtRevocationCount,
+        ...(lifetime ? { lifetime } : {}),
         expiresAtMs: now + AUTHORIZATION_CODE_TTL_MS,
       });
       return next;
@@ -474,6 +479,7 @@ const make = Effect.gen(function* () {
     // it lands before the check or after the code is handed out.
     const approvedAtRevocationCount = yield* environmentAuth.otherSessionRevocationCount;
     let access = decision.access;
+    let lifetime: AuthSessionLifetime | undefined;
     if (decision._tag === "pairing-code") {
       // An approval code is for one app's sign-in, never for linking another environment.
       if (input.authorization.client.peerLink && parseMcpApprovalCode(decision.code)) {
@@ -481,7 +487,7 @@ const make = Effect.gen(function* () {
           description: "Linking needs a plain pairing code, not an app approval code.",
         });
       }
-      access = yield* environmentAuth
+      const approved = yield* environmentAuth
         .consumeMcpApprovalCode(decision.code, decision.access, input.authorization.client.peerLink)
         .pipe(
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (cause) =>
@@ -496,6 +502,8 @@ const make = Effect.gen(function* () {
             ),
           ),
         );
+      access = approved.access;
+      lifetime = approved.lifetime;
     } else {
       const session = yield* approvingSession(input.request, input.authorization);
       if (
@@ -508,7 +516,7 @@ const make = Effect.gen(function* () {
         });
       }
     }
-    const code = yield* mintCode(input.authorization, access, approvedAtRevocationCount);
+    const code = yield* mintCode(input.authorization, access, approvedAtRevocationCount, lifetime);
     yield* Effect.logInfo("Approved an MCP client sign-in.", {
       client: input.authorization.client.name,
       access,
@@ -574,6 +582,7 @@ const make = Effect.gen(function* () {
           peerLink: pending.peerLink,
           client: deriveAuthClientMetadata({ request }),
           approvedAtRevocationCount: pending.approvedAtRevocationCount,
+          ...(pending.lifetime ? { lifetime: pending.lifetime } : {}),
         })
         .pipe(
           Effect.catch((cause) =>

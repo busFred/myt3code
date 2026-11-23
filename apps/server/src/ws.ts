@@ -11,6 +11,7 @@ import * as PeerClientPairing from "./peer/PeerClientPairing.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
 import * as PeerThreadRelay from "./peer/PeerThreadRelay.ts";
+import * as AppInvites from "./auth/AppInvites.ts";
 
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -1596,6 +1597,7 @@ export const layerWsRpc = (
       const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
       const peerThreadRelay = yield* PeerThreadRelay.PeerThreadRelay;
       const peerClientPairing = yield* PeerClientPairing.PeerClientPairing;
+      const appInvites = yield* AppInvites.AppInvites;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFolders = yield* WorkspaceFolders.WorkspaceFolders;
@@ -1865,6 +1867,7 @@ export const layerWsRpc = (
           pairingLinks: serverAuth.listPairingLinks(),
           clientSessions: serverAuth.listClientSessions(currentSessionId),
           connectDevices: serverAuth.listConnectDevices(),
+          appInvites: appInvites.list,
         }).pipe(
           Effect.mapError(
             (error) =>
@@ -3722,7 +3725,9 @@ export const layerWsRpc = (
           Stream.unwrap(
             Effect.gen(function* () {
               const liveBuffer = yield* Queue.unbounded<
-                PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange
+                | PairingGrantStore.BootstrapCredentialChange
+                | SessionStore.SessionCredentialChange
+                | { readonly type: "appInvitesChanged" }
               >();
               // Each store subscribes only when consumed, so start both before the snapshot read.
               yield* Effect.forkScoped(
@@ -3737,6 +3742,12 @@ export const layerWsRpc = (
                 ),
                 { startImmediately: true },
               );
+              yield* Effect.forkScoped(
+                Stream.runForEach(appInvites.changes, () =>
+                  Queue.offer(liveBuffer, { type: "appInvitesChanged" as const }),
+                ),
+                { startImmediately: true },
+              );
               const initialSnapshot = yield* loadAuthAccessSnapshot();
               const revisionRef = yield* Ref.make(1);
 
@@ -3745,8 +3756,9 @@ export const layerWsRpc = (
                   Stream.mapEffect((change) =>
                     Ref.updateAndGet(revisionRef, (revision) => revision + 1).pipe(
                       Effect.flatMap((revision) =>
-                        // Device trust has no incremental event older clients could decode.
-                        change.type === "connectDevicesChanged"
+                        // Device trust and invites have no incremental event older clients could decode.
+                        change.type === "connectDevicesChanged" ||
+                        change.type === "appInvitesChanged"
                           ? loadAuthAccessSnapshot().pipe(
                               Effect.map((payload): AuthAccessStreamEvent => ({
                                 version: 1,
@@ -3814,6 +3826,7 @@ export const layer = Layer.unwrap(
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
     const peerThreadRelay = yield* PeerThreadRelay.PeerThreadRelay;
     const peerClientPairing = yield* PeerClientPairing.PeerClientPairing;
+    const appInvites = yield* AppInvites.AppInvites;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3922,6 +3935,7 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
               Layer.provide(Layer.succeed(PeerThreadRelay.PeerThreadRelay, peerThreadRelay)),
               Layer.provide(Layer.succeed(PeerClientPairing.PeerClientPairing, peerClientPairing)),
+              Layer.provide(Layer.succeed(AppInvites.AppInvites, appInvites)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

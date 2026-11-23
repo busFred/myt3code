@@ -35,7 +35,7 @@ import {
 import { deriveServerPaths } from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { acquireServerOwnership } from "../serverOwnership.ts";
-import { resolveServerConfig } from "./config.ts";
+import { DurationFromString, resolveServerConfig, SessionLifetimeFromString } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
   deriveServerPaths(baseDir, devUrl, { baseDirIsExplicit: true });
@@ -1086,4 +1086,18 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       });
     }),
   );
+});
+
+it("parses `--ttl` years and `--expire` never or a duration", () => {
+  const day = 24 * 60 * 60 * 1000;
+  const duration = Schema.decodeUnknownSync(DurationFromString);
+  const lifetime = Schema.decodeUnknownSync(SessionLifetimeFromString);
+  expect(duration("1y")).toEqual(duration("365d"));
+  expect(lifetime("never")).toEqual({ _tag: "never" });
+  expect(lifetime(" Never ")).toEqual({ _tag: "never" });
+  expect(lifetime("2y")).toEqual({ _tag: "duration", millis: 730 * day });
+  expect(lifetime("90d")).toEqual({ _tag: "duration", millis: 90 * day });
+  for (const invalid of ["0d", "forever", ""]) {
+    expect(() => lifetime(invalid)).toThrow();
+  }
 });

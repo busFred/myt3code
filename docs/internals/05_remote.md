@@ -39,6 +39,18 @@ side lists and revokes it in Sharing & access like any other session, and owns i
   layout command still runs only with a person's approval of its text, and for an agent only from
   a thread in Full access, both checked in
   [`TaskFolders`](../../apps/server/src/workspace/TaskFolders.ts) at every run.
+- **The receiving side owns the deadline.** The linking side stores the `T3-Link-Expires-At` each
+  call returns and never extends a link on its own. The pairing code can give the session a longer
+  lifetime or never, and renewal never shortens one. The linking side reads the session id from
+  its token's signed but unencrypted claims and reports it as `peerSessionId`, so a client with
+  access on the receiving side can renew that session there.
+- **Both ways is two links.** Each is made as a single link is, with a code minted on the side
+  being linked to. [`runLinkBothWays`](../../packages/client-runtime/src/linkBothWays.ts) runs both
+  for a client connected to each side, turns Linked environments on first where it is off, and
+  leaves an [app invite](./04_environment-auth.md#scoped-sessions-and-delegation).
+  `t3 environment link --both-ways` spends one standard code for a session that must manage access
+  there, shortened to minutes, and has the other side link back through
+  `POST /api/peer-links/link`, the HTTP form of `peerLinks.link`.
 - **Namespace idempotency keys.** All callers on the linking side share one session on the receiving
   side, so idempotency keys must be hashed with the caller's namespace before forwarding.
 - **Clients read linked threads as standard thread streams.**

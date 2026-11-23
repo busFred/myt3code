@@ -1,6 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, NEVER_EXPIRES_AT_MILLIS } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -224,6 +224,64 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.lay
       yield* TestClock.adjust(Duration.millis(1));
       yield* Fiber.join(watcher);
     }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
+
+  it.effect("closes a socket when its session is renewed to end sooner", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const client = yield* sessions.issue({ subject: "owner" });
+      const watcher = yield* sessions
+        .awaitInvalidation(client.sessionId)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* sessions.setExpiry(client.sessionId, { _tag: "duration", millis: 60_000 });
+      yield* TestClock.adjust(Duration.minutes(1));
+      yield* Fiber.join(watcher);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
+
+  it.effect("slides a renewing device's session by its own window once given one", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const renewable = { ttl: Duration.hours(1), renewalWindow: Duration.hours(2) };
+      const window = { _tag: "duration", millis: Duration.toMillis(Duration.days(90)) } as const;
+      const client = yield* sessions.issue({
+        ...relaySessionInput,
+        ...renewable,
+        lifetime: window,
+      });
+      const listed = sessions
+        .listActive()
+        .pipe(
+          Effect.map(
+            (active) =>
+              active.find((entry) => entry.sessionId === client.sessionId)?.expiresAt
+                .epochMilliseconds,
+          ),
+        );
+      expect(client.expiresAt.epochMilliseconds).toBe(Duration.toMillis(Duration.hours(1)));
+      expect(yield* listed).toBe(Duration.toMillis(Duration.days(90)));
+      // The token stays short even though the session lasts.
+      yield* TestClock.adjust(Duration.hours(2));
+      expect((yield* Effect.flip(sessions.verify(client.token)))._tag).toBe(
+        "SessionTokenExpiredError",
+      );
+      const renewed = yield* sessions.renew(client.token, {
+        proofKeyThumbprint: relaySessionInput.proofKeyThumbprint,
+        consumeProof: Effect.void,
+        ...renewable,
+      });
+      expect(yield* listed).toBe(
+        Duration.toMillis(Duration.hours(2)) + Duration.toMillis(Duration.days(90)),
+      );
+      // Renewing to never makes the window never, and the token stays short.
+      yield* sessions.setExpiry(client.sessionId, { _tag: "never" });
+      yield* sessions.renew(renewed.token, {
+        proofKeyThumbprint: relaySessionInput.proofKeyThumbprint,
+        consumeProof: Effect.void,
+        ...renewable,
+      });
+      expect(yield* listed).toBe(NEVER_EXPIRES_AT_MILLIS);
+    }).pipe(Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
   );
 
   it.effect("closes a DPoP socket when an earlier renewal in its chain is revoked", () =>
@@ -613,9 +671,20 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.lay
       yield* sessions.revoke(issued.sessionId);
       expect(millis(yield* sessions.extend(issued.sessionId, overlapping, step))).toBeNull();
 
+      // A session that never expires, or lasts longer, is never pulled in by an extension.
+      const forever = yield* sessions.issue({ subject: "owner", lifetime: { _tag: "never" } });
+      expect(forever.expiresAt.epochMilliseconds).toBe(NEVER_EXPIRES_AT_MILLIS);
+      const sooner = DateTime.toUtc(DateTime.add(issued.expiresAt, { days: 20 }));
+      expect(millis(yield* sessions.extend(forever.sessionId, sooner, step))).toBe(
+        NEVER_EXPIRES_AT_MILLIS,
+      );
+
       yield* TestClock.setTime(idle.expiresAt.epochMilliseconds);
       const afterExpiry = DateTime.toUtc(DateTime.add(idle.expiresAt, { days: 30 }));
       expect(millis(yield* sessions.extend(idle.sessionId, afterExpiry, step))).toBeNull();
+      expect((yield* sessions.verify(forever.token)).expiresAt?.epochMilliseconds).toBe(
+        NEVER_EXPIRES_AT_MILLIS,
+      );
     }).pipe(Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
   );
 

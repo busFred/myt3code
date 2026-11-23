@@ -6,6 +6,10 @@ import type {
   AuthAccessStreamSnapshotEvent,
   AuthCreatePairingCredentialInput,
   AuthRevokeClientSessionInput,
+  AuthRenewClientSessionInput,
+  AuthCreateAppInviteInput,
+  AuthRevokeAppInviteInput,
+  AuthLinkPeerInput,
   AuthRevokePairingLinkInput,
 } from "@t3tools/contracts";
 import { WS_METHODS } from "@t3tools/contracts";
@@ -121,6 +125,53 @@ export function createAuthEnvironmentAtoms<R, E>(
           url: (urls) => urls.revokeClient(),
           timeoutMs: ACCESS_REQUEST_TIMEOUT_MS,
           request: ({ client, headers }) => client.revokeClient({ headers, payload: input }),
+        }),
+    }),
+    /** Sets a session's expiry; servers without it answer 404. */
+    renewClient: createEnvironmentCommand(runtime, {
+      label: "environment-data:server:auth-renew-client",
+      execute: (input: AuthRenewClientSessionInput) =>
+        executeConnectedEnvironmentHttpRequest({
+          group: "auth",
+          method: "POST",
+          url: (urls) => urls.renewClient(),
+          timeoutMs: ACCESS_REQUEST_TIMEOUT_MS,
+          request: ({ client, headers }) => client.renewClient({ headers, payload: input }),
+        }),
+    }),
+    createAppInvite: createEnvironmentCommand(runtime, {
+      label: "environment-data:server:access-create-app-invite",
+      execute: (input: AuthCreateAppInviteInput) =>
+        executeConnectedEnvironmentHttpRequest({
+          group: "access",
+          method: "POST",
+          url: (urls) => urls.createAppInvite(),
+          timeoutMs: ACCESS_REQUEST_TIMEOUT_MS,
+          request: ({ client, headers }) => client.createAppInvite({ headers, payload: input }),
+        }),
+    }),
+    revokeAppInvite: createEnvironmentCommand(runtime, {
+      label: "environment-data:server:access-revoke-app-invite",
+      execute: (input: AuthRevokeAppInviteInput) =>
+        executeConnectedEnvironmentHttpRequest({
+          group: "access",
+          method: "POST",
+          url: (urls) => urls.revokeAppInvite(),
+          timeoutMs: ACCESS_REQUEST_TIMEOUT_MS,
+          request: ({ client, headers }) => client.revokeAppInvite({ headers, payload: input }),
+        }),
+    }),
+    /** `peerLinks.link` over HTTP, optionally turning Linked environments on there first. */
+    linkPeer: createEnvironmentCommand(runtime, {
+      label: "environment-data:server:access-link-peer",
+      execute: (input: AuthLinkPeerInput) =>
+        executeConnectedEnvironmentHttpRequest({
+          group: "access",
+          method: "POST",
+          url: (urls) => urls.linkPeer(),
+          // Linking probes the other environment's addresses and signs in there.
+          timeoutMs: 60_000,
+          request: ({ client, headers }) => client.linkPeer({ headers, payload: input }),
         }),
     }),
     revokeOtherClients: createEnvironmentCommand(runtime, {

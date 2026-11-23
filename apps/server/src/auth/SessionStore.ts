@@ -6,9 +6,11 @@ import {
   type AuthClientMetadata,
   type AuthClientSession,
   type AuthEnvironmentScope,
+  type AuthSessionLifetime,
   AuthWebSocketTicketUse,
   RuntimeMode,
   type ServerAuthSessionMethod,
+  sessionLifetimeExpiresAtMillis,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -65,6 +67,9 @@ export interface VerifiedSession {
   readonly runtimeModeCeiling?: RuntimeMode;
   /** An MCP client that is another T3 Code environment's peer link. */
   readonly peerLink?: true;
+  /** What the token itself says; a browser cookie was set from these when it was issued. */
+  readonly tokenIssuedAt?: DateTime.Utc;
+  readonly tokenExpiresAt?: DateTime.Utc;
 }
 
 export interface VerifiedWebSocketTicket extends VerifiedSession {
@@ -367,6 +372,18 @@ export class OtherSessionsRevocationError extends Schema.TaggedError<OtherSessio
   }
 }
 
+export class SessionRenewalError extends Schema.TaggedError<SessionRenewalError>()(
+  "SessionRenewalError",
+  {
+    sessionId: AuthSessionId,
+    ...sessionCredentialInternalErrorContext,
+  },
+) {
+  override get message(): string {
+    return "Failed to renew session.";
+  }
+}
+
 export class ProofKeySessionsError extends Schema.TaggedError<ProofKeySessionsError>()(
   "ProofKeySessionsError",
   {
@@ -389,6 +406,7 @@ export const SessionCredentialInternalError = Schema.Union([
   SessionRevocationError,
   OtherSessionsRevocationError,
   ProofKeySessionsError,
+  SessionRenewalError,
 ]);
 export type SessionCredentialInternalError = typeof SessionCredentialInternalError.Type;
 
@@ -416,6 +434,8 @@ export class SessionStore extends Context.Service<
       readonly replaceSessionId?: AuthSessionId;
       /** Keeps the session alive this long past each renewal; `ttl` then bounds only the token. */
       readonly renewalWindow?: Duration.Duration;
+      /** Replaces `ttl`, or for a renewable session its window, with this lifetime. */
+      readonly lifetime?: AuthSessionLifetime;
     }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
     /** Trades a renewable token, even an expired one, for a fresh token on the same session. */
     readonly renew: (
@@ -423,6 +443,7 @@ export class SessionStore extends Context.Service<
       input: {
         readonly proofKeyThumbprint: string;
         readonly ttl: Duration.Duration;
+        /** The window for a session that has none of its own. */
         readonly renewalWindow: Duration.Duration;
         readonly consumeProof: Effect.Effect<
           void,
@@ -442,6 +463,14 @@ export class SessionStore extends Context.Service<
       sessionId: AuthSessionId,
       expiresAt: DateTime.Utc,
       step: Duration.Duration,
+    ) => Effect.Effect<Option.Option<DateTime.Utc>, SessionCredentialInternalError>;
+    /**
+     * Sets a live session's expiry to `lifetime` from now, earlier or later; a renewable session
+     * also takes it as its window. None when the session is revoked, expired or missing.
+     */
+    readonly setExpiry: (
+      sessionId: AuthSessionId,
+      lifetime: AuthSessionLifetime,
     ) => Effect.Effect<Option.Option<DateTime.Utc>, SessionCredentialInternalError>;
     readonly issueWebSocketToken: (
       sessionId: AuthSessionId,
@@ -732,11 +761,21 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError((cause) => new SessionCredentialIssueError({ cause }))),
       );
       const issuedAt = yield* DateTime.now;
-      const expiresAt = DateTime.add(issuedAt, {
-        milliseconds: Duration.toMillis(input?.ttl ?? DEFAULT_SESSION_TTL),
-      });
+      const lifetimeExpiresAt =
+        input?.lifetime === undefined
+          ? undefined
+          : DateTime.makeUnsafe(
+              sessionLifetimeExpiresAtMillis(input.lifetime, issuedAt.epochMilliseconds),
+            );
+      const expiresAt =
+        lifetimeExpiresAt !== undefined && input?.renewalWindow === undefined
+          ? lifetimeExpiresAt
+          : DateTime.add(issuedAt, {
+              milliseconds: Duration.toMillis(input?.ttl ?? DEFAULT_SESSION_TTL),
+            });
       const sessionExpiresAt = input?.renewalWindow
-        ? DateTime.add(issuedAt, { milliseconds: Duration.toMillis(input.renewalWindow) })
+        ? (lifetimeExpiresAt ??
+          DateTime.add(issuedAt, { milliseconds: Duration.toMillis(input.renewalWindow) }))
         : expiresAt;
       const claims: SessionClaims = {
         v: 1,
@@ -771,6 +810,7 @@ const make = Effect.gen(function* () {
         issuedAt,
         expiresAt: sessionExpiresAt,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
+        ...(input?.renewalWindow && input.lifetime ? { renewalWindow: input.lifetime } : {}),
       } satisfies AuthSessions.CreateAuthSessionInput;
       const replacedSessionIds = yield* (
         input?.replaceSessionId !== undefined || input?.replaceActiveForSubjectAndMethod
@@ -882,10 +922,10 @@ const make = Effect.gen(function* () {
           expirationClaim: claims.exp,
         });
       }
-      // A peer link's session renews while it is used and its token is never
-      // reissued, so the session row holds its deadline, not the token.
-      const rowHoldsDeadline = claims.plk === 1;
-      if (!rowHoldsDeadline && claims.exp <= observedAt.epochMilliseconds) {
+      // The session row holds the deadline, so renewing a session moves it without a new
+      // token. Only a renewing device's short token keeps its own expiry as well.
+      const tokenBounded = claims.rnw === 1;
+      if (tokenBounded && claims.exp <= observedAt.epochMilliseconds) {
         return yield* new SessionTokenExpiredError({
           sessionId: claims.sid,
           expiresAt: expiresAt.value,
@@ -909,10 +949,7 @@ const make = Effect.gen(function* () {
           revokedAt: row.value.revokedAt,
         });
       }
-      if (
-        rowHoldsDeadline &&
-        row.value.expiresAt.epochMilliseconds <= observedAt.epochMilliseconds
-      ) {
+      if (row.value.expiresAt.epochMilliseconds <= observedAt.epochMilliseconds) {
         return yield* new SessionTokenExpiredError({
           sessionId: claims.sid,
           expiresAt: row.value.expiresAt,
@@ -925,12 +962,16 @@ const make = Effect.gen(function* () {
         token,
         method: claims.method,
         client: toClientMetadata(row.value.client),
-        expiresAt: rowHoldsDeadline ? row.value.expiresAt : expiresAt.value,
+        expiresAt: tokenBounded
+          ? DateTime.min(expiresAt.value, row.value.expiresAt)
+          : row.value.expiresAt,
         subject: claims.sub,
         scopes: row.value.scopes,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
         ...(claims.rtc ? { runtimeModeCeiling: claims.rtc } : {}),
         ...(claims.plk === 1 ? { peerLink: true as const } : {}),
+        tokenIssuedAt: DateTime.makeUnsafe(claims.iat),
+        tokenExpiresAt: expiresAt.value,
       } satisfies VerifiedSession;
     },
   );
@@ -1007,10 +1048,16 @@ const make = Effect.gen(function* () {
       }
       yield* input.consumeProof;
       const expiresAt = DateTime.add(now, { milliseconds: Duration.toMillis(input.ttl) });
+      const windowEndsAt =
+        row.value.renewalWindow === null
+          ? DateTime.add(now, { milliseconds: Duration.toMillis(input.renewalWindow) })
+          : DateTime.makeUnsafe(
+              sessionLifetimeExpiresAtMillis(row.value.renewalWindow, now.epochMilliseconds),
+            );
       const extended = yield* authSessions
         .extend({
           sessionId: claims.sid,
-          expiresAt: DateTime.add(now, { milliseconds: Duration.toMillis(input.renewalWindow) }),
+          expiresAt: windowEndsAt,
           now,
         })
         .pipe(
@@ -1043,6 +1090,27 @@ const make = Effect.gen(function* () {
         proofKeyThumbprint: input.proofKeyThumbprint,
       } satisfies IssuedSession;
     },
+  );
+
+  const setExpiry: SessionStore["Service"]["setExpiry"] = Effect.fn("SessionStore.setExpiry")(
+    function* (sessionId, lifetime) {
+      const now = yield* DateTime.now;
+      const expiresAt = DateTime.makeUnsafe(
+        sessionLifetimeExpiresAtMillis(lifetime, now.epochMilliseconds),
+      );
+      const updated = yield* authSessions.setExpiry({
+        sessionId,
+        expiresAt,
+        renewalWindow: lifetime,
+        now,
+      });
+      if (!updated) return Option.none<DateTime.Utc>();
+      const session = yield* loadActiveSession(sessionId);
+      if (Option.isSome(session)) yield* emitUpsert(session.value);
+      return Option.some(expiresAt);
+    },
+    (effect, sessionId) =>
+      Effect.mapError(effect, (cause) => new SessionRenewalError({ sessionId, cause })),
   );
 
   const encodeWsClaims = Schema.encodeEffect(Schema.fromJsonString(WebSocketClaims));
@@ -1288,13 +1356,15 @@ const make = Effect.gen(function* () {
               ),
           );
         // Revoking any session the socket has used closes it. Events only wake this loop
-        // and the rows decide: revocations are written before they are published, and
-        // clientRemoved also reports an expired session losing its last socket.
+        // and the rows decide: changes are written before they are published, clientRemoved
+        // also reports an expired session losing its last socket, and an upsert can move expiry.
         const chain = [sessionId];
         const nextRemoval = Effect.gen(function* () {
           while (true) {
             const change = yield* PubSub.take(subscription);
-            if (change.type === "clientRemoved" && chain.includes(change.sessionId)) return;
+            const changed =
+              change.type === "clientRemoved" ? change.sessionId : change.clientSession.sessionId;
+            if (chain.includes(changed)) return;
           }
         });
         let current = original.value;
@@ -1344,6 +1414,7 @@ const make = Effect.gen(function* () {
     issue,
     renew,
     extend,
+    setExpiry,
     verify,
     issueWebSocketToken,
     verifyWebSocketToken,

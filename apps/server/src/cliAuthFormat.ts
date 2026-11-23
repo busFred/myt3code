@@ -55,6 +55,7 @@ export function formatIssuedPairingCredential(
         ...(credential.label ? { label: credential.label } : {}),
         scopes: credential.scopes,
         expiresAt: toIsoString(credential.expiresAt),
+        ...(credential.lifetime ? { sessionLifetime: credential.lifetime } : {}),
         ...(pairUrl ? { pairUrl } : {}),
       },
       null,
@@ -68,6 +69,11 @@ export function formatIssuedPairingCredential(
       `Token: ${credential.credential}`,
       ...(pairUrl ? [`Pair URL: ${pairUrl}`] : []),
       `Expires at: ${toIsoString(credential.expiresAt)}`,
+      ...(credential.lifetime
+        ? [
+            `Device stays signed in: ${credential.lifetime._tag === "never" ? "never expires" : `${Math.round(credential.lifetime.millis / 86_400_000)} days`}`,
+          ]
+        : []),
     ].join(newline) + newline
   );
 }

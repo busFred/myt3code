@@ -3,6 +3,7 @@ import * as HttpApiSchema from "effect/http-api/HttpApiSchema";
 
 import {
   AuthSessionId,
+  EnvironmentId,
   ForwardCompatibleArray,
   ClientSurface,
   ClientWebDeployment,
@@ -323,6 +324,36 @@ export function parseMcpApprovalCode(
   return access && { access, code: mcpApprovalCode(access, match[2]!.toUpperCase()) };
 }
 
+/**
+ * A session that never expires keeps this expiry, so `expiresAt` fields, token claims and
+ * `expires_at > now` checks need no special case. Every date API in use holds it.
+ */
+export const NEVER_EXPIRES_AT_MILLIS = Date.UTC(9999, 11, 31);
+// A linking side derives its copy from `expires_in`, so it lands a little before the sentinel.
+const NEVER_EXPIRING_FROM_MILLIS = Date.UTC(9000, 0, 1);
+
+export const isNeverExpiring = (expiresAt: { readonly epochMilliseconds: number } | number) =>
+  (typeof expiresAt === "number" ? expiresAt : expiresAt.epochMilliseconds) >=
+  NEVER_EXPIRING_FROM_MILLIS;
+
+/** How long a device session lasts: until a fixed time from now, or never. Absent means the default. */
+export const AuthSessionLifetime = Schema.Union([
+  Schema.TaggedStruct("never", {}),
+  Schema.TaggedStruct("duration", { millis: Schema.Int.check(Schema.isGreaterThan(0)) }),
+]);
+export type AuthSessionLifetime = typeof AuthSessionLifetime.Type;
+
+export const sessionLifetimeExpiresAtMillis = (
+  lifetime: AuthSessionLifetime,
+  nowMillis: number,
+): number =>
+  lifetime._tag === "never"
+    ? NEVER_EXPIRES_AT_MILLIS
+    : Math.min(nowMillis + lifetime.millis, NEVER_EXPIRES_AT_MILLIS);
+
+/** The longest a pairing code minted over the API stays usable; an app invite lasts this long. */
+export const MAX_PAIRING_LINK_TTL_MILLIS = 7 * 24 * 60 * 60 * 1000;
+
 export const AuthPairingCredentialResult = Schema.Struct({
   id: TrimmedNonEmptyString,
   credential: TrimmedNonEmptyString,
@@ -331,6 +362,8 @@ export const AuthPairingCredentialResult = Schema.Struct({
   purpose: Schema.optionalKey(Schema.Literal("peer-link")),
   /** Set when the code approves one agent sign-in at this level. Older servers omit it. */
   access: Schema.optionalKey(AuthMcpClientAccess),
+  /** The lifetime the code gives the session it creates. Older servers drop a requested one. */
+  lifetime: Schema.optionalKey(AuthSessionLifetime),
 });
 export type AuthPairingCredentialResult = typeof AuthPairingCredentialResult.Type;
 
@@ -376,8 +409,24 @@ export const AuthPairingLink = Schema.Struct({
   expiresAt: Schema.DateTimeUtc,
   /** Set while a T3 Connect device waits for approval. Older servers never send it. */
   connectDeviceRequest: Schema.optionalKey(AuthConnectDeviceRequest),
+  /** The lifetime of the session the link creates, when not the default. */
+  lifetime: Schema.optionalKey(AuthSessionLifetime),
 });
 export type AuthPairingLink = typeof AuthPairingLink.Type;
+
+/**
+ * Another environment this one's own desktop app should connect to, left by a client that
+ * linked the two. The pairing code for it stays on the server until the app takes it.
+ */
+export const AuthAppInvite = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  environmentId: EnvironmentId,
+  label: TrimmedNonEmptyString,
+  urls: Schema.Array(TrimmedNonEmptyString),
+  createdAt: Schema.DateTimeUtc,
+  expiresAt: Schema.DateTimeUtc,
+});
+export type AuthAppInvite = typeof AuthAppInvite.Type;
 
 /** A T3 Connect device key this environment trusts to connect without asking again. */
 export const AuthConnectDevice = Schema.Struct({
@@ -407,6 +456,8 @@ export const AuthAccessSnapshot = Schema.Struct({
   clientSessions: Schema.Array(AuthClientSession),
   /** Older servers omit it; they have no device approval. */
   connectDevices: Schema.optionalKey(Schema.Array(AuthConnectDevice)),
+  /** Invites waiting for this environment's desktop app. Older servers omit it. */
+  appInvites: Schema.optionalKey(Schema.Array(AuthAppInvite)),
 });
 export type AuthAccessSnapshot = typeof AuthAccessSnapshot.Type;
 
@@ -491,6 +542,47 @@ export const AuthRevokeClientSessionInput = Schema.Struct({
 });
 export type AuthRevokeClientSessionInput = typeof AuthRevokeClientSessionInput.Type;
 
+/** Sets a live session's expiry from now; a renewing device's session gets it as its window. */
+export const AuthRenewClientSessionInput = Schema.Struct({
+  sessionId: AuthSessionId,
+  lifetime: AuthSessionLifetime,
+});
+export type AuthRenewClientSessionInput = typeof AuthRenewClientSessionInput.Type;
+
+export const AuthRenewClientSessionResult = Schema.Struct({
+  renewed: Schema.Boolean,
+  expiresAt: Schema.optionalKey(Schema.DateTimeUtc),
+});
+export type AuthRenewClientSessionResult = typeof AuthRenewClientSessionResult.Type;
+
+export const AuthCreateAppInviteInput = Schema.Struct({
+  environmentId: EnvironmentId,
+  label: TrimmedNonEmptyString,
+  urls: Schema.NonEmptyArray(TrimmedNonEmptyString),
+  /** A one-time pairing code from that environment, for this environment's desktop app. */
+  credential: TrimmedNonEmptyString,
+  /** When the code stops working there; the invite ends then too. */
+  credentialExpiresAt: Schema.optionalKey(Schema.DateTimeUtc),
+});
+export type AuthCreateAppInviteInput = typeof AuthCreateAppInviteInput.Type;
+
+export const AuthRevokeAppInviteInput = Schema.Struct({ id: TrimmedNonEmptyString });
+export type AuthRevokeAppInviteInput = typeof AuthRevokeAppInviteInput.Type;
+
+export const AuthRevokeAppInviteResult = Schema.Struct({ revoked: Schema.Boolean });
+export type AuthRevokeAppInviteResult = typeof AuthRevokeAppInviteResult.Type;
+
+export const AuthPendingAppInvite = Schema.Struct({
+  ...AuthAppInvite.fields,
+  credential: TrimmedNonEmptyString,
+});
+export type AuthPendingAppInvite = typeof AuthPendingAppInvite.Type;
+
+export const AuthTakePendingAppInvitesResult = Schema.Struct({
+  invites: Schema.Array(AuthPendingAppInvite),
+});
+export type AuthTakePendingAppInvitesResult = typeof AuthTakePendingAppInvitesResult.Type;
+
 export const AuthApproveConnectDeviceInput = Schema.Struct({
   pairingLinkId: TrimmedNonEmptyString,
 });
@@ -514,6 +606,12 @@ export type AuthRevokeConnectDeviceResult = typeof AuthRevokeConnectDeviceResult
 const pairingCredentialFields = {
   label: Schema.optionalKey(TrimmedNonEmptyString),
   scopes: Schema.optionalKey(AuthGrantScopes),
+  /** The lifetime of the session the code creates. Older servers ignore it and omit it in the result. */
+  lifetime: Schema.optionalKey(AuthSessionLifetime),
+  /** How long the code stays usable. Older servers ignore it; the result's `expiresAt` is the truth. */
+  linkTtlMillis: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_PAIRING_LINK_TTL_MILLIS })),
+  ),
 };
 
 export const AuthCreatePairingCredentialInput = Schema.Union([

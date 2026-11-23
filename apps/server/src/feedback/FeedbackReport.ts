@@ -142,6 +142,7 @@ export const T3_CLI_COMMANDS: ReadonlyArray<string> = [
   "t3 auth session",
   "t3 auth session issue",
   "t3 auth session list",
+  "t3 auth session renew",
   "t3 auth session revoke",
   "t3 environment",
   "t3 environment link",
