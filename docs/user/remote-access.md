@@ -139,7 +139,7 @@ another link to share.
 To choose how long the device stays signed in, pass `--expire` with a duration
 such as `90d` or `1y`, or `never`. A browser gets a fixed end: it signs in again
 after that long. Phones and apps that renew their own sign-in stay signed in
-while used within that long instead, at least 10 minutes:
+while used within that long instead, at least 1 hour:
 
 ```bash
 t3 pair --expire never
@@ -526,7 +526,9 @@ t3 environment link <address> --pairing-code <code> --both-ways --expire never
 It links each machine to the other and turns on Linked environments on both.
 With `--access full-access` it also invites the other machine's desktop app to
 connect to this one, when the other machine's link here has full access, new or
-not; the invite lasts a day, and `--no-invite-app` skips it.
+not; the invite lasts a day, and `--no-invite-app` skips it. The invite is
+left only when this machine has an https or Tailscale address, since the app's
+code must not cross the network unencrypted.
 Links with less access leave no invite, because the app would get more access
 than the link. A machine that is already linked keeps its link. The invite needs
 a code that gives every standard permission, as a plain `t3 pair` code does;

@@ -13033,5 +13033,9 @@
   "ba479fe77e035abe": "También vincula la otra máquina con esta y, con acceso completo, invita a su app de escritorio a conectarse en el plazo de un día. Activa Labs → Entornos vinculados en la máquina donde esté desactivado.",
   "196af945f431ddcd": "Mientras se use en un plazo de 30 días",
   "056fa37c5b703471": "Mientras se use en un plazo de 1 año",
-  "6839d3292ffa5b03": "Solo después de crear un vínculo"
+  "6839d3292ffa5b03": "Solo después de crear un vínculo",
+  "d041d0a04805b562": "Ya vinculado, se mantiene como está ({access})",
+  "09994d5cd3ca333a": "Necesita una dirección https o de Tailscale",
+  "eb1f9774d484c1d2": "No se pudieron leer los vínculos de {label}, así que su vínculo de vuelta aquí no se renovó.",
+  "0aca36439bb7b84c": "Ya está vinculado. «Vincular en ambos sentidos» mantiene los vínculos existentes como están. Para cambiar cuánto duran, usa «Nunca caduca (en ambos sentidos)» o «Renovar» en «Clientes autorizados» de la otra máquina. Para cambiar el acceso, olvida primero el vínculo o desmarca «Vincular en ambos sentidos»."
 }

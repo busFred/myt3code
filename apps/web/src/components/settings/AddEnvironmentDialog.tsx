@@ -270,7 +270,8 @@ export function AddEnvironmentDialog({
       outcomes,
       reason: outcomes === null ? gt("Could not link both ways.") : null,
     });
-    if (outcomes !== null && summarizeBothWays(outcomes).complete) {
+    const summary = outcomes === null ? null : summarizeBothWays(outcomes);
+    if (summary !== null && summary.complete && summary.changed) {
       toastManager.add({ type: "success", title: gt("Linked both ways") });
     }
   };

@@ -13038,5 +13038,9 @@
   "ba479fe77e035abe": "Verknüpft auch den anderen Rechner mit diesem und lädt bei Vollzugriff dessen Desktop-App ein, sich innerhalb eines Tages zu verbinden. Aktiviert Labs → Verknüpfte Umgebungen auf jedem Rechner, auf dem es aus ist.",
   "196af945f431ddcd": "Solange innerhalb von 30 Tagen genutzt",
   "056fa37c5b703471": "Solange innerhalb von 1 Jahr genutzt",
-  "6839d3292ffa5b03": "Erst nachdem eine Verknüpfung erstellt wurde"
+  "6839d3292ffa5b03": "Erst nachdem eine Verknüpfung erstellt wurde",
+  "d041d0a04805b562": "Bereits verknüpft, unverändert beibehalten ({access})",
+  "09994d5cd3ca333a": "Braucht eine https- oder Tailscale-Adresse",
+  "eb1f9774d484c1d2": "Die Verknüpfungen von {label} konnten nicht gelesen werden, daher wurde die Verknüpfung zurück hierher nicht verlängert.",
+  "0aca36439bb7b84c": "Bereits verknüpft. „In beide Richtungen verknüpfen“ behält bestehende Verknüpfungen unverändert bei. Um ihre Laufzeit zu ändern, nutze „Läuft nie ab (beidseitig)“ oder „Verlängern“ unter „Autorisierte Clients“ auf dem anderen Rechner. Um den Zugriff zu ändern, vergiss die Verknüpfung zuerst oder deaktiviere „In beide Richtungen verknüpfen“."
 }

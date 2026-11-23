@@ -7,6 +7,7 @@ import { useId } from "react";
 
 import { bothWaysSide, linkEnvironmentsBothWays } from "~/state/bothWays";
 import { relayEnvironmentDiscovery } from "~/state/relay";
+import { accessConfig } from "../auth/ConnectAgentSurface";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -188,20 +189,26 @@ export function BothWaysResults({
               className={
                 outcome.kind === "failed"
                   ? "shrink-0 text-right text-destructive"
-                  : "shrink-0 text-muted-foreground"
+                  : "shrink-0 text-right text-muted-foreground"
               }
             >
               {outcome.kind === "done"
                 ? gt("Done")
-                : outcome.kind === "skipped"
-                  ? outcome.reason === "not_full_access"
-                    ? gt("Only with full access")
-                    : outcome.reason === "not_linked"
-                      ? gt("Only after a link is made")
-                      : gt("Already done")
-                  : outcome.detail !== null
-                    ? `${failureLabel(outcome)}: ${outcome.detail}`
-                    : failureLabel(outcome)}
+                : outcome.kind === "kept"
+                  ? gt("Already linked, kept as it is ({access})", {
+                      access: m(accessConfig[outcome.access].label),
+                    })
+                  : outcome.kind === "skipped"
+                    ? outcome.reason === "not_full_access"
+                      ? gt("Only with full access")
+                      : outcome.reason === "not_linked"
+                        ? gt("Only after a link is made")
+                        : outcome.reason === "no_safe_address"
+                          ? gt("Needs an https or Tailscale address")
+                          : gt("Already done")
+                    : outcome.detail !== null
+                      ? `${failureLabel(outcome)}: ${outcome.detail}`
+                      : failureLabel(outcome)}
             </span>
           </li>,
         ];

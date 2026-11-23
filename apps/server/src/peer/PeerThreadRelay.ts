@@ -218,7 +218,13 @@ const make = Effect.gen(function* () {
       Option.fromNullishOr(response.headers[McpInvocationContext.LINK_EXPIRES_AT_HEADER]),
       DateTime.make,
     );
-    if (Option.isSome(renewed)) yield* links.recordExpiry(input.environmentId, renewed.value);
+    if (Option.isSome(renewed)) {
+      yield* links.recordExpiry({
+        environmentId: input.environmentId,
+        secretName: resolved.secretName,
+        expiresAt: renewed.value,
+      });
+    }
     return { label, response, timeout };
   });
 

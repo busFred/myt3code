@@ -178,7 +178,12 @@ const make = Effect.gen(function* () {
         WHERE id = ${id} AND consumed_at IS NULL AND revoked_at IS NULL
         RETURNING secret_name
       `;
-      yield* Effect.forEach(revoked, (row) => secrets.remove(row.secret_name), { discard: true });
+      // The revoke has committed: a code left behind is unreadable to any invite, as in `sweep`.
+      yield* Effect.forEach(
+        revoked,
+        (row) => secrets.remove(row.secret_name).pipe(Effect.ignore({ log: true })),
+        { discard: true },
+      );
       if (revoked.length > 0) yield* publish;
       return revoked.length > 0;
     },

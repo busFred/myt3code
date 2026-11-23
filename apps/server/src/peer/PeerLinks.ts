@@ -97,6 +97,8 @@ export interface ResolvedPeerLink {
   readonly token: string;
   /** What the peer said it can do when it answered. */
   readonly capabilities: ExecutionEnvironmentCapabilities;
+  /** Where the token is stored; a link made again gets a new one. */
+  readonly secretName: string;
 }
 
 /** What a link's session is called in the peer's Connections, before this environment's label. */
@@ -159,14 +161,17 @@ export class PeerLinks extends Context.Service<
       outcome: { readonly error: string | null },
     ) => Effect.Effect<void>;
     /**
-     * Records the end the peer gives the link's session, earlier or later: the peer decides. Only
-     * while the link still holds `token`, so an answer for a replaced credential is dropped.
+     * Records the end the peer gives the link's session, only while the link still holds the
+     * credential stored as `secretName`, so an answer for a replaced one is dropped. A call's
+     * answer only moves it later, since a slow one may predate a renewal; `allowEarlier` is for
+     * asking the peer outright, which decides.
      */
-    readonly recordExpiry: (
-      environmentId: EnvironmentId,
-      expiresAt: DateTime.Utc,
-      token: string,
-    ) => Effect.Effect<void>;
+    readonly recordExpiry: (input: {
+      readonly environmentId: EnvironmentId;
+      readonly secretName: string;
+      readonly expiresAt: DateTime.Utc;
+      readonly allowEarlier?: boolean;
+    }) => Effect.Effect<void>;
     /**
      * Asks the peer when the link's session ends, as after it was renewed there, and records it.
      * None when the peer does not say, such as one that no longer accepts the link.
@@ -632,17 +637,20 @@ const make = Effect.gen(function* () {
       .set(secretName, new TextEncoder().encode(issued.access_token))
       .pipe(Effect.catch(failStorage));
     // A token no row names could never be removed.
-    const previous = yield* Effect.gen(function* () {
+    const { previous, written } = yield* Effect.gen(function* () {
       const urlsJson = yield* encodeUrls(origins).pipe(Effect.catch(failStorage));
+      const nowIso = DateTime.formatIso(now);
       const previous = yield* readRow(peer.environmentId);
-      yield* sql`
+      // Keeping a link replaces only one that has ended, in this one statement, so a link
+      // that raced in since the read above wins. Stored expiries all compare as `formatIso` text.
+      const written = yield* sql<{ secret_name: string }>`
         INSERT INTO peer_environment_links (
           environment_id, secret_name, label, urls_json, access, linked_at, expires_at,
           last_reached_at, last_error, fenced
         ) VALUES (
           ${linked.environmentId}, ${secretName}, ${linked.label}, ${urlsJson}, ${linked.access},
           ${DateTime.formatIso(linked.linkedAt)}, ${DateTime.formatIso(linked.expiresAt)},
-          ${DateTime.formatIso(now)}, NULL, 1
+          ${nowIso}, NULL, 1
         )
         ON CONFLICT (environment_id) DO UPDATE SET
           secret_name = excluded.secret_name,
@@ -654,9 +662,24 @@ const make = Effect.gen(function* () {
           expires_at = excluded.expires_at,
           last_reached_at = excluded.last_reached_at,
           last_error = NULL
+        WHERE ${keepLinked ? 1 : 0} = 0
+          OR peer_environment_links.fenced <> 1
+          OR peer_environment_links.expires_at <= ${nowIso}
+        RETURNING secret_name
       `.pipe(Effect.catch(failStorage));
-      return previous;
+      return { previous, written: written.length > 0 };
     }).pipe(Effect.onError(() => secrets.remove(secretName).pipe(Effect.ignore)));
+    if (!written) {
+      yield* secrets.remove(secretName).pipe(Effect.ignore);
+      const winner = yield* readRow(peer.environmentId);
+      if (Option.isNone(winner)) {
+        return yield* new PeerLinkError({
+          reason: "storage",
+          message: `${peer.label} was linked and unlinked meanwhile. Link it again.`,
+        });
+      }
+      return { link: yield* toLink(winner.value), alreadyLinked: true };
+    }
     // Linking again replaces the old token. A racing link may leave its own
     // behind; it is unused either way.
     if (Option.isSome(previous) && previous.value.secret_name !== secretName) {
@@ -882,6 +905,7 @@ const make = Effect.gen(function* () {
         url,
         token: new TextDecoder().decode(stored.value),
         capabilities: peer.capabilities,
+        secretName: row.value.secret_name,
       };
     },
   );
@@ -905,23 +929,27 @@ const make = Effect.gen(function* () {
     );
 
   const recordExpiry: PeerLinks["Service"]["recordExpiry"] = Effect.fn("PeerLinks.recordExpiry")(
-    function* (environmentId, expiresAt, token) {
-      const row = yield* readRow(environmentId);
-      if (Option.isNone(row)) return;
-      const stored = yield* secrets.get(row.value.secret_name);
-      if (Option.isNone(stored) || new TextDecoder().decode(stored.value) !== token) return;
+    function* ({ environmentId, secretName, expiresAt, allowEarlier }) {
+      const iso = DateTime.formatIso(expiresAt);
       // A link made again meanwhile has a new secret name, which this update then misses.
-      yield* sql`
-        UPDATE peer_environment_links SET expires_at = ${DateTime.formatIso(expiresAt)}
-        WHERE environment_id = ${environmentId} AND secret_name = ${row.value.secret_name}
-      `;
+      // Stored expiries are all `formatIso`, so they compare as text.
+      yield* allowEarlier === true
+        ? sql`
+            UPDATE peer_environment_links SET expires_at = ${iso}
+            WHERE environment_id = ${environmentId} AND secret_name = ${secretName}
+          `
+        : sql`
+            UPDATE peer_environment_links SET expires_at = ${iso}
+            WHERE environment_id = ${environmentId} AND secret_name = ${secretName}
+              AND expires_at < ${iso}
+          `;
     },
     Effect.ignoreCause({ log: true }),
   );
 
   const refreshExpiry: PeerLinks["Service"]["refreshExpiry"] = Effect.fn("PeerLinks.refreshExpiry")(
     function* (environmentId) {
-      const { url, token } = yield* resolve(environmentId);
+      const { url, token, secretName } = yield* resolve(environmentId);
       // The lightest call the peer authenticates as the link; its answer names the link's end.
       const response = yield* peerHttpClient
         .execute(
@@ -963,7 +991,12 @@ const make = Effect.gen(function* () {
           .pipe(Effect.timeout(probeTimeout(url)), Effect.ignore);
       }
       if (response.status !== 200 || Option.isNone(expiresAt)) return Option.none();
-      yield* recordExpiry(environmentId, DateTime.toUtc(expiresAt.value), token);
+      yield* recordExpiry({
+        environmentId,
+        secretName,
+        expiresAt: DateTime.toUtc(expiresAt.value),
+        allowEarlier: true,
+      });
       return Option.some(DateTime.toUtc(expiresAt.value));
     },
   );

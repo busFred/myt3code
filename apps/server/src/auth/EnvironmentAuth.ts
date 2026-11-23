@@ -106,9 +106,9 @@ const RENEWABLE_SESSION_WINDOW = Duration.days(30);
 const PAIRING_LINK_SUBJECT = "one-time-token";
 const NON_RENEWABLE_SUBJECTS: ReadonlySet<string> = new Set(NON_RENEWABLE_SESSION_SUBJECTS);
 
-// A self-renewing device refreshes its token a minute before it ends, so a shorter window would
-// have it renew on every request. Its lifetime is the window, so it is at least this.
-const MIN_RENEWING_SESSION_WINDOW = Duration.minutes(10);
+// A self-renewing device renews from the token it holds, so a window shorter than that token
+// could end before the device tries. Its lifetime is the window, so it is at least the token's.
+const MIN_RENEWING_SESSION_WINDOW = RENEWABLE_ACCESS_TOKEN_TTL;
 
 const isSelfRenewing = (session: { readonly method: string; readonly subject: string }) =>
   session.method === "dpop-access-token" && session.subject === PAIRING_LINK_SUBJECT;

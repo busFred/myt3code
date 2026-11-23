@@ -69,7 +69,23 @@ describe("both ways outcomes", () => {
         ["invite", { kind: "skipped" }],
       ]),
     );
-    expect(summary).toEqual({ failedSteps: ["b_to_a"], lifetimeIgnored: true, complete: false });
+    expect(summary).toEqual({
+      failedSteps: ["b_to_a"],
+      lifetimeIgnored: true,
+      complete: false,
+      changed: true,
+    });
+    // Links both sides already had are kept: nothing failed, and nothing changed either.
+    expect(
+      summarizeBothWays(
+        outcomes([
+          ["enable_a", { kind: "skipped" }],
+          ["a_to_b", { kind: "kept", access: "auto" }],
+          ["b_to_a", { kind: "kept", access: "auto" }],
+          ["invite", { kind: "skipped", reason: "not_full_access" }],
+        ]),
+      ),
+    ).toEqual({ failedSteps: [], lifetimeIgnored: false, complete: true, changed: false });
   });
 
   it("keeps what an earlier run finished, so the next retry still knows a link was made", () => {
@@ -81,7 +97,7 @@ describe("both ways outcomes", () => {
     const retried = mergeBothWaysRetry(
       previous,
       outcomes([
-        ["a_to_b", { kind: "skipped" }],
+        ["a_to_b", { kind: "kept", access: "auto" }],
         ["b_to_a", { kind: "skipped" }],
         ["invite", { kind: "done" }],
       ]),

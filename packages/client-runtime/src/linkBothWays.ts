@@ -11,6 +11,7 @@ import {
   type PeerLinkSummary,
   peerLinkFailureKind,
 } from "@t3tools/contracts";
+import { carriesCredentialsSafely } from "@t3tools/shared/hostClassification";
 import type * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
 
@@ -49,8 +50,14 @@ export type BothWaysOutcome =
   /**
    * `not_full_access`: the invite's code would give more than the link, so none is left.
    * `not_linked`: the other side has no link here, so neither is the invite.
+   * `no_safe_address`: every address would carry the invite's code over plain http.
    */
-  | { readonly kind: "skipped"; readonly reason?: "not_full_access" | "not_linked" }
+  | {
+      readonly kind: "skipped";
+      readonly reason?: "not_full_access" | "not_linked" | "no_safe_address";
+    }
+  /** A link the side already had, kept as it is: neither its access nor its lifetime changed. */
+  | { readonly kind: "kept"; readonly access: AuthMcpClientAccess }
   | { readonly kind: "failed"; readonly failure: BothWaysFailure; readonly detail: string | null };
 
 /**
@@ -205,7 +212,10 @@ export async function runLinkBothWays(input: {
       }
       if (linked.success.alreadyLinked) {
         await revokeCode();
-        return { outcome: { kind: "skipped" }, access: linked.success.access };
+        return {
+          outcome: { kind: "kept", access: linked.success.access },
+          access: linked.success.access,
+        };
       }
       return { outcome: lifetimeOutcome(minted.success), access: linked.success.access };
     })().catch((): LinkResult => ({ outcome: { kind: "failed", failure: "other", detail: null } }));
@@ -221,8 +231,9 @@ export async function runLinkBothWays(input: {
       if (input.access !== "full-access") return { kind: "skipped", reason: "not_full_access" };
       if (bLinkAccess === undefined) return { kind: "skipped", reason: "not_linked" };
       if (bLinkAccess !== "full-access") return { kind: "skipped", reason: "not_full_access" };
-      const [firstUrl, ...otherUrls] = a.urls;
-      if (firstUrl === undefined) return { kind: "failed", failure: "no_address", detail: null };
+      // The invite's code gives full use of `a`, so it never travels over plain http.
+      const [firstUrl, ...otherUrls] = a.urls.filter(carriesCredentialsSafely);
+      if (firstUrl === undefined) return { kind: "skipped", reason: "no_safe_address" };
       const minted = await ops.mintAppCode(a.environmentId, {
         appEnvironment: { environmentId: b.environmentId, label: b.label },
         linkTtlMillis: MAX_APP_INVITE_TTL_MILLIS,
@@ -258,21 +269,27 @@ export async function runLinkBothWays(input: {
 /** One side of a pair whose sessions get a new lifetime. */
 export interface RenewBothWaysSide {
   readonly environmentId: EnvironmentId;
-  /** This side's link to the other, as its `peerLinks.list` reports it; absent when none. */
-  readonly linkToOther?: Pick<PeerLinkSummary, "peerSessionId" | "status">;
+  /**
+   * This side's link to the other, as its `peerLinks.list` reports it; absent when none, null
+   * when its links could not be read.
+   */
+  readonly linkToOther?: Pick<PeerLinkSummary, "peerSessionId" | "status"> | null;
   /** This client's own session here, to renew as well; absent leaves it as it is. */
   readonly clientSessionId?: AuthSessionId;
 }
 
 export type RenewBothWaysStep = "a_to_b" | "b_to_a" | "client_a" | "client_b";
 
-/** `unknown_session`: the linking side predates reporting its session there; link again. */
+/**
+ * `unknown_session`: the linking side predates reporting its session there; link again.
+ * `unreadable`: the linking side's links could not be read, so whether it has one is unknown.
+ */
 export type RenewBothWaysOutcome =
   | { readonly kind: "done" }
   | { readonly kind: "skipped" }
   | {
       readonly kind: "failed";
-      readonly failure: "unknown_session" | "not_found" | "unsupported" | "other";
+      readonly failure: "unknown_session" | "unreadable" | "not_found" | "unsupported" | "other";
     };
 
 /**
@@ -316,6 +333,9 @@ export async function runRenewBothWays(input: {
       .catch((): RenewBothWaysOutcome => ({ kind: "failed", failure: "other" }));
   const renewLink = (linking: RenewBothWaysSide, target: RenewBothWaysSide) => {
     const link = linking.linkToOther;
+    if (link === null) {
+      return Promise.resolve<RenewBothWaysOutcome>({ kind: "failed", failure: "unreadable" });
+    }
     if (link === undefined || link.status === "expired") {
       return Promise.resolve<RenewBothWaysOutcome>({ kind: "skipped" });
     }

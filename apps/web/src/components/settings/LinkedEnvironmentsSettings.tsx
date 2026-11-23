@@ -173,7 +173,11 @@ function LinkedEnvironmentRow({
   const neverExpire = async () => {
     setRenewing(true);
     const theirLinks = await readPeerLinks(link.environmentId);
-    const theirLink = theirLinks?.find((candidate) => candidate.environmentId === environmentId);
+    // Null when their links could not be read, which is not the same as no link back.
+    const theirLink =
+      theirLinks === null
+        ? null
+        : theirLinks.find((candidate) => candidate.environmentId === environmentId);
     const outcomes = await renewLinksBothWays({
       a: { environmentId, linkToOther: link },
       b: {
@@ -202,7 +206,11 @@ function LinkedEnvironmentRow({
         ? gt("That machine runs an older T3 Code")
         : failures.includes("unknown_session")
           ? gt("A machine does not report its link's session. Link it again to renew.")
-          : gt("Check that this app is signed in there with access management."),
+          : failures.includes("unreadable")
+            ? gt("Could not read {label}'s links, so its link back here was not renewed.", {
+                label: link.label,
+              })
+            : gt("Check that this app is signed in there with access management."),
     );
   };
   const status = peerLinkStatusText(health, gt, isNeverExpiring(link.expiresAt));
@@ -510,7 +518,8 @@ export function LinkEnvironmentDialog({
     }
     setBothWaysOutcomes(outcomes);
     const summary = summarizeBothWays(outcomes);
-    if (summary.complete) {
+    // With every link kept as it was, the results stay up to say so.
+    if (summary.complete && summary.changed) {
       toastManager.add({
         type: "success",
         title: gt("Linked {label} both ways", { label: target.label }),
@@ -650,7 +659,16 @@ export function LinkEnvironmentDialog({
             ) : null}
             {machine?.linked ? (
               <p className="text-xs text-muted-foreground">
-                <T>Already linked. Linking again renews it with the access you pick.</T>
+                {linkingBothWays ? (
+                  <T>
+                    Already linked. Link both ways keeps existing links as they are. To change how
+                    long they last, use Never expire (both ways), or Renew under Authorized clients
+                    on the other machine. To change the access, forget the link first or untick Link
+                    both ways.
+                  </T>
+                ) : (
+                  <T>Already linked. Linking again renews it with the access you pick.</T>
+                )}
               </p>
             ) : null}
             {through !== null ? (

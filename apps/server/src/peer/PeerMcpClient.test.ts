@@ -72,6 +72,7 @@ const probeThrough = Effect.fn(function* (http: HttpClient.HttpClient) {
                 url: "https://peer.example",
                 token: "fixture",
                 capabilities: box.capabilities,
+                secretName: "peer-link-fixture",
               }),
             recordOutcome: () => Effect.void,
           }),
@@ -359,9 +360,10 @@ it.effect("renews a missing peer session once and reuses its replacement", () =>
                   url: "https://peer.example",
                   token: "fixture",
                   capabilities: box.capabilities,
+                  secretName: "peer-link-fixture",
                 }),
               recordOutcome: (_, outcome) => Effect.sync(() => outcomes.push(outcome.error)),
-              recordExpiry: (_, expiresAt) =>
+              recordExpiry: ({ expiresAt }) =>
                 Effect.sync(() => expiries.push(DateTime.formatIso(expiresAt))),
             }),
           ),

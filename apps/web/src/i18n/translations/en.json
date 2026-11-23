@@ -13047,5 +13047,9 @@
   "ba479fe77e035abe": "Also links the other machine back to this one and, with full access, invites its desktop app to connect within a day. Turns on Labs → Linked environments on either machine where it is off.",
   "196af945f431ddcd": "While used within 30 days",
   "056fa37c5b703471": "While used within 1 year",
-  "6839d3292ffa5b03": "Only after a link is made"
+  "6839d3292ffa5b03": "Only after a link is made",
+  "d041d0a04805b562": "Already linked, kept as it is ({access})",
+  "09994d5cd3ca333a": "Needs an https or Tailscale address",
+  "eb1f9774d484c1d2": "Could not read {label}'s links, so its link back here was not renewed.",
+  "0aca36439bb7b84c": "Already linked. Link both ways keeps existing links as they are. To change how long they last, use Never expire (both ways), or Renew under Authorized clients on the other machine. To change the access, forget the link first or untick Link both ways."
 }

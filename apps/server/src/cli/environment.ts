@@ -35,10 +35,11 @@ import { expandHomePath } from "../os-jank.ts";
 import {
   authLocationFlags,
   type CliAuthLocationFlags,
+  describeExpiry,
   expireFlag,
   resolveCliAuthConfig,
 } from "./config.ts";
-import { describeExpiry, linkBothWays } from "./environmentBothWays.ts";
+import { linkBothWays } from "./environmentBothWays.ts";
 
 const layerPeerLinks = PeerLinks.layer.pipe(
   Layer.provide(

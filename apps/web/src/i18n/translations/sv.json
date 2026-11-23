@@ -13045,5 +13045,9 @@
   "ba479fe77e035abe": "Länkar även den andra maskinen tillbaka till den här och bjuder, med full åtkomst, in dess skrivbordsapp att ansluta inom ett dygn. Slår på Labs → Länkade miljöer på varje maskin där det är avslaget.",
   "196af945f431ddcd": "Så länge den används inom 30 dagar",
   "056fa37c5b703471": "Så länge den används inom 1 år",
-  "6839d3292ffa5b03": "Först när en länk har skapats"
+  "6839d3292ffa5b03": "Först när en länk har skapats",
+  "d041d0a04805b562": "Redan länkad, behålls som den är ({access})",
+  "09994d5cd3ca333a": "Kräver en https- eller Tailscale-adress",
+  "eb1f9774d484c1d2": "Det gick inte att läsa länkarna på {label}, så dess länk tillbaka hit förnyades inte.",
+  "0aca36439bb7b84c": "Redan länkad. ”Länka åt båda håll” behåller befintliga länkar som de är. Om du vill ändra hur länge de gäller använder du ”Går aldrig ut (åt båda håll)” eller ”Förnya” under ”Auktoriserade klienter” på den andra maskinen. Om du vill ändra åtkomsten glömmer du länken först eller avmarkerar ”Länka åt båda håll”."
 }

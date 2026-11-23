@@ -133,7 +133,7 @@ describe("runLinkBothWays", () => {
       invite: true,
       ops: alreadyLinked.ops,
     });
-    expect(kept.get("b_to_a")).toEqual({ kind: "skipped" });
+    expect(kept.get("b_to_a")).toEqual({ kind: "kept", access: "full-access" });
     expect(kept.get("invite")).toEqual({ kind: "done" });
     // b keeps its narrower link to a, so the invite would give its app more: none is left.
     const onlyA = recordingOps({}, true, { "environment-b": "auto" });
@@ -191,7 +191,7 @@ describe("runLinkBothWays", () => {
       invite: false,
       ops: retry.ops,
     });
-    expect(retried.get("a_to_b")).toEqual({ kind: "skipped" });
+    expect(retried.get("a_to_b")).toEqual({ kind: "kept", access: "approval-required" });
     expect(retried.get("b_to_a")).toEqual({ kind: "done" });
     // The kept link and the failed one each revoke the code they left unused.
     expect(retry.calls).toContain("revoke:environment-b:link-code-environment-b");
@@ -224,6 +224,41 @@ describe("runLinkBothWays", () => {
       ops,
     });
     expect(older.get("invite")).toEqual({ kind: "failed", failure: "unsupported", detail: null });
+  });
+
+  it("sends the invite's code only to addresses that encrypt it", async () => {
+    const { ops, calls } = recordingOps();
+    const invited: Array<ReadonlyArray<string>> = [];
+    const outcomes = await runLinkBothWays({
+      a: side("a", {
+        urls: ["http://192.168.1.5:3773", "https://a.example.ts.net", "http://a.tail.ts.net"],
+      }),
+      b: side("b"),
+      access: "full-access",
+      invite: true,
+      ops: {
+        ...ops,
+        createInvite: (environmentId, input) => {
+          invited.push(input.urls);
+          return ops.createInvite(environmentId, input);
+        },
+      },
+    });
+    expect(outcomes.get("invite")).toEqual({ kind: "done" });
+    expect(invited).toEqual([["https://a.example.ts.net", "http://a.tail.ts.net"]]);
+
+    const lanOnly = recordingOps();
+    const skipped = await runLinkBothWays({
+      a: side("a", { urls: ["http://192.168.1.5:3773"] }),
+      b: side("b"),
+      access: "full-access",
+      invite: true,
+      ops: lanOnly.ops,
+    });
+    expect(skipped.get("b_to_a")).toEqual({ kind: "done" });
+    expect(skipped.get("invite")).toEqual({ kind: "skipped", reason: "no_safe_address" });
+    expect(lanOnly.calls.filter((call) => call.startsWith("app:"))).toEqual([]);
+    expect(calls.filter((call) => call.startsWith("revoke:"))).toEqual([]);
   });
 
   it("reports a lifetime the other side dropped and a side with no reachable address", async () => {
@@ -308,5 +343,15 @@ describe("runRenewBothWays", () => {
       client_a: { kind: "failed", failure: "not_found" },
       client_b: { kind: "failed", failure: "unsupported" },
     });
+
+    // Links that could not be read are not the same as no link back.
+    const unread = await runRenewBothWays({
+      a: { environmentId: EnvironmentId.make("a") },
+      b: { environmentId: EnvironmentId.make("b"), linkToOther: null },
+      lifetime: never,
+      ops: { renew: () => Promise.resolve(Result.succeed({ renewed: true })) },
+    });
+    expect(unread.get("a_to_b")).toEqual({ kind: "skipped" });
+    expect(unread.get("b_to_a")).toEqual({ kind: "failed", failure: "unreadable" });
   });
 });

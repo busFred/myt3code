@@ -9,10 +9,12 @@ import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serve
 import {
   AuthSessionLifetime,
   DesktopBackendBootstrap,
+  isNeverExpiring,
   MAX_SESSION_LIFETIME_MILLIS,
   PortSchema,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -679,6 +681,10 @@ export const expireFlag = Flag.String("expire").pipe(
   ),
   Flag.optional,
 );
+
+/** When a link or session ends, for printing. */
+export const describeExpiry = (expiresAt: DateTime.Utc) =>
+  isNeverExpiring(expiresAt) ? "never expires" : `until ${DateTime.formatIso(expiresAt)}`;
 
 export const describeSessionLifetime = (lifetime: AuthSessionLifetime | undefined) =>
   lifetime === undefined

@@ -689,9 +689,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
           const dpopSession = (yield* sessions.verify(dpop.access_token)).sessionId;
           expect(yield* listedExpiry(dpopSession)).toBe(NEVER_EXPIRES_AT_MILLIS);
 
-          // A renewing device's window is never shorter than ten minutes, issued or renewed, so
-          // its token outlasts the minute before expiry when the device renews it.
-          const tenMinutes = 10 * 60 * 1000;
+          // A renewing device's window is never shorter than its one-hour token, issued or
+          // renewed, so the window outlasts any token the device holds.
+          const oneHour = 60 * 60 * 1000;
           const briefKey = makeDpopKey();
           const briefCode = yield* serverAuth.issuePairingCredential({
             lifetime: { _tag: "duration", millis: 60_000 },
@@ -702,14 +702,14 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
             requestMetadata,
             { proofKeyThumbprint: briefKey.thumbprint },
           );
-          expect(brief.expires_in).toBe(tenMinutes / 1000);
+          expect(brief.expires_in).toBe(oneHour / 1000);
           const briefSession = (yield* sessions.verify(brief.access_token)).sessionId;
           const briefRenewal = yield* serverAuth.renewSession(briefSession, {
             _tag: "duration",
             millis: 1_000,
           });
-          expect(Option.getOrNull(briefRenewal)?.epochMilliseconds).toBe(pairedAt + tenMinutes);
-          expect(yield* listedExpiry(briefSession)).toBe(pairedAt + tenMinutes);
+          expect(Option.getOrNull(briefRenewal)?.epochMilliseconds).toBe(pairedAt + oneHour);
+          expect(yield* listedExpiry(briefSession)).toBe(pairedAt + oneHour);
 
           const peerCode = yield* serverAuth.issuePairingCredential({
             access: "auto",

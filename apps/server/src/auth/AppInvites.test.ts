@@ -104,6 +104,42 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AppInvites", (it
     }).pipe(Effect.provide(Layer.merge(layerAppInvites, TestClock.layer()))),
   );
 
+  it.effect("revokes an invite even when its code cannot be removed", () =>
+    Effect.gen(function* () {
+      const invites = yield* AppInvites.AppInvites;
+      const created = yield* invites.create(inviteInput("STUCK"));
+      expect(yield* invites.revoke(created.id)).toBe(true);
+      expect(yield* invites.list).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          AppInvites.layer.pipe(
+            Layer.provideMerge(
+              Layer.effect(
+                ServerSecretStore.ServerSecretStore,
+                Effect.map(ServerSecretStore.make, (store) =>
+                  ServerSecretStore.ServerSecretStore.of({
+                    ...store,
+                    remove: (name) =>
+                      Effect.fail(
+                        new ServerSecretStore.SecretStoreRemoveError({
+                          resource: name,
+                          cause: "the disk refused",
+                        }),
+                      ),
+                  }),
+                ),
+              ),
+            ),
+            Layer.provideMerge(SqlitePersistence.layerMemory),
+            Layer.provide(layerConfig),
+          ),
+          TestClock.layer(),
+        ),
+      ),
+    ),
+  );
+
   it.effect("a take racing a replacing create gets the old invite or the new one, never none", () =>
     Effect.gen(function* () {
       const invites = yield* AppInvites.AppInvites;

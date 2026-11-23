@@ -13038,5 +13038,9 @@
   "ba479fe77e035abe": "Também vincula a outra máquina a esta e, com acesso total, convida o app de desktop dela a se conectar em até um dia. Ativa Labs → Ambientes vinculados em cada máquina em que estiver desativado.",
   "196af945f431ddcd": "Enquanto for usado em até 30 dias",
   "056fa37c5b703471": "Enquanto for usado em até 1 ano",
-  "6839d3292ffa5b03": "Somente depois que um vínculo for criado"
+  "6839d3292ffa5b03": "Somente depois que um vínculo for criado",
+  "d041d0a04805b562": "Já vinculado, mantido como está ({access})",
+  "09994d5cd3ca333a": "Precisa de um endereço https ou do Tailscale",
+  "eb1f9774d484c1d2": "Não foi possível ler os vínculos de {label}, então o vínculo de lá para cá não foi renovado.",
+  "0aca36439bb7b84c": "Já vinculado. \"Vincular nos dois sentidos\" mantém os vínculos existentes como estão. Para mudar quanto tempo duram, use \"Nunca expira (nos dois sentidos)\" ou \"Renovar\" em \"Clientes autorizados\" na outra máquina. Para mudar o acesso, esqueça o vínculo primeiro ou desmarque \"Vincular nos dois sentidos\"."
 }
