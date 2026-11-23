@@ -424,6 +424,20 @@ export const make = Effect.gen(function* () {
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
+  // Without a tray host (stock GNOME) the hidden window has no visible way back, so say so once.
+  const noticeHiddenToTray = desktopSettings.markCloseToTrayNoticeShown.pipe(
+    Effect.flatMap(({ changed }) =>
+      changed
+        ? electronShell.showNotification({
+            title: m(msg("T3 Code is still running")),
+            body: m(msg("Open it from the tray icon, or launch T3 Code again.")),
+          })
+        : Effect.void,
+    ),
+    Effect.catchCause((cause) =>
+      logWindowWarning("failed to show the close-to-tray notice", { cause }),
+    ),
+  );
   const mainWindowMutex = yield* Semaphore.make(1);
   const pendingMainReveals = new WeakMap<Electron.BrowserWindow, Effect.Effect<void>>();
   const revealMain = Effect.fn("desktop.window.revealMain")((window: Electron.BrowserWindow) =>
@@ -901,6 +915,7 @@ export const make = Effect.gen(function* () {
       if (!hide) return;
       event.preventDefault();
       window.hide();
+      runFork(noticeHiddenToTray);
     });
 
     if (environment.platform === "darwin") {

@@ -142,19 +142,16 @@ const exitIfShutdownStalled = Effect.fn("desktop.lifecycle.exitIfShutdownStalled
 
 function handleBeforeQuit(
   event: Electron.Event,
+  setQuitting: () => void,
   runEffect: <A, E>(
     effect: Effect.Effect<A, E, DesktopLifecycleRegistrationServices>,
   ) => Promise<A>,
   quit: QuitState,
 ): void {
   if (quit.phase === "allowed") {
-    void runEffect(
-      Effect.gen(function* () {
-        const state = yield* DesktopState.DesktopState;
-        yield* Ref.set(state.quitting, true);
-        yield* logLifecycleInfo("before-quit received");
-      }).pipe(Effect.withSpan("desktop.lifecycle.beforeQuit")),
-    );
+    // Synchronous, so a window close event that follows cannot hide the window and cancel the quit.
+    setQuitting();
+    void runEffect(logLifecycleInfo("before-quit received"));
     return;
   }
 
@@ -293,14 +290,16 @@ export const make = DesktopLifecycle.of({
       );
     });
     // The OS is ending the session, so a tray-hidden window must really close.
-    const markSessionEnding = () => {
-      quit.phase = "allowed";
-      // Synchronous, so it lands before the windows' close events that follow.
+    const setQuitting = () => {
       Effect.runSyncWith(context)(
         Effect.gen(function* () {
           yield* Ref.set((yield* DesktopState.DesktopState).quitting, true);
         }),
       );
+    };
+    const markSessionEnding = () => {
+      quit.phase = "allowed";
+      setQuitting();
     };
     yield* electronApp.onSystemShutdown(markSessionEnding);
     yield* electronApp.onBeforeQuitForUpdate(() => {
@@ -332,7 +331,7 @@ export const make = DesktopLifecycle.of({
       },
     );
     yield* electronApp.on("before-quit", (event: Electron.Event) => {
-      handleBeforeQuit(event, runEffect, quit);
+      handleBeforeQuit(event, setQuitting, runEffect, quit);
     });
     yield* electronApp.on("activate", () => {
       void runEffect(

@@ -208,6 +208,23 @@ describe("DesktopSettings", () => {
     ),
   );
 
+  it.effect("reports the close-to-tray notice as new only once and persists it", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+
+        assert.isTrue((yield* settings.markCloseToTrayNoticeShown).changed);
+        assert.isFalse((yield* settings.markCloseToTrayNoticeShown).changed);
+        assert.include(
+          yield* fileSystem.readFileString(environment.desktopSettingsPath),
+          '"closeToTrayNoticeShown":true',
+        );
+      }),
+    ),
+  );
+
   it.effect("loads lenient persisted desktop settings JSON", () =>
     withSettings(
       Effect.gen(function* () {
@@ -223,6 +240,7 @@ describe("DesktopSettings", () => {
             "tailscaleServeEnabled": true,
             "tailscaleServePort": 8443,
             "closeToTray": true,
+            "closeToTrayNoticeShown": true,
             "mainWindowBounds": { "x": 120, "y": 80, "width": 1280, "height": 900 },
           }\n`,
         );
@@ -233,6 +251,7 @@ describe("DesktopSettings", () => {
           serviceConnectionRemembered: false,
           localEnvironmentEnabled: true,
           closeToTray: true,
+          closeToTrayNoticeShown: true,
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
           mainWindowMaximized: false,
           serverExposureMode: "network-accessible",
@@ -389,6 +408,7 @@ describe("DesktopSettings", () => {
           serviceConnectionRemembered: false,
           localEnvironmentEnabled: true,
           closeToTray: false,
+          closeToTrayNoticeShown: false,
           mainWindowBounds: null,
           mainWindowMaximized: false,
           serverExposureMode: "local-only",
@@ -421,6 +441,7 @@ describe("DesktopSettings", () => {
           serviceConnectionRemembered: false,
           localEnvironmentEnabled: true,
           closeToTray: false,
+          closeToTrayNoticeShown: false,
           mainWindowBounds: null,
           mainWindowMaximized: false,
           serverExposureMode: "local-only",

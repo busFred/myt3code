@@ -247,6 +247,37 @@ describe("DesktopLifecycle", () => {
     },
   );
 
+  it.effect("marks quitting synchronously in before-quit when the quit is already allowed", () => {
+    const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
+    const layer = DesktopLifecycle.layer.pipe(
+      Layer.provideMerge(layerElectronApp(appListeners)),
+      Layer.provideMerge(layerElectronTheme),
+      Layer.provideMerge(layerElectronWindow()),
+      Layer.provideMerge(layerDesktopWindow()),
+      Layer.provideMerge(DesktopState.layer),
+      Layer.provideMerge(
+        Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+          platform: "linux",
+          isDevelopment: false,
+          appImagePath: Option.none(),
+        } as DesktopEnvironment.DesktopEnvironment["Service"]),
+      ),
+      Layer.provideMerge(Layer.mock(DesktopShutdown.DesktopShutdown, {})),
+    );
+    return Effect.scoped(
+      Effect.gen(function* () {
+        yield* (yield* DesktopLifecycle.DesktopLifecycle).register;
+        appListeners.get("before-quit-for-update")?.();
+        const state = yield* DesktopState.DesktopState;
+        yield* Ref.set(state.quitting, false);
+
+        appListeners.get("before-quit")?.({ preventDefault: () => undefined } as Electron.Event);
+        // No yield between the event and the read: a close event can follow immediately.
+        assert.isTrue(yield* Ref.get(state.quitting));
+      }),
+    ).pipe(Effect.provide(layer));
+  });
+
   it.effect("destroys windows before waiting for backend shutdown", () =>
     Effect.gen(function* () {
       const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
