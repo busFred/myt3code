@@ -132,12 +132,15 @@ describe("provider update launch notification logic", () => {
   });
 
   it("updates each outdated ACP Registry agent on its own", () => {
-    const copilot = updateCandidate({
-      driver: driver("acpRegistry"),
-      instanceId: instanceId("acpRegistry_github_copilot"),
-      latestVersion: "1.0.120",
-      updateCommand: "copilot registry install 1.0.120",
-    });
+    const copilot = {
+      ...updateCandidate({
+        driver: driver("acpRegistry"),
+        instanceId: instanceId("acpRegistry_github_copilot"),
+        latestVersion: "1.0.120",
+        updateCommand: "copilot registry install 1.0.120",
+      }),
+      displayName: "GitHub Copilot",
+    };
     const other = updateCandidate({
       driver: driver("acpRegistry"),
       instanceId: instanceId("acpRegistry_other_agent"),
@@ -148,6 +151,40 @@ describe("provider update launch notification logic", () => {
     expect(collectProviderUpdateCandidates([copilot, other])).toHaveLength(2);
     expect(hasOneClickUpdateProviderCandidate(copilot, [copilot, other])).toBe(true);
     expect(hasOneClickUpdateProviderCandidate(other, [copilot, other])).toBe(true);
+
+    const failed = (finishedAt: string) => ({
+      status: "failed" as const,
+      startedAt: checkedAt,
+      finishedAt,
+      message: "Update failed: offline",
+      output: null,
+    });
+    expect(
+      getProviderUpdateSidebarPillView(
+        [
+          { ...copilot, updateState: failed(laterCheckedAt) },
+          { ...other, updateState: failed(checkedAt) },
+        ],
+        { visibleAfterIso: sessionStartedAt },
+      ),
+    ).toMatchObject({
+      key: `failed:acpRegistry:acpRegistry_github_copilot:${laterCheckedAt}:Update failed: offline|failed:acpRegistry:acpRegistry_other_agent:${checkedAt}:Update failed: offline`,
+      title: "2 provider updates failed",
+      description:
+        "GitHub Copilot and ACP Registry failed to update. Check provider settings for details.",
+    });
+    expect(
+      getProviderUpdateRunToastView([
+        {
+          environmentId: EnvironmentId.make("Linux"),
+          machineLabel: "Linux",
+          driver: copilot.driver,
+          instanceId: copilot.instanceId,
+          displayName: copilot.displayName,
+          result: AsyncResult.failure(Cause.die(new Error("offline"))),
+        },
+      ]),
+    ).toMatchObject({ description: "Linux · GitHub Copilot: offline" });
   });
 
   it("keeps the inline update action available while a provider update is already running", () => {

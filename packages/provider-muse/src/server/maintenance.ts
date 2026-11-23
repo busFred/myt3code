@@ -93,12 +93,17 @@ export const museMaintenance: ProviderMaintenanceCapabilitiesResolver = {
         packageName: null,
         updateExecutable: context.resolvedCommandPath,
         updateArgs: ["--version"],
-        // Windows terminals default to PowerShell.
+        // Windows terminals default to PowerShell, where `$env:` would outlive this run; a child
+        // cmd keeps the variables to it.
         updateCommand: windows
-          ? [
-              ...variables.map(([key, value]) => `$env:${key}=${powerShellQuote(value)};`),
-              `& ${powerShellQuote(context.resolvedCommandPath)} --version`,
-            ].join(" ")
+          ? `cmd /d /c ${powerShellQuote(
+              [
+                ...variables.map(([key, value]) =>
+                  /^[\w.:-]*$/.test(value) ? `set ${key}=${value}&&` : `set "${key}=${value}"&&`,
+                ),
+                `"${context.resolvedCommandPath}" --version`,
+              ].join(" "),
+            )}`
           : [
               ...variables.map(([key, value]) => `${key}=${shellQuote(value)}`),
               shellQuote(context.resolvedCommandPath),

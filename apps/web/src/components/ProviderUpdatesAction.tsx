@@ -1,6 +1,6 @@
 import { m } from "../i18n/messages";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
-import { AuthProvidersManageScope, PROVIDER_DISPLAY_NAMES } from "@t3tools/contracts";
+import { AuthProvidersManageScope } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -17,6 +17,7 @@ import {
   canOneClickUpdateProviderCandidate,
   collectProviderUpdateCandidates,
   getProviderUpdateRunToastView,
+  providerUpdateName,
   type ProviderUpdateRun,
 } from "./ProviderUpdateLaunchNotification.logic";
 import { Button } from "./ui/button";
@@ -102,6 +103,7 @@ export function useProviderUpdates() {
           machineLabel: label,
           driver: candidate.driver,
           instanceId: candidate.instanceId,
+          displayName: candidate.displayName,
           result: await updateProvider({
             environmentId,
             input: { provider: candidate.driver, instanceId: candidate.instanceId },
@@ -158,10 +160,7 @@ export function ProviderUpdatesAction() {
       <TooltipPopup side="top">
         {machines.map((machine) => (
           <div key={machine.environmentId}>
-            {machine.label}:{" "}
-            {machine.candidates
-              .map((candidate) => PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver)
-              .join(", ")}
+            {machine.label}: {machine.candidates.map(providerUpdateName).join(", ")}
           </div>
         ))}
       </TooltipPopup>

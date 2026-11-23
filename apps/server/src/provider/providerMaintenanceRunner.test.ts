@@ -747,7 +747,7 @@ describe("providerMaintenanceRunner", () => {
             new InAppUpdateError({ message: "Could not reach the release server." }),
           ),
           status: "failed",
-          message: "Update command exited with code 1: Could not reach the release server.",
+          message: "Update failed: Could not reach the release server.",
         },
       ] as const,
       ({ run, status, message }) =>

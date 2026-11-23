@@ -1232,7 +1232,6 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     const now = yield* Clock.currentTimeMillis;
     if (!explicit && lastUpdateCheck !== undefined && now - lastUpdateCheck < UPDATE_CHECK_INTERVAL)
       return;
-    lastUpdateCheck = now;
     const musl =
       platform === "linux" &&
       (yield* fs.exists(
@@ -1247,6 +1246,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
       Effect.orElseSucceed(() => null),
     );
     if (latest === null) return;
+    lastUpdateCheck = now;
     if (yield* isWithdrawn(latest.version)) {
       releaseAsset = null;
       return;
@@ -1547,7 +1547,8 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     state: SubscriptionRef.get(state),
     changes: SubscriptionRef.changes(state),
     checkForUpdate: refreshRelease().pipe(Effect.ignore),
-    latestVersion: refreshRelease().pipe(
+    // ProviderLatestVersions caches this lookup, so it skips the background check's cooldown.
+    latestVersion: refreshRelease(true).pipe(
       Effect.ignore,
       Effect.andThen(Effect.sync(() => releaseAsset?.version ?? null)),
     ),
