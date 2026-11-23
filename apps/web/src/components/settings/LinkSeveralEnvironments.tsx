@@ -19,6 +19,7 @@ import { T, useGT, useMessages } from "gt-react";
 import { useId, useRef, useState } from "react";
 
 import { useEnvironments } from "~/state/environments";
+import { refreshPeerLinkLists } from "~/state/bothWays";
 import { mintPairingCodeOn } from "~/state/peerPairingCode";
 import { peerLinkEnvironment, useLinkableMachines } from "~/state/peerLinks";
 import { useEnvironmentQuery } from "~/state/query";
@@ -175,6 +176,7 @@ export function LinkSeveralEnvironmentsDialog({
           aLinksToB: false,
           access,
           lifetime,
+          batch: true,
           ...(steps.has(id) ? { previous: steps.get(id)! } : {}),
         });
         const outcome: LinkBatchOutcome =
@@ -187,7 +189,8 @@ export function LinkSeveralEnvironmentsDialog({
       }
     };
     await Promise.all(Array.from({ length: BOTH_WAYS_CONCURRENCY }, worker));
-    links.refresh();
+    // Listing probes every link, so each machine's list is read once, after the batch.
+    refreshPeerLinkLists([environmentId, ...results.keys()]);
     return results;
   };
   const submit = async () => {
@@ -336,7 +339,9 @@ export function LinkSeveralEnvironmentsDialog({
                           />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-medium">{machine.label}</span>
-                            {outcome?.kind === "failed" && steps.has(id) ? (
+                            {steps.has(id) &&
+                            (outcome?.kind === "failed" ||
+                              summarizeBothWays(steps.get(id)!).lifetimeIgnored) ? (
                               <BothWaysResults
                                 outcomes={steps.get(id)!}
                                 aLabel={sourceLabel ?? environmentId}
@@ -386,12 +391,23 @@ export function LinkSeveralEnvironmentsDialog({
                     )}
               </p>
             ) : null}
-            <LinkAccessPicker value={access} onChange={setAccess} disabled={busy} />
+            <LinkAccessPicker
+              value={access}
+              onChange={(next) => {
+                setAccess(next);
+                // Earlier steps ran with the old access, so a retry starts over.
+                setSteps(NO_STEPS);
+              }}
+              disabled={busy}
+            />
             <BothWaysOption
               checked={bothWays}
               onCheckedChange={setBothWays}
               lifetime={lifetime}
-              onLifetimeChange={setLifetime}
+              onLifetimeChange={(next) => {
+                setLifetime(next);
+                setSteps(NO_STEPS);
+              }}
               disabled={busy}
             />
           </form>
@@ -401,7 +417,13 @@ export function LinkSeveralEnvironmentsDialog({
             {outcomes.size > 0 ? gt("Done") : gt("Cancel")}
           </DialogClose>
           {outcomes.size > 0 && !busy && chosen.length === 0 ? null : (
-            <Button form={formId} type="submit" disabled={busy || chosen.length === 0}>
+            <Button
+              form={formId}
+              type="submit"
+              disabled={
+                busy || chosen.length === 0 || (bothWays && !isLifetimeChoiceValid(lifetime))
+              }
+            >
               {busy
                 ? gt("Linking…")
                 : gt("{count, plural, one {Link # machine} other {Link # machines}}", {

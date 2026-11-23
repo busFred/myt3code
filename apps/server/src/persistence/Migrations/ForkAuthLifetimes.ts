@@ -12,7 +12,6 @@ const missingParts = Effect.gen(function* () {
     readonly pairingLifetime: number;
     readonly sessionWindow: number;
     readonly appInvites: number;
-    readonly invitePairingLink: number;
   }>`
     SELECT
       (SELECT COUNT(*) FROM pragma_table_info('auth_pairing_links')
@@ -20,26 +19,17 @@ const missingParts = Effect.gen(function* () {
       (SELECT COUNT(*) FROM pragma_table_info('auth_sessions')
         WHERE name = 'renewal_window_json') AS "sessionWindow",
       (SELECT COUNT(*) FROM sqlite_master
-        WHERE type = 'table' AND name = 'auth_app_invites') AS "appInvites",
-      (SELECT COUNT(*) FROM pragma_table_info('auth_app_invites')
-        WHERE name = 'pairing_link_id') AS "invitePairingLink"
+        WHERE type = 'table' AND name = 'auth_app_invites') AS "appInvites"
   `;
   return {
     pairingLifetime: row?.pairingLifetime === 0,
     sessionWindow: row?.sessionWindow === 0,
     appInvites: row?.appInvites === 0,
-    invitePairingLink: row?.appInvites !== 0 && row?.invitePairingLink === 0,
   };
 });
 
 export const forkSchemaPending = missingParts.pipe(
-  Effect.map(
-    (missing) =>
-      missing.pairingLifetime ||
-      missing.sessionWindow ||
-      missing.appInvites ||
-      missing.invitePairingLink,
-  ),
+  Effect.map((missing) => missing.pairingLifetime || missing.sessionWindow || missing.appInvites),
 );
 
 export const applyForkSchema = Effect.gen(function* () {
@@ -64,12 +54,8 @@ export const applyForkSchema = Effect.gen(function* () {
         created_at TEXT NOT NULL,
         expires_at TEXT NOT NULL,
         consumed_at TEXT,
-        revoked_at TEXT,
-        pairing_link_id TEXT
+        revoked_at TEXT
       )
     `;
-  }
-  if (missing.invitePairingLink) {
-    yield* sql`ALTER TABLE auth_app_invites ADD COLUMN pairing_link_id TEXT`;
   }
 });

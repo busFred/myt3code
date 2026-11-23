@@ -7,6 +7,7 @@ import {
   appInviteSignal,
   pickUpAppInvites,
   shouldTakeAppInvites,
+  singleFlightWithFollowUp,
 } from "./appInvitePickup";
 
 const invite = (id: string, urls: ReadonlyArray<string>) =>
@@ -108,5 +109,25 @@ describe("shouldTakeAppInvites", () => {
     expect(take({}, false, true)).toBe(false);
     expect(take(null, true, false)).toBe(true);
     expect(take(null, true, true)).toBe(false);
+  });
+});
+
+describe("singleFlightWithFollowUp", () => {
+  it("runs once more after a run that was triggered again, however often", async () => {
+    let release = () => {};
+    let runs = 0;
+    const trigger = singleFlightWithFollowUp(async () => {
+      runs += 1;
+      if (runs === 1) await new Promise<void>((resolve) => (release = resolve));
+    });
+    const first = trigger();
+    void trigger();
+    void trigger();
+    expect(runs).toBe(1);
+    release();
+    await first;
+    expect(runs).toBe(2);
+    await trigger();
+    expect(runs).toBe(3);
   });
 });

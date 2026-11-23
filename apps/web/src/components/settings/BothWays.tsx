@@ -17,6 +17,8 @@ import {
   lifetimeFromChoice,
   linkDoneIn,
   MAX_CUSTOM_LIFETIME_DAYS,
+  mergeBothWaysRetry,
+  summarizeBothWays,
 } from "./sessionLifetime.logic";
 
 /** How long a device stays signed in: the default 30 days, a number of days, or never. */
@@ -195,7 +197,9 @@ export function BothWaysResults({
                 : outcome.kind === "skipped"
                   ? outcome.reason === "not_full_access"
                     ? gt("Only with full access")
-                    : gt("Already done")
+                    : outcome.reason === "not_linked"
+                      ? gt("Only after a link is made")
+                      : gt("Already done")
                   : outcome.detail !== null
                     ? `${failureLabel(outcome)}: ${outcome.detail}`
                     : failureLabel(outcome)}
@@ -203,11 +207,20 @@ export function BothWaysResults({
           </li>,
         ];
       })}
+      {summarizeBothWays(outcomes).lifetimeIgnored ? (
+        <li className="text-warning">
+          {gt("That machine runs an older T3 Code")}.{" "}
+          {gt("It ignored the device lifetime, so the device signs in for the default 30 days.")}
+        </li>
+      ) : null}
     </ul>
   );
 }
 
-/** Links `a` and `b` both ways with this client's sessions; finished links of `previous` are left alone. */
+/**
+ * Links `a` and `b` both ways with this client's sessions; finished links of `previous` are left
+ * alone. `batch` leaves the link lists for the caller to refresh once.
+ */
 export function useBothWaysRunner() {
   const gt = useGT();
   const relays = useAtomValue(relayEnvironmentDiscovery.stateValueAtom).environments;
@@ -218,6 +231,7 @@ export function useBothWaysRunner() {
     readonly access: AuthMcpClientAccess;
     readonly lifetime: LifetimeChoice;
     readonly previous?: ReadonlyMap<BothWaysStep, BothWaysOutcome>;
+    readonly batch?: boolean;
   }) => {
     const a = bothWaysSide({
       environmentId: input.a,
@@ -232,13 +246,18 @@ export function useBothWaysRunner() {
       linksToOther: linkDoneIn(input.previous, "b_to_a"),
     });
     if (a === null || b === null) return null;
-    return linkEnvironmentsBothWays({
+    const outcomes = await linkEnvironmentsBothWays({
       a,
       b,
       access: input.access,
       lifetime: lifetimeFromChoice(input.lifetime),
       invite: input.previous?.get("invite")?.kind !== "done",
+      linkedEarlier:
+        input.previous?.get("a_to_b")?.kind === "done" ||
+        input.previous?.get("b_to_a")?.kind === "done",
+      batch: input.batch === true,
       appCodeLabel: (label) => gt("App for {label}", { label }),
     });
+    return mergeBothWaysRetry(input.previous, outcomes);
   };
 }

@@ -13035,5 +13035,8 @@
   "dd2e0c88ac9c9641": "In Infobereich schließen",
   "57285efd2e1f1c4e": "fenster schließen ausblenden hintergrund weiterlaufen infobereich tray benachrichtigungsbereich beenden",
   "ed71095d921c8c1a": "Nur mit Vollzugriff",
-  "ba479fe77e035abe": "Verknüpft auch den anderen Rechner mit diesem und lädt bei Vollzugriff dessen Desktop-App ein, sich innerhalb eines Tages zu verbinden. Aktiviert Labs → Verknüpfte Umgebungen auf jedem Rechner, auf dem es aus ist."
+  "ba479fe77e035abe": "Verknüpft auch den anderen Rechner mit diesem und lädt bei Vollzugriff dessen Desktop-App ein, sich innerhalb eines Tages zu verbinden. Aktiviert Labs → Verknüpfte Umgebungen auf jedem Rechner, auf dem es aus ist.",
+  "196af945f431ddcd": "Solange innerhalb von 30 Tagen genutzt",
+  "056fa37c5b703471": "Solange innerhalb von 1 Jahr genutzt",
+  "6839d3292ffa5b03": "Erst nachdem eine Verknüpfung erstellt wurde"
 }

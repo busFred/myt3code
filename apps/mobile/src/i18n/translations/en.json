@@ -2096,6 +2096,7 @@
   "33386c89f3b07fea": "Expired. Link it again with a new pairing code.",
   "13d91e967cd9065c": "Not answering right now.",
   "fbf8bb81dfce9662": "{count, plural, one {Expires in {count} day} other {Expires in {count} days}}",
+  "3f698d5e79505a0a": "Never expires",
   "8971602c42718d72": "Reachable",
   "4c6b2d924da2c94d": "No environments connected yet.",
   "28494052dfb4647a": [

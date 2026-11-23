@@ -1,7 +1,6 @@
 import {
   type AuthAppInvite,
   type AuthCreateAppInviteInput,
-  type AuthCreateAppInviteResult,
   type AuthPendingAppInvite,
   EnvironmentId,
   MAX_APP_INVITE_TTL_MILLIS,
@@ -16,6 +15,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
@@ -41,7 +41,7 @@ export class AppInvites extends Context.Service<
     /** Replaces a pending invite to the same environment. */
     readonly create: (
       input: AuthCreateAppInviteInput,
-    ) => Effect.Effect<AuthCreateAppInviteResult, AppInviteError>;
+    ) => Effect.Effect<AuthAppInvite, AppInviteError>;
     /** Invites not yet taken, revoked, replaced or expired. */
     readonly list: Effect.Effect<ReadonlyArray<AuthAppInvite>, AppInviteError>;
     readonly revoke: (id: string) => Effect.Effect<boolean, AppInviteError>;
@@ -60,7 +60,6 @@ interface AppInviteRow {
   readonly secret_name: string;
   readonly created_at: string;
   readonly expires_at: string;
-  readonly pairing_link_id: string | null;
 }
 
 const UrlsJson = Schema.fromJsonString(Schema.Array(Schema.String));
@@ -74,7 +73,6 @@ const toInvite = (row: AppInviteRow): AuthAppInvite => ({
   urls: decodeUrls(row.urls_json),
   createdAt: DateTime.makeUnsafe(row.created_at),
   expiresAt: DateTime.makeUnsafe(row.expires_at),
-  ...(row.pairing_link_id === null ? {} : { pairingLinkId: row.pairing_link_id }),
 });
 
 const make = Effect.gen(function* () {
@@ -83,6 +81,9 @@ const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const changes = yield* PubSub.unbounded<void>();
   const publish = PubSub.publish(changes, undefined).pipe(Effect.asVoid);
+  // A take must never see a code a concurrent create or revoke is sweeping away.
+  const mutations = yield* Semaphore.make(1);
+  const exclusive = mutations.withPermits(1);
 
   const newId = random.randomBytes(16).pipe(Effect.map(Hex.encode));
 
@@ -103,16 +104,6 @@ const make = Effect.gen(function* () {
   const create: AppInvites["Service"]["create"] = Effect.fn("AppInvites.create")(
     function* (input) {
       const now = yield* DateTime.now;
-      // A newer invite for the same environment replaces the pending one.
-      const replaced = yield* sql<{ readonly pairing_link_id: string | null }>`
-        UPDATE auth_app_invites SET revoked_at = ${DateTime.formatIso(now)}
-        WHERE environment_id = ${input.environmentId}
-          AND consumed_at IS NULL
-          AND revoked_at IS NULL
-          AND expires_at > ${DateTime.formatIso(now)}
-        RETURNING pairing_link_id
-      `;
-      yield* sweep(now);
       const latest = DateTime.add(now, { milliseconds: MAX_APP_INVITE_TTL_MILLIS });
       const expiresAt =
         input.credentialExpiresAt !== undefined &&
@@ -122,34 +113,40 @@ const make = Effect.gen(function* () {
       const id = yield* newId;
       const urlsJson = yield* encodeUrls(input.urls);
       const secretName = `app-invite-${id}`;
+      // The new code is stored before the pending invite it replaces goes.
       yield* secrets.set(secretName, new TextEncoder().encode(input.credential));
-      const invite: AuthAppInvite = {
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              UPDATE auth_app_invites SET revoked_at = ${DateTime.formatIso(now)}
+              WHERE environment_id = ${input.environmentId}
+                AND consumed_at IS NULL
+                AND revoked_at IS NULL
+            `;
+            yield* sql`
+              INSERT INTO auth_app_invites (
+                id, environment_id, label, urls_json, secret_name, created_at, expires_at
+              ) VALUES (
+                ${id}, ${input.environmentId}, ${input.label}, ${urlsJson},
+                ${secretName}, ${DateTime.formatIso(now)}, ${DateTime.formatIso(expiresAt)}
+              )
+            `;
+          }),
+        )
+        .pipe(Effect.onError(() => secrets.remove(secretName).pipe(Effect.ignore)));
+      yield* sweep(now);
+      yield* publish;
+      return {
         id,
         environmentId: input.environmentId,
         label: input.label,
         urls: input.urls,
         createdAt: now,
         expiresAt,
-        ...(input.pairingLinkId === undefined ? {} : { pairingLinkId: input.pairingLinkId }),
-      };
-      yield* sql`
-        INSERT INTO auth_app_invites (
-          id, environment_id, label, urls_json, secret_name, created_at, expires_at,
-          pairing_link_id
-        ) VALUES (
-          ${id}, ${input.environmentId}, ${input.label}, ${urlsJson},
-          ${secretName}, ${DateTime.formatIso(now)}, ${DateTime.formatIso(expiresAt)},
-          ${input.pairingLinkId ?? null}
-        )
-      `.pipe(Effect.onError(() => secrets.remove(secretName).pipe(Effect.ignore)));
-      yield* publish;
-      return {
-        ...invite,
-        replacedPairingLinkIds: replaced.flatMap((row) =>
-          row.pairing_link_id === null ? [] : [row.pairing_link_id],
-        ),
-      };
+      } satisfies AuthAppInvite;
     },
+    exclusive,
     Effect.mapError((cause) => new AppInviteError({ operation: "create", cause })),
   );
 
@@ -180,6 +177,7 @@ const make = Effect.gen(function* () {
       if (revoked.length > 0) yield* publish;
       return revoked.length > 0;
     },
+    exclusive,
     Effect.mapError((cause) => new AppInviteError({ operation: "revoke", cause })),
   );
 
@@ -209,6 +207,7 @@ const make = Effect.gen(function* () {
     }
     return invites.flatMap((invite) => (Option.isSome(invite) ? [invite.value] : []));
   }).pipe(
+    exclusive,
     Effect.mapError((cause) => new AppInviteError({ operation: "take", cause })),
     Effect.withSpan("AppInvites.takePending"),
   );

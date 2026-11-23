@@ -13035,5 +13035,8 @@
   "dd2e0c88ac9c9641": "Réduire dans la zone de notification à la fermeture",
   "57285efd2e1f1c4e": "fermer fenêtre masquer arrière-plan rester actif zone de notification barre système quitter",
   "ed71095d921c8c1a": "Uniquement avec un accès complet",
-  "ba479fe77e035abe": "Associe aussi l'autre machine à celle-ci et, avec un accès complet, invite son app de bureau à s'y connecter dans la journée. Active Labs → Environnements associés sur chaque machine où c'est désactivé."
+  "ba479fe77e035abe": "Associe aussi l'autre machine à celle-ci et, avec un accès complet, invite son app de bureau à s'y connecter dans la journée. Active Labs → Environnements associés sur chaque machine où c'est désactivé.",
+  "196af945f431ddcd": "Tant qu'il est utilisé dans les 30 jours",
+  "056fa37c5b703471": "Tant qu'il est utilisé dans l'année",
+  "6839d3292ffa5b03": "Uniquement après la création d'une liaison"
 }

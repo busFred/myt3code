@@ -233,7 +233,19 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.lay
       const watcher = yield* sessions
         .awaitInvalidation(client.sessionId)
         .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* sessions.setExpiry(client.sessionId, { _tag: "duration", millis: 60_000 });
+      const before = Option.getOrThrow(yield* sessions.getLive(client.sessionId));
+      yield* sessions.setExpiry(client.sessionId, { _tag: "duration", millis: 60_000 }, before);
+      // Writes based on the row as it was before cannot undo that renewal.
+      expect(
+        Option.isNone(yield* sessions.setExpiry(client.sessionId, { _tag: "never" }, before)),
+      ).toBe(true);
+      const extended = yield* sessions.extend(
+        client.sessionId,
+        DateTime.add(yield* DateTime.now, { days: 30 }),
+        Duration.days(1),
+        before.renewalWindow,
+      );
+      expect(Option.getOrNull(extended)?.epochMilliseconds).toBe(60_000);
       yield* TestClock.adjust(Duration.minutes(1));
       yield* Fiber.join(watcher);
     }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
@@ -274,13 +286,38 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.lay
         Duration.toMillis(Duration.hours(2)) + Duration.toMillis(Duration.days(90)),
       );
       // Renewing to never makes the window never, and the token stays short.
-      yield* sessions.setExpiry(client.sessionId, { _tag: "never" });
+      yield* sessions.setExpiry(
+        client.sessionId,
+        { _tag: "never" },
+        Option.getOrThrow(yield* sessions.getLive(client.sessionId)),
+      );
       yield* sessions.renew(renewed.token, {
         proofKeyThumbprint: relaySessionInput.proofKeyThumbprint,
         consumeProof: Effect.void,
         ...renewable,
       });
       expect(yield* listed).toBe(NEVER_EXPIRES_AT_MILLIS);
+      // A token never outlives its session's window, issued or renewed.
+      yield* sessions.setExpiry(
+        client.sessionId,
+        { _tag: "duration", millis: Duration.toMillis(Duration.minutes(10)) },
+        Option.getOrThrow(yield* sessions.getLive(client.sessionId)),
+      );
+      const now = (yield* DateTime.now).epochMilliseconds;
+      const capped = yield* sessions.renew(renewed.token, {
+        proofKeyThumbprint: relaySessionInput.proofKeyThumbprint,
+        consumeProof: Effect.void,
+        ...renewable,
+      });
+      expect(capped.expiresAt.epochMilliseconds).toBe(
+        now + Duration.toMillis(Duration.minutes(10)),
+      );
+      const brief = yield* sessions.issue({
+        ...relaySessionInput,
+        ...renewable,
+        lifetime: { _tag: "duration", millis: Duration.toMillis(Duration.minutes(10)) },
+      });
+      expect(brief.expiresAt.epochMilliseconds).toBe(now + Duration.toMillis(Duration.minutes(10)));
     }).pipe(Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
   );
 

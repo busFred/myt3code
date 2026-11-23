@@ -196,7 +196,16 @@ const make = Effect.gen(function* () {
         Effect.map(decodeRefusal),
         Effect.orElseSucceed(() => Option.none()),
       );
-      const failure = fromStatus(response.status, Option.getOrUndefined(refusal)?.error, label);
+      // The peer decides whether a link ended; its refusal after the stored expiry reads as expired.
+      const failure =
+        response.status === 401 &&
+        DateTime.isLessThanOrEqualTo(resolved.link.expiresAt, yield* DateTime.now)
+          ? new PeerLinkThreadReadError({
+              reason: "expired",
+              label,
+              message: `The link to ${label} expired. Link it again with a new pairing code from ${label}.`,
+            })
+          : fromStatus(response.status, Option.getOrUndefined(refusal)?.error, label);
       // A refusal is still an answer: the link reached the peer, except where it was turned away.
       yield* links.recordOutcome(input.environmentId, {
         error: failure.reason === "thread_not_found" ? null : failure.message,

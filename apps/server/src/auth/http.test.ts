@@ -239,18 +239,18 @@ it.effect("sets a renewed or long session's cookie again on load, capped at 400 
           );
 
           // Only access management may renew, as only it may revoke.
-          const ordinaryId = await (async () => {
-            const token = decodeURIComponent(ordinaryCookie?.split(";", 1)[0]?.split("=")[1] ?? "");
+          const sessionIdOf = (cookie: string | undefined) => {
+            const token = decodeURIComponent(cookie?.split(";", 1)[0]?.split("=")[1] ?? "");
             const payload = JSON.parse(
               Buffer.from(token.split(".")[0] ?? "", "base64url").toString("utf8"),
             ) as { sid: string };
             return payload.sid;
-          })();
-          const renew = (cookie: string) =>
+          };
+          const renew = (cookie: string, sessionId = sessionIdOf(ordinaryCookie)) =>
             environment.handler(
               postJson(
                 "/api/auth/clients/renew",
-                { sessionId: ordinaryId, lifetime: { _tag: "duration", millis: 90 * day } },
+                { sessionId, lifetime: { _tag: "duration", millis: 90 * day } },
                 { cookie },
               ),
               requestContext,
@@ -267,6 +267,18 @@ it.effect("sets a renewed or long session's cookie again on load, capped at 400 
             Math.abs(
               expiresAt(cookieOf(await load(ordinaryCookie))) - Date.parse(result.expiresAt),
             ),
+          ).toBeLessThan(1000);
+          // A browser that renews itself gets the new cookie in that same response.
+          const managerCookie = cookieOf(
+            await pairAndSignIn({ scopes: ["access:read", "access:write"] }),
+          );
+          const selfRenewed = await renew(
+            managerCookie?.split(";", 1)[0] ?? "",
+            sessionIdOf(managerCookie),
+          );
+          const selfResult = (await selfRenewed.json()) as { expiresAt: string };
+          expect(
+            Math.abs(expiresAt(cookieOf(selfRenewed)) - Date.parse(selfResult.expiresAt)),
           ).toBeLessThan(1000);
         }),
       (environment) => Effect.promise(() => environment.dispose()),

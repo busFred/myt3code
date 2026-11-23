@@ -5,9 +5,11 @@ import type {
   AuthConnectDeviceRequest,
   AuthPairingLink,
 } from "@t3tools/contracts";
+import { isNeverExpiring } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 import type { IssuedBearerSession, IssuedPairingLink } from "./auth/EnvironmentAuth.ts";
+import { describeSessionLifetime } from "./cli/config.ts";
 
 const newline = "\n";
 
@@ -69,11 +71,7 @@ export function formatIssuedPairingCredential(
       `Token: ${credential.credential}`,
       ...(pairUrl ? [`Pair URL: ${pairUrl}`] : []),
       `Expires at: ${toIsoString(credential.expiresAt)}`,
-      ...(credential.lifetime
-        ? [
-            `Device stays signed in: ${credential.lifetime._tag === "never" ? "never expires" : `${Math.round(credential.lifetime.millis / 86_400_000)} days`}`,
-          ]
-        : []),
+      `Device stays signed in: ${describeSessionLifetime(credential.lifetime)}`,
     ].join(newline) + newline
   );
 }
@@ -92,6 +90,7 @@ export function formatPairingCredentialList(
         scopes: credential.permissions ?? credential.scopes,
         createdAt: toIsoString(credential.createdAt),
         expiresAt: toIsoString(credential.expiresAt),
+        ...(credential.lifetime ? { sessionLifetime: credential.lifetime } : {}),
       })),
       null,
       2,
@@ -110,6 +109,7 @@ export function formatPairingCredentialList(
           `  scopes: ${(credential.permissions ?? credential.scopes).join(" ")}`,
           `  created: ${toIsoString(credential.createdAt)}`,
           `  expires: ${toIsoString(credential.expiresAt)}`,
+          `  device stays signed in: ${describeSessionLifetime(credential.lifetime)}`,
         ].join(newline),
       )
       .join(`${newline}${newline}`) + newline
@@ -196,7 +196,7 @@ export function formatSessionList(
           `  last connected: ${
             session.lastConnectedAt ? toIsoString(session.lastConnectedAt) : "never"
           }`,
-          `  expires: ${toIsoString(session.expiresAt)}`,
+          `  expires: ${isNeverExpiring(session.expiresAt) ? "never" : toIsoString(session.expiresAt)}`,
         ].join(newline),
       )
       .join(`${newline}${newline}`) + newline

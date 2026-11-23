@@ -586,6 +586,28 @@ export const layer = HttpApiBuilder.group(
                   : {}),
               },
             );
+            // A browser renewing its own sign-in keeps its cookie only as long as it says.
+            if (
+              Option.isSome(renewed) &&
+              args.payload.sessionId === session.sessionId &&
+              session.method === "browser-session-cookie"
+            ) {
+              const request = yield* HttpServerRequest.HttpServerRequest;
+              const credential = EnvironmentAuth.selectRequestCredential(
+                request,
+                sessions.cookieName,
+                sessions.legacyCookieName,
+              );
+              if (credential?.source === "cookie" || credential?.source === "legacy-cookie") {
+                yield* appendSessionCookie(
+                  request,
+                  sessions.cookieName,
+                  credential.token,
+                  cappedCookieExpiry(renewed.value, yield* DateTime.now),
+                );
+                yield* appendCredentialResponseHeaders;
+              }
+            }
             return Option.match(renewed, {
               onNone: () => ({ renewed: false }),
               onSome: (expiresAt) => ({ renewed: true, expiresAt }),

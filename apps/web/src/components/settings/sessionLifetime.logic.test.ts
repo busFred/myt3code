@@ -8,6 +8,7 @@ import {
   isMissingEndpointFailure,
   lifetimeFromChoice,
   linkDoneIn,
+  mergeBothWaysRetry,
   summarizeBothWays,
 } from "./sessionLifetime.logic";
 
@@ -39,6 +40,7 @@ describe("session lifetime helpers", () => {
   it("does not offer renewing T3 Connect or desktop app sessions", () => {
     expect(canRenewSession({ subject: "cloud-connect" })).toBe(false);
     expect(canRenewSession({ subject: "desktop-bootstrap" })).toBe(false);
+    expect(canRenewSession({ subject: "desktop-service" })).toBe(false);
     expect(canRenewSession({ subject: "one-time-token" })).toBe(true);
   });
 
@@ -79,5 +81,26 @@ describe("both ways outcomes", () => {
     expect(linkDoneIn(previous, "a_to_b")).toBe(true);
     expect(linkDoneIn(previous, "b_to_a")).toBe(false);
     expect(linkDoneIn(undefined, "a_to_b")).toBe(false);
+  });
+
+  it("keeps what an earlier run finished, so the next retry still knows a link was made", () => {
+    const previous = outcomes([
+      ["a_to_b", { kind: "done" }],
+      ["b_to_a", { kind: "skipped" }],
+      ["invite", { kind: "failed", failure: "other", detail: null }],
+    ]);
+    const retried = mergeBothWaysRetry(
+      previous,
+      outcomes([
+        ["a_to_b", { kind: "skipped" }],
+        ["b_to_a", { kind: "skipped" }],
+        ["invite", { kind: "done" }],
+      ]),
+    );
+    expect(Object.fromEntries(retried)).toEqual({
+      a_to_b: { kind: "done" },
+      b_to_a: { kind: "skipped" },
+      invite: { kind: "done" },
+    });
   });
 });

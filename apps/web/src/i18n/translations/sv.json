@@ -13042,5 +13042,8 @@
   "dd2e0c88ac9c9641": "Stäng till systemfältet",
   "57285efd2e1f1c4e": "stäng fönster dölj bakgrund fortsätt köra systemfält meddelandefält avsluta",
   "ed71095d921c8c1a": "Endast med full åtkomst",
-  "ba479fe77e035abe": "Länkar även den andra maskinen tillbaka till den här och bjuder, med full åtkomst, in dess skrivbordsapp att ansluta inom ett dygn. Slår på Labs → Länkade miljöer på varje maskin där det är avslaget."
+  "ba479fe77e035abe": "Länkar även den andra maskinen tillbaka till den här och bjuder, med full åtkomst, in dess skrivbordsapp att ansluta inom ett dygn. Slår på Labs → Länkade miljöer på varje maskin där det är avslaget.",
+  "196af945f431ddcd": "Så länge den används inom 30 dagar",
+  "056fa37c5b703471": "Så länge den används inom 1 år",
+  "6839d3292ffa5b03": "Först när en länk har skapats"
 }

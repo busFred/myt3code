@@ -37,23 +37,22 @@ const recordingOps = (fail: Record<string, unknown> = {}, echoLifetime = true) =
     enableLinks: (environmentId) => result(`enable:${environmentId}`, undefined),
     mintLinkCode: (environmentId, input) =>
       result(`mint:${environmentId}`, {
+        id: `link-code-${environmentId}`,
         credential: `code-${environmentId}`,
         ...(echoLifetime && input.lifetime ? { lifetime: input.lifetime } : {}),
       }),
     link: (environmentId, input) =>
       result(`link:${environmentId}->${input.expectedEnvironmentId}:${input.pairingCode}`, {}),
-    mintAppCode: (environmentId) =>
+    mintAppCode: (environmentId, input) =>
       result(`app:${environmentId}`, {
         id: `app-link-${environmentId}`,
         credential: `app-${environmentId}`,
         expiresAt: DateTime.makeUnsafe(0),
+        ...(echoLifetime && input.lifetime ? { lifetime: input.lifetime } : {}),
       }),
-    revokeAppCode: (environmentId, id) => result(`revoke:${environmentId}:${id}`, undefined),
+    revokeCode: (environmentId, id) => result(`revoke:${environmentId}:${id}`, undefined),
     createInvite: (environmentId, input) =>
-      result(
-        `invite:${environmentId}:${input.environmentId}:${input.credential}:${input.pairingLinkId}`,
-        { replacedPairingLinkIds: ["earlier-app-link"] },
-      ),
+      result(`invite:${environmentId}:${input.environmentId}:${input.credential}`, {}),
     isUnsupported: (failure) => failure === NOT_FOUND,
   };
   return { ops, calls };
@@ -82,12 +81,12 @@ describe("runLinkBothWays", () => {
     // Each side links with a code minted on the side it links to.
     expect(calls).toContain("link:environment-a->environment-b:code-environment-b");
     expect(calls).toContain("link:environment-b->environment-a:code-environment-a");
-    expect(calls).toContain(
-      "invite:environment-b:environment-a:app-environment-a:app-link-environment-a",
+    expect(calls).toContain("invite:environment-b:environment-a:app-environment-a");
+    // The invite follows the links, so it never outruns them.
+    expect(calls.indexOf("invite:environment-b:environment-a:app-environment-a")).toBeGreaterThan(
+      calls.indexOf("link:environment-b->environment-a:code-environment-a"),
     );
-    // The invite it replaced on b can no longer be taken, so its code on a goes too.
-    expect(calls).toContain("revoke:environment-a:earlier-app-link");
-    expect(calls).not.toContain("revoke:environment-a:app-link-environment-a");
+    expect(calls.filter((call) => call.startsWith("revoke:"))).toEqual([]);
   });
 
   it("invites only with full access, and revokes the code when the invite fails", async () => {
@@ -103,9 +102,7 @@ describe("runLinkBothWays", () => {
     expect(narrow.calls.filter((call) => call.startsWith("app:"))).toEqual([]);
 
     const refused = recordingOps({
-      "invite:environment-b:environment-a:app-environment-a:app-link-environment-a": new Error(
-        "refused",
-      ),
+      "invite:environment-b:environment-a:app-environment-a": new Error("refused"),
     });
     await runLinkBothWays({
       a: side("a"),
@@ -115,6 +112,28 @@ describe("runLinkBothWays", () => {
       ops: refused.ops,
     });
     expect(refused.calls).toContain("revoke:environment-a:app-link-environment-a");
+
+    // With no link made now, or in an earlier run of the same request, no invite is left.
+    const linked = { linksToOther: true };
+    const alreadyLinked = recordingOps();
+    const noLink = await runLinkBothWays({
+      a: side("a", linked),
+      b: side("b", linked),
+      access: "full-access",
+      invite: true,
+      ops: alreadyLinked.ops,
+    });
+    expect(noLink.get("invite")).toEqual({ kind: "skipped", reason: "not_linked" });
+    expect(alreadyLinked.calls.filter((call) => call.startsWith("app:"))).toEqual([]);
+    const retried = await runLinkBothWays({
+      a: side("a", linked),
+      b: side("b", linked),
+      access: "full-access",
+      invite: true,
+      linkedEarlier: true,
+      ops: alreadyLinked.ops,
+    });
+    expect(retried.get("invite")).toEqual({ kind: "done" });
   });
 
   it("leaves linked directions alone and retries only what failed", async () => {
@@ -149,8 +168,9 @@ describe("runLinkBothWays", () => {
     });
     expect(retried.get("a_to_b")).toEqual({ kind: "skipped" });
     expect(retried.get("b_to_a")).toEqual({ kind: "done" });
-    // The linked direction spends no code.
+    // The linked direction spends no code, and the failed one revoked the code it left unused.
     expect(retry.calls).not.toContain("mint:environment-b");
+    expect(first.calls).toContain("revoke:environment-a:link-code-environment-a");
   });
 
   it("does not link when links cannot be turned on, and names servers too old for a call", async () => {
@@ -168,12 +188,17 @@ describe("runLinkBothWays", () => {
     expect(outcomes.get("enable_a")).toEqual({ kind: "failed", failure: "other", detail: null });
     expect(outcomes.get("a_to_b")).toEqual({ kind: "failed", failure: "disabled", detail: null });
     expect(outcomes.get("b_to_a")).toEqual({ kind: "failed", failure: "disabled", detail: null });
-    expect(outcomes.get("invite")).toEqual({
-      kind: "failed",
-      failure: "unsupported",
-      detail: null,
-    });
+    expect(outcomes.get("invite")).toEqual({ kind: "skipped", reason: "not_linked" });
     expect(calls.filter((call) => call.startsWith("mint:"))).toEqual([]);
+
+    const older = await runLinkBothWays({
+      a: side("a"),
+      b: side("b"),
+      access: "full-access",
+      invite: true,
+      ops,
+    });
+    expect(older.get("invite")).toEqual({ kind: "failed", failure: "unsupported", detail: null });
   });
 
   it("reports a lifetime the other side dropped and a side with no reachable address", async () => {

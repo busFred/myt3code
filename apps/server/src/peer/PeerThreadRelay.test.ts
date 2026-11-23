@@ -239,10 +239,9 @@ it.effect("tells a client why a linked environment's thread cannot be read", () 
       yield* b.auth.revokeSession(session);
       expect(yield* reasonOf()).toEqual({ reason: "rejected", label: "Box" });
 
-      yield* Ref.set(b.bearers, []);
+      // The peer decides whether the link ended; it refuses it, which reads as expired here.
       yield* TestClock.adjust(Duration.days(31));
       expect(yield* reasonOf()).toEqual({ reason: "expired", label: "Box" });
-      expect(yield* Ref.get(b.bearers)).toEqual([]);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

@@ -28,6 +28,7 @@ import * as Schema from "effect/Schema";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
+import * as HttpBody from "effect/http/HttpBody";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpApiClient from "effect/http-api/HttpApiClient";
 
@@ -36,6 +37,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import { readLiveServerRuntimeState } from "../serverRuntimeState.ts";
+import * as RunningServer from "./runningServer.ts";
 
 export class EnvironmentBothWaysError extends Schema.TaggedError<EnvironmentBothWaysError>()(
   "EnvironmentBothWaysError",
@@ -167,13 +169,19 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
   const anonymous = yield* HttpApiClient.make(EnvironmentHttpApi, { baseUrl: origin }).pipe(
     Effect.provideService(HttpClient.HttpClient, httpClient),
   );
-  const peer = yield* anonymous.metadata
-    .descriptor()
-    .pipe(
-      Effect.mapError(
-        () => new EnvironmentBothWaysError({ detail: `${origin} did not answer as T3 Code.` }),
+  const notT3 = () =>
+    new EnvironmentBothWaysError({ detail: `${origin} did not answer as T3 Code.` });
+  const peer = yield* anonymous.metadata.descriptor().pipe(Effect.mapError(notT3));
+  // Only a server with renew can keep the session the code is spent on short, so ask before
+  // spending it: a newer one refuses the unauthenticated call, an older one has no such route.
+  const renewProbe = yield* httpClient
+    .execute(
+      HttpClientRequest.post(`${origin}/api/auth/clients/renew`).pipe(
+        HttpClientRequest.setBody(HttpBody.text("{}", "application/json")),
       ),
-    );
+    )
+    .pipe(Effect.mapError(notT3));
+  if (renewProbe.status === 404) return yield* olderPeer(peer.label);
   const issued = yield* anonymous.auth
     .token({
       headers: {},
@@ -219,7 +227,6 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
       payload: { sessionId: sessionId.value, lifetime: { _tag: "duration", millis } },
     });
   });
-  // Only a server with renew can keep this session short; one without it predates both ways.
   yield* endSession(REMOTE_SESSION_LIFETIME.millis).pipe(
     Effect.catchIf(isMissingEndpoint, () => Effect.fail(olderPeer(peer.label))),
     Effect.mapError((error) =>
@@ -230,6 +237,17 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
   );
 
   const outcomes: Array<StepOutcome> = [];
+  // The invite gives the other side's app full use here, so it follows only a link made now.
+  let linkedNow = false;
+  // Through a running server, which then takes the change at once; the link back needs it on.
+  const turnOnHere = RunningServer.changeState({
+    scopes: [AuthSettingsWriteScope],
+    viaServer: (server) =>
+      server.access
+        .enableLinkedEnvironments({ headers: {} })
+        .pipe(Effect.map((result) => result.enabledLinkedEnvironments)),
+    locally: links.turnOn,
+  }).pipe(Effect.catchIf(isMissingEndpoint, () => links.turnOn));
   const step = <E, R>(
     name: string,
     effect: Effect.Effect<string, E, R>,
@@ -252,7 +270,7 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
   yield* step(
     `${peer.label} → ${self.label}`,
     Effect.gen(function* () {
-      const turnedOn = yield* links.turnOn;
+      const turnedOn = yield* turnOnHere;
       const code = yield* auth.issuePairingCredential({
         access: input.access,
         purpose: "peer-link",
@@ -276,6 +294,7 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
         yield* auth.revokePairingLink(code.id).pipe(Effect.ignore);
         return "already linked, left as it is";
       }
+      linkedNow = true;
       const enabled = [
         ...(turnedOn ? [self.label] : []),
         ...(linked.enabledLinkedEnvironments ? [peer.label] : []),
@@ -300,17 +319,28 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
           ...(lifetime ? { lifetime } : {}),
         },
       });
-      const linked = yield* links.linkEnabling(
-        {
-          url: origin,
-          alternateUrls: input.alternateUrls,
-          pairingCode: code.credential,
-          access: input.access,
-          expectedEnvironmentId: peer.environmentId,
-          expectedLabel: peer.label,
-        },
-        false,
-      );
+      // A code left unused there is revoked, as the other step does here.
+      const revokeCode = client.auth
+        .revokePairingLink({ headers: {}, payload: { id: code.id } })
+        .pipe(Effect.ignore);
+      const linked = yield* links
+        .linkEnabling(
+          {
+            url: origin,
+            alternateUrls: input.alternateUrls,
+            pairingCode: code.credential,
+            access: input.access,
+            expectedEnvironmentId: peer.environmentId,
+            expectedLabel: peer.label,
+          },
+          false,
+        )
+        .pipe(Effect.tapError(() => revokeCode));
+      if (linked.alreadyLinked) {
+        yield* revokeCode;
+        return "already linked, left as it is";
+      }
+      linkedNow = true;
       return `linked with ${linked.link.access} access, until ${DateTime.formatIso(linked.link.expiresAt)}${lifetime && code.lifetime === undefined ? ` (${peer.label} ignored --expire)` : ""}`;
     }),
   );
@@ -323,6 +353,7 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
       if (input.access !== "full-access") {
         return "skipped: only a full-access link invites the desktop app";
       }
+      if (!linkedNow) return "skipped: no link was made this time";
       const app = yield* auth.createPairingLink({
         scopes: AuthStandardClientScopes,
         subject: "one-time-token",
@@ -339,16 +370,9 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
             urls: [selfUrl, ...selfAlternates],
             credential: app.credential,
             credentialExpiresAt: app.expiresAt,
-            pairingLinkId: app.id,
           },
         })
         .pipe(Effect.tapError(() => auth.revokePairingLink(app.id).pipe(Effect.ignore)));
-      // The invite it replaced can no longer be taken, so its code here goes too.
-      yield* Effect.forEach(
-        invite.replacedPairingLinkIds ?? [],
-        (id) => auth.revokePairingLink(id).pipe(Effect.ignore),
-        { discard: true },
-      );
       return `invited to connect to ${self.label}, until ${DateTime.formatIso(invite.expiresAt)}`;
     }),
   );

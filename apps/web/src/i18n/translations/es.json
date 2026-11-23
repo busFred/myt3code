@@ -13030,5 +13030,8 @@
   "dd2e0c88ac9c9641": "Cerrar a la bandeja del sistema",
   "57285efd2e1f1c4e": "cerrar ventana ocultar segundo plano seguir ejecutando bandeja área de notificación salir",
   "ed71095d921c8c1a": "Solo con acceso completo",
-  "ba479fe77e035abe": "También vincula la otra máquina con esta y, con acceso completo, invita a su app de escritorio a conectarse en el plazo de un día. Activa Labs → Entornos vinculados en la máquina donde esté desactivado."
+  "ba479fe77e035abe": "También vincula la otra máquina con esta y, con acceso completo, invita a su app de escritorio a conectarse en el plazo de un día. Activa Labs → Entornos vinculados en la máquina donde esté desactivado.",
+  "196af945f431ddcd": "Mientras se use en un plazo de 30 días",
+  "056fa37c5b703471": "Mientras se use en un plazo de 1 año",
+  "6839d3292ffa5b03": "Solo después de crear un vínculo"
 }

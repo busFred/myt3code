@@ -1,13 +1,17 @@
 import { assert, describe, it } from "@effect/vitest";
+import {
+  DATABASE_MIGRATIONS_FINISHED_MESSAGE,
+  DATABASE_MIGRATIONS_STARTED_MESSAGE,
+} from "@t3tools/shared/databaseMigrationLog";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Ref from "effect/Ref";
-import * as Logger from "effect/Logger";
 import * as Console from "effect/Console";
 import * as NodeUtil from "node:util";
 import type { DatabaseMigrationProgress as Progress } from "@t3tools/contracts";
@@ -131,10 +135,25 @@ describe("runMigrations", () => {
         SELECT name FROM pragma_table_info('auth_sessions') WHERE name = 'renewal_window_json'
         UNION ALL
         SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'auth_app_invites'
-        UNION ALL
-        SELECT name FROM pragma_table_info('auth_app_invites') WHERE name = 'pairing_link_id'
       `;
-      assert.lengthOf(forkColumns, 4);
+      assert.lengthOf(forkColumns, 3);
+
+      // With only the fork's step to run, the desktop still sees the started line finish.
+      yield* sql`DROP TABLE auth_app_invites`;
+      const logged: Array<unknown> = [];
+      const forkLogger = Logger.make(({ message }) => {
+        logged.push(...(Array.isArray(message) ? message : [message]));
+      });
+      assert.deepStrictEqual(
+        yield* runMigrations().pipe(
+          Effect.provide(Logger.layer([forkLogger], { mergeWithExisting: false })),
+        ),
+        [],
+      );
+      assert.includeMembers(logged, [
+        DATABASE_MIGRATIONS_STARTED_MESSAGE,
+        DATABASE_MIGRATIONS_FINISHED_MESSAGE,
+      ]);
 
       // query_only rejects BEGIN IMMEDIATE, which CLI startup would otherwise take on the live database.
       yield* sql`PRAGMA query_only = ON`;

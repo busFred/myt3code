@@ -6,7 +6,12 @@ import {
 } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
-import { AuthSessionLifetime, DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
+import {
+  AuthSessionLifetime,
+  DesktopBackendBootstrap,
+  MAX_SESSION_LIFETIME_MILLIS,
+  PortSchema,
+} from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -649,12 +654,13 @@ export const SessionLifetimeFromString = Schema.String.pipe(
         }
         const duration = parseDurationInput(value);
         const millis = duration === null ? 0 : Duration.toMillis(duration);
-        if (millis > 0 && Number.isFinite(millis)) {
+        if (millis > 0 && Number.isFinite(millis) && millis <= MAX_SESSION_LIFETIME_MILLIS) {
           return Effect.succeed({ _tag: "duration", millis: Math.round(millis) } as const);
         }
         return Effect.fail(
           new SchemaIssue.InvalidValue({
-            message: "Invalid expiry. Use `never` or a duration like 90d, 1y, or 12h.",
+            message:
+              "Invalid expiry. Use `never` or a duration up to 100 years, like 90d, 1y, or 12h.",
           }),
         );
       },

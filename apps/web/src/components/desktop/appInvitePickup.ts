@@ -80,3 +80,27 @@ export async function pickUpAppInvites(deps: AppInvitePickupDeps): Promise<numbe
   }
   return added;
 }
+
+/**
+ * Runs `task` one at a time. A trigger while it runs asks for one more run after it ends, so a
+ * change that lands mid-run is never missed and a burst of them costs one extra run.
+ */
+export function singleFlightWithFollowUp(task: () => Promise<void>): () => Promise<void> {
+  let running: Promise<void> | null = null;
+  let again = false;
+  const loop = async () => {
+    do {
+      again = false;
+      await task().catch(() => undefined);
+    } while (again);
+    running = null;
+  };
+  return () => {
+    if (running !== null) {
+      again = true;
+      return running;
+    }
+    running = loop();
+    return running;
+  };
+}

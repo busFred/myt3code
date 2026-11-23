@@ -2,6 +2,7 @@ import {
   type AuthEnvironmentScope,
   AuthSessionLifetime,
   AuthStandardClientScopes,
+  DESKTOP_SERVICE_SESSION_SUBJECT,
   ExecutionEnvironmentDescriptor,
   ORCHESTRATION_PROTOCOL_VERSION,
   PortSchema,
@@ -497,12 +498,13 @@ const mintPairingLink = Effect.fn("pair.mintPairingLink")(function* (input: {
   readonly ttl: Option.Option<Duration.Duration>;
   readonly label: Option.Option<string>;
   readonly lifetime: Option.Option<AuthSessionLifetime>;
+  readonly desktopService: boolean;
 }) {
   return yield* Effect.gen(function* () {
     const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
     return yield* environmentAuth.createPairingLink({
       scopes: input.scopes,
-      subject: "one-time-token",
+      subject: input.desktopService ? DESKTOP_SERVICE_SESSION_SUBJECT : "one-time-token",
       label: Option.getOrElse(input.label, () => "t3 pair"),
       ...(Option.isSome(input.ttl) ? { ttl: input.ttl.value } : {}),
       ...(Option.isSome(input.lifetime) ? { lifetime: input.lifetime.value } : {}),
@@ -552,6 +554,9 @@ export const pairCommand = Command.make("pair", {
   label: labelFlag,
   tailscale: tailscaleFlag,
   tailscaleServePort: tailscaleServePortFlag,
+  // The desktop app pairs itself to the background service with this. Minting writes to this
+  // environment's database, so only someone who can already act as it can mark the app's session.
+  desktopService: Flag.Boolean("desktop-service").pipe(Flag.withDefault(false), Flag.withHidden),
 }).pipe(
   Command.withDescription(
     "Mint a pairing token for a running T3 Code server and print it as a QR code.",
@@ -622,6 +627,7 @@ export const pairCommand = Command.make("pair", {
         ttl: flags.ttl,
         label: flags.label,
         lifetime: flags.expire,
+        desktopService: flags.desktopService,
       });
       if (flags.json) {
         yield* Console.log(

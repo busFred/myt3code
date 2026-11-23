@@ -1,4 +1,4 @@
-import { type AuthEnvironmentScope, EnvironmentHttpApi } from "@t3tools/contracts";
+import { AuthEnvironmentScope, EnvironmentHttpApi } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -39,6 +39,13 @@ export class RunningServerNoReplyError extends Schema.TaggedError<RunningServerN
 }
 
 export type ServerClient = HttpApiClient.ForApi<typeof EnvironmentHttpApi>;
+
+/**
+ * Every scope, for a change that needs the scopes its target holds, such as lengthening a
+ * session. The CLI acts as the local admin, who can already write this environment's database.
+ */
+export const LOCAL_ADMIN_SCOPES: ReadonlyArray<AuthEnvironmentScope> =
+  AuthEnvironmentScope.literals;
 
 // The scope revokes the session; the TTL bounds it if that never runs.
 const SESSION_TTL = Duration.minutes(2);

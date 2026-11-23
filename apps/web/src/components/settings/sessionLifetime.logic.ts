@@ -4,7 +4,7 @@ import type {
   RenewBothWaysOutcome,
   RenewBothWaysStep,
 } from "@t3tools/client-runtime/link-both-ways";
-import type { AuthSessionLifetime } from "@t3tools/contracts";
+import { type AuthSessionLifetime, NON_RENEWABLE_SESSION_SUBJECTS } from "@t3tools/contracts";
 
 const DAY_MILLIS = 24 * 60 * 60 * 1000;
 export const MAX_CUSTOM_LIFETIME_DAYS = 3650;
@@ -45,9 +45,15 @@ export const RENEW_LIFETIMES: ReadonlyArray<{
 ];
 
 /** T3 Connect and desktop app sessions keep their own lifetimes; the server refuses to renew them. */
-const NON_RENEWABLE_SUBJECTS: ReadonlySet<string> = new Set(["cloud-connect", "desktop-bootstrap"]);
 export const canRenewSession = (session: { readonly subject: string }) =>
-  !NON_RENEWABLE_SUBJECTS.has(session.subject);
+  !NON_RENEWABLE_SESSION_SUBJECTS.includes(session.subject);
+
+/**
+ * A DPoP device renews its own sign-in, so renewing it sets how long it may go unused rather
+ * than when it ends.
+ */
+export const renewsItself = (session: { readonly method: string }) =>
+  session.method === "dpop-access-token";
 
 export type LifetimeDescription =
   | { readonly kind: "never" }
@@ -104,6 +110,25 @@ export const linkDoneIn = (
   const kind = outcomes?.get(step)?.kind;
   return kind === "done" || kind === "skipped";
 };
+
+/** A retry skips what an earlier run finished, which stays done for this request. */
+export function mergeBothWaysRetry(
+  previous: ReadonlyMap<BothWaysStep, BothWaysOutcome> | undefined,
+  outcomes: ReadonlyMap<BothWaysStep, BothWaysOutcome>,
+): ReadonlyMap<BothWaysStep, BothWaysOutcome> {
+  if (previous === undefined) return outcomes;
+  return new Map(
+    [...outcomes].map(([step, outcome]) => {
+      const before = previous.get(step);
+      return [
+        step,
+        before?.kind === "done" && outcome.kind === "skipped" && outcome.reason === undefined
+          ? before
+          : outcome,
+      ];
+    }),
+  );
+}
 
 export const renewFailedSteps = (outcomes: ReadonlyMap<RenewBothWaysStep, RenewBothWaysOutcome>) =>
   [...outcomes].flatMap(([step, outcome]) => (outcome.kind === "failed" ? [step] : []));

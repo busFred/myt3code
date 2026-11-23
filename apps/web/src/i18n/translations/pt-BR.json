@@ -13035,5 +13035,8 @@
   "dd2e0c88ac9c9641": "Fechar para a bandeja do sistema",
   "57285efd2e1f1c4e": "fechar janela ocultar segundo plano continuar executando bandeja área de notificação sair",
   "ed71095d921c8c1a": "Somente com acesso total",
-  "ba479fe77e035abe": "Também vincula a outra máquina a esta e, com acesso total, convida o app de desktop dela a se conectar em até um dia. Ativa Labs → Ambientes vinculados em cada máquina em que estiver desativado."
+  "ba479fe77e035abe": "Também vincula a outra máquina a esta e, com acesso total, convida o app de desktop dela a se conectar em até um dia. Ativa Labs → Ambientes vinculados em cada máquina em que estiver desativado.",
+  "196af945f431ddcd": "Enquanto for usado em até 30 dias",
+  "056fa37c5b703471": "Enquanto for usado em até 1 ano",
+  "6839d3292ffa5b03": "Somente depois que um vínculo for criado"
 }

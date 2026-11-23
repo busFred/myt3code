@@ -1,6 +1,11 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentHttpApi, EnvironmentId } from "@t3tools/contracts";
+import {
+  DESKTOP_BOOTSTRAP_SESSION_SUBJECT,
+  DESKTOP_SERVICE_SESSION_SUBJECT,
+  EnvironmentHttpApi,
+  EnvironmentId,
+} from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -66,18 +71,14 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AppInvites", (it
       const shortLived = yield* invites.create({
         ...inviteInput("SHORT"),
         credentialExpiresAt: DateTime.add(now, { hours: 1 }),
-        pairingLinkId: "link-short",
       });
       expect(shortLived.expiresAt.epochMilliseconds).toBe(now.epochMilliseconds + 3_600_000);
-      expect(shortLived.replacedPairingLinkIds).toEqual([]);
-      expect((yield* invites.list).map((invite) => invite.pairingLinkId)).toEqual(["link-short"]);
-      // A newer invite for the same environment replaces it, and names its code's link.
+      // A newer invite for the same environment replaces it.
       const replacing = yield* invites.create({
         ...inviteInput("REPLACING"),
         credentialExpiresAt: DateTime.add(now, { days: 7 }),
       });
       expect(replacing.expiresAt.epochMilliseconds).toBe(now.epochMilliseconds + 24 * 3_600_000);
-      expect(replacing.replacedPairingLinkIds).toEqual(["link-short"]);
       const other = yield* invites.create(inviteInput("OTHER", EnvironmentId.make("b")));
       expect((yield* invites.list).map((invite) => invite.id).toSorted()).toEqual(
         [replacing.id, other.id].toSorted(),
@@ -87,6 +88,26 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AppInvites", (it
       expect(yield* invites.revoke(other.id)).toBe(false);
       yield* TestClock.adjust("1 day");
       expect(yield* invites.takePending).toEqual([]);
+    }).pipe(Effect.provide(Layer.merge(layerAppInvites, TestClock.layer()))),
+  );
+
+  it.effect("a take racing a replacing create gets the old invite or the new one, never none", () =>
+    Effect.gen(function* () {
+      const invites = yield* AppInvites.AppInvites;
+      for (let round = 0; round < 20; round++) {
+        yield* invites.create(inviteInput(`OLD-${round}`));
+        const [taken] = yield* Effect.all(
+          [invites.takePending, invites.create(inviteInput(`NEW-${round}`))],
+          { concurrency: "unbounded" },
+        );
+        const left = yield* invites.takePending;
+        expect(taken.map((invite) => invite.credential)).toHaveLength(1);
+        expect([...taken, ...left].map((invite) => invite.credential)).toEqual(
+          taken[0]?.credential === `OLD-${round}`
+            ? [`OLD-${round}`, `NEW-${round}`]
+            : [`NEW-${round}`],
+        );
+      }
     }).pipe(Effect.provide(Layer.merge(layerAppInvites, TestClock.layer()))),
   );
 });
@@ -178,12 +199,23 @@ it.live("guards invites and links by access, and lets only the desktop app take 
             subject: "viewer",
             scopes: ["orchestration:read"],
           });
-          const desktop = yield* service.issueSession({ subject: "desktop-bootstrap" });
+          const desktop = yield* service.issueSession({
+            subject: DESKTOP_BOOTSTRAP_SESSION_SUBJECT,
+          });
+          const accessOnly = yield* service.issueSession({
+            subject: "access-admin",
+            scopes: ["access:read", "access:write"],
+          });
 
           const refused = yield* send(
             post("/api/app-invites", reader.token, inviteInput("SECRET-CODE")),
           );
           expect(refused.status).toBe(403);
+          // Managing access is not enough: the invited app gets every standard scope.
+          const narrower = yield* send(
+            post("/api/app-invites", accessOnly.token, inviteInput("SECRET-CODE")),
+          );
+          expect(narrower.status).toBe(403);
           const created = yield* send(
             post("/api/app-invites", standard.token, inviteInput("SECRET-CODE")),
           );
@@ -202,10 +234,14 @@ it.live("guards invites and links by access, and lets only the desktop app take 
           });
           const takenAgain = yield* send(post("/api/app-invites/take", desktop.token));
           expect(yield* Effect.promise(() => takenAgain.json())).toEqual({ invites: [] });
-
-          const accessOnly = yield* service.issueSession({
-            subject: "access-admin",
-            scopes: ["access:read", "access:write"],
+          // The desktop app attached to the background service takes them too.
+          const serviceApp = yield* service.issueSession({
+            subject: DESKTOP_SERVICE_SESSION_SUBJECT,
+          });
+          yield* send(post("/api/app-invites", standard.token, inviteInput("SERVICE-CODE")));
+          const takenByService = yield* send(post("/api/app-invites/take", serviceApp.token));
+          expect(yield* Effect.promise(() => takenByService.json())).toMatchObject({
+            invites: [{ credential: "SERVICE-CODE" }],
           });
           const linkInput = {
             url: "https://a.example.ts.net",

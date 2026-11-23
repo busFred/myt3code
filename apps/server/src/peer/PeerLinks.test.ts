@@ -3,7 +3,11 @@ import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - A peer with a certificate this machine does not trust.
 import * as NodeHttps from "node:https";
 import { NodeHttpServer } from "@effect/platform-node";
-import { type ExecutionEnvironmentDescriptor, OrchestratorMcpFailure } from "@t3tools/contracts";
+import {
+  type ExecutionEnvironmentDescriptor,
+  NEVER_EXPIRES_AT_MILLIS,
+  OrchestratorMcpFailure,
+} from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -712,13 +716,34 @@ it.effect("tells the agent to link again once the peer revokes the link or it ex
       yield* TestClock.adjust(Duration.days(31));
       expect((yield* a.links.list).map((link) => link.status)).toEqual(["expired"]);
       expect(yield* a.links.names).toEqual([]);
-      yield* Ref.set(b.bearers, []);
+      // The peer decides whether the link ended; it refuses it, which reads as expired here.
       const expired = yield* probe(a).pipe(Effect.flip);
       expect(expired.code).toBe("capability_denied");
       expect(expired.message).toContain("expired");
-      expect(yield* Ref.get(b.bearers)).toEqual([]);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "a link renewed on the peer works past the expiry stored here, and a refresh shows it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const b = yield* serveB(box);
+        const a = yield* makeA(laptop);
+        const pairing = yield* b.auth.issuePairingCredential();
+        yield* a.links.link({ url: b.url, pairingCode: pairing.credential, access: "auto" });
+        const [session] = yield* linkedSessions(b);
+        yield* b.auth.renewSession(session!.sessionId, { _tag: "never" });
+
+        yield* TestClock.adjust(Duration.days(31));
+        expect((yield* a.links.list).map((link) => link.status)).toEqual(["expired"]);
+        const refreshed = yield* a.links.refreshExpiry(box.environmentId);
+        expect(Option.getOrNull(refreshed)?.epochMilliseconds).toBe(NEVER_EXPIRES_AT_MILLIS);
+        expect((yield* a.links.list).map((link) => link.status)).toEqual(["reachable"]);
+        yield* probe(a);
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect(

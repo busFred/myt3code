@@ -91,6 +91,10 @@ export const ExtendAuthSessionInput = Schema.Struct({
   now: Schema.DateTimeUtcFromString,
   /** When set, only a row whose expiry is at or before this is moved. */
   onlyIfExpiresBy: Schema.optional(Schema.DateTimeUtcFromString),
+  /** When set, only a row still on this renewal window is moved, so a renewal is never undone. */
+  expectedRenewalWindow: Schema.optionalKey(
+    Schema.NullOr(Schema.fromJsonString(AuthSessionLifetime)),
+  ),
 });
 export type ExtendAuthSessionInput = typeof ExtendAuthSessionInput.Type;
 
@@ -99,6 +103,9 @@ export const SetAuthSessionExpiryInput = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
   renewalWindow: Schema.fromJsonString(AuthSessionLifetime),
   now: Schema.DateTimeUtcFromString,
+  /** The expiry and window the caller read; a row changed since then is left alone. */
+  expectedExpiresAt: Schema.DateTimeUtcFromString,
+  expectedRenewalWindow: Schema.NullOr(Schema.fromJsonString(AuthSessionLifetime)),
 });
 export type SetAuthSessionExpiryInput = typeof SetAuthSessionExpiryInput.Type;
 
@@ -145,7 +152,10 @@ export class AuthSessionRepository extends Context.Service<
     readonly extend: (
       input: ExtendAuthSessionInput,
     ) => Effect.Effect<boolean, AuthSessionRepositoryError>;
-    /** Sets a live session's expiry, earlier or later, and its renewal window; false when it is not live. */
+    /**
+     * Sets a live session's expiry, earlier or later, and its renewal window; false when it is not
+     * live or its expiry or window changed since the caller read them.
+     */
     readonly setExpiry: (
       input: SetAuthSessionExpiryInput,
     ) => Effect.Effect<boolean, AuthSessionRepositoryError>;
@@ -388,7 +398,7 @@ export const make = Effect.gen(function* () {
   const extendSessionRows = SqlSchema.findAll({
     Request: ExtendAuthSessionInput,
     Result: Schema.Struct({ sessionId: AuthSessionId }),
-    execute: ({ sessionId, expiresAt, now, onlyIfExpiresBy }) =>
+    execute: ({ sessionId, expiresAt, now, onlyIfExpiresBy, expectedRenewalWindow }) =>
       sql`
         UPDATE auth_sessions
         -- Extending never moves an expiry earlier, such as one that never comes.
@@ -397,6 +407,7 @@ export const make = Effect.gen(function* () {
           AND revoked_at IS NULL
           AND expires_at > ${now}
           AND (${onlyIfExpiresBy ?? null} IS NULL OR expires_at <= ${onlyIfExpiresBy ?? null})
+          ${expectedRenewalWindow === undefined ? sql`` : sql`AND renewal_window_json IS ${expectedRenewalWindow}`}
         RETURNING session_id AS "sessionId"
       `,
   });
@@ -404,13 +415,22 @@ export const make = Effect.gen(function* () {
   const setExpiryRows = SqlSchema.findAll({
     Request: SetAuthSessionExpiryInput,
     Result: Schema.Struct({ sessionId: AuthSessionId }),
-    execute: ({ sessionId, expiresAt, renewalWindow, now }) =>
+    execute: ({
+      sessionId,
+      expiresAt,
+      renewalWindow,
+      now,
+      expectedExpiresAt,
+      expectedRenewalWindow,
+    }) =>
       sql`
         UPDATE auth_sessions
         SET expires_at = ${expiresAt}, renewal_window_json = ${renewalWindow}
         WHERE session_id = ${sessionId}
           AND revoked_at IS NULL
           AND expires_at > ${now}
+          AND expires_at = ${expectedExpiresAt}
+          AND renewal_window_json IS ${expectedRenewalWindow}
         RETURNING session_id AS "sessionId"
       `,
   });

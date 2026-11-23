@@ -400,7 +400,9 @@ const sessionRenewCommand = Command.make("renew", {
     runWithEnvironmentAuth(flags, (environmentAuth) =>
       Effect.gen(function* () {
         const lifetime = flags.expire;
-        const renewed = yield* changeAccess({
+        // Lengthening a session needs every scope it holds, which `access:write` alone lacks.
+        const renewed = yield* RunningServer.changeState({
+          scopes: RunningServer.LOCAL_ADMIN_SCOPES,
           viaServer: (client) =>
             client.auth
               .renewClient({ headers: {}, payload: { sessionId: flags.sessionId, lifetime } })

@@ -57,6 +57,7 @@ import {
 import {
   DpopFailureReason,
   AuthSessionId,
+  EnvironmentId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -635,6 +636,22 @@ export const AuthLinkPeerResult = Schema.Struct({
 });
 export type AuthLinkPeerResult = typeof AuthLinkPeerResult.Type;
 
+export const AuthEnableLinkedEnvironmentsResult = Schema.Struct({
+  /** Linked environments was off and this request turned it on. */
+  enabledLinkedEnvironments: Schema.Boolean,
+});
+export type AuthEnableLinkedEnvironmentsResult = typeof AuthEnableLinkedEnvironmentsResult.Type;
+
+/** Asks the linked environment when this one's link to it ends, as after a renewal there. */
+export const AuthRefreshPeerLinkExpiryInput = Schema.Struct({ environmentId: EnvironmentId });
+export type AuthRefreshPeerLinkExpiryInput = typeof AuthRefreshPeerLinkExpiryInput.Type;
+
+export const AuthRefreshPeerLinkExpiryResult = Schema.Struct({
+  /** Absent when the linked environment did not say, as one that no longer accepts the link. */
+  expiresAt: Schema.optionalKey(Schema.DateTimeUtc),
+});
+export type AuthRefreshPeerLinkExpiryResult = typeof AuthRefreshPeerLinkExpiryResult.Type;
+
 class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata").add(
   HttpApiEndpoint.get("descriptor", "/.well-known/t3/environment", {
     success: ExecutionEnvironmentDescriptor,
@@ -766,6 +783,22 @@ class EnvironmentAccessHttpApi extends HttpApiGroup.make("access")
       headers: OptionalBearerHeaders,
       payload: AuthLinkPeerInput,
       success: AuthLinkPeerResult,
+      error: [EnvironmentPeerLinkFailedError, ...EnvironmentScopedOperationErrors],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    // Through the server, so its settings change at once rather than when it next reads them.
+    HttpApiEndpoint.post("enableLinkedEnvironments", "/api/peer-links/enable", {
+      headers: OptionalBearerHeaders,
+      success: AuthEnableLinkedEnvironmentsResult,
+      error: [EnvironmentPeerLinkFailedError, ...EnvironmentScopedOperationErrors],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("refreshPeerLinkExpiry", "/api/peer-links/refresh-expiry", {
+      headers: OptionalBearerHeaders,
+      payload: AuthRefreshPeerLinkExpiryInput,
+      success: AuthRefreshPeerLinkExpiryResult,
       error: [EnvironmentPeerLinkFailedError, ...EnvironmentScopedOperationErrors],
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}

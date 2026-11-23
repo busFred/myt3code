@@ -2,7 +2,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { connectPairing } from "../../connection/onboarding";
 import { authEnvironment } from "../../state/auth";
@@ -13,17 +13,18 @@ import {
   appInviteSignal,
   pickUpAppInvites,
   shouldTakeAppInvites,
+  singleFlightWithFollowUp,
   type TakeInvitesResult,
 } from "./appInvitePickup";
 
 const FOCUS_RECHECK_MS = 60_000;
 
-function isNotFound(error: unknown): boolean {
+function hasStatus(error: unknown, tag: string, status: number): boolean {
   if (typeof error !== "object" || error === null) return false;
-  if ("_tag" in error && error._tag === "EnvironmentResourceNotFoundError") return true;
+  if ("_tag" in error && error._tag === tag) return true;
   const response = "response" in error ? error.response : null;
   return typeof response === "object" && response !== null && "status" in response
-    ? response.status === 404
+    ? response.status === status
     : false;
 }
 
@@ -40,21 +41,22 @@ export function AppInvitePickupCoordinator() {
       ? authEnvironment.accessChanges({ environmentId, input: null })
       : null,
   );
-  const signal = appInviteSignal({
-    snapshot: access.data?.type === "snapshot" ? access.data.payload : null,
-    failed: access.failure !== null,
-  });
+  const snapshot = access.data?.type === "snapshot" ? access.data.payload : null;
+  const failed = access.failure !== null;
+  const signal = appInviteSignal({ snapshot, failed });
+  // A new invite can replace one while the signal stays pending, so the list itself is watched.
+  const appInvites = snapshot === null ? null : snapshot.appInvites;
   const takeInvites = useAtomCommand(authEnvironment.takePendingAppInvites, {
     reportFailure: false,
   });
   const pairEnvironment = useAtomCommand(connectPairing, { reportFailure: false });
-  const inFlight = useRef(false);
   const lastRunAt = useRef(0);
   const checkedAtLaunch = useRef<string | null>(null);
+  // A server that refuses this app's session never will take its invites, so it is not asked again.
+  const refusedBy = useRef<string | null>(null);
 
-  const run = useEffectEvent(async () => {
-    if (!ready || environmentId === null || inFlight.current) return;
-    inFlight.current = true;
+  const pickUp = useEffectEvent(async () => {
+    if (!ready || environmentId === null || refusedBy.current === environmentId) return;
     lastRunAt.current = Date.now();
     await pickUpAppInvites({
       isDesktop: window.desktopBridge !== undefined,
@@ -63,7 +65,13 @@ export function AppInvitePickupCoordinator() {
         if (result._tag === "Success") return { _tag: "Taken", invites: result.value.invites };
         if (isAtomCommandInterrupted(result)) return { _tag: "Unsupported" };
         const error = squashAtomCommandFailure(result);
-        return isNotFound(error) ? { _tag: "Unsupported" } : { _tag: "Failed", error };
+        if (hasStatus(error, "EnvironmentOperationForbiddenError", 403)) {
+          refusedBy.current = environmentId;
+          return { _tag: "Unsupported" };
+        }
+        return hasStatus(error, "EnvironmentResourceNotFoundError", 404)
+          ? { _tag: "Unsupported" }
+          : { _tag: "Failed", error };
       },
       isConnected: (id) => readEnvironment(id)?.connection.phase === "connected",
       pair: async (input) => {
@@ -72,18 +80,22 @@ export function AppInvitePickupCoordinator() {
         return { ok: false, error: squashAtomCommandFailure(result) };
       },
       log: (message, detail) => console.warn(message, detail),
-    }).finally(() => {
-      inFlight.current = false;
     });
   });
+  // A snapshot that changes during a pickup gets one more pickup after it.
+  const [run] = useState(() => singleFlightWithFollowUp(() => pickUp()));
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the server announces invites on the access stream; one without it is checked once at launch
   useEffect(() => {
     if (!ready || environmentId === null) return;
-    if (!shouldTakeAppInvites(signal, checkedAtLaunch.current === environmentId)) return;
+    const current = appInviteSignal({
+      snapshot: appInvites === null ? null : appInvites === undefined ? {} : { appInvites },
+      failed,
+    });
+    if (!shouldTakeAppInvites(current, checkedAtLaunch.current === environmentId)) return;
     checkedAtLaunch.current = environmentId;
     void run();
-  }, [ready, environmentId, signal]);
+  }, [ready, environmentId, appInvites, failed, run]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window focus is an external event; retries invites a failed take left, at most once a minute
   useEffect(() => {
@@ -93,7 +105,7 @@ export function AppInvitePickupCoordinator() {
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [ready, signal]);
+  }, [ready, signal, run]);
 
   return null;
 }

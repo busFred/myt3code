@@ -48,8 +48,11 @@ export type BothWaysOutcome =
       /** The pairing code's server dropped the requested lifetime: it predates lifetimes. */
       readonly lifetimeIgnored?: true;
     }
-  /** `not_full_access`: the invite's code would give more than the link, so none is left. */
-  | { readonly kind: "skipped"; readonly reason?: "not_full_access" }
+  /**
+   * `not_full_access`: the invite's code would give more than the link, so none is left.
+   * `not_linked`: no link was made, so neither was the invite.
+   */
+  | { readonly kind: "skipped"; readonly reason?: "not_full_access" | "not_linked" }
   | { readonly kind: "failed"; readonly failure: BothWaysFailure; readonly detail: string | null };
 
 /**
@@ -63,7 +66,14 @@ export interface BothWaysOps {
     environmentId: EnvironmentId,
     input: { readonly access: AuthMcpClientAccess; readonly lifetime?: AuthSessionLifetime },
   ) => Promise<
-    Result.Result<{ readonly credential: string; readonly lifetime?: AuthSessionLifetime }, unknown>
+    Result.Result<
+      {
+        readonly id: string;
+        readonly credential: string;
+        readonly lifetime?: AuthSessionLifetime;
+      },
+      unknown
+    >
   >;
   /** Has `linkingEnvironmentId` link to the other side, as `peerLinks.link` does. */
   readonly link: (
@@ -80,16 +90,21 @@ export interface BothWaysOps {
     },
   ) => Promise<
     Result.Result<
-      { readonly id: string; readonly credential: string; readonly expiresAt: DateTime.Utc },
+      {
+        readonly id: string;
+        readonly credential: string;
+        readonly expiresAt: DateTime.Utc;
+        readonly lifetime?: AuthSessionLifetime;
+      },
       unknown
     >
   >;
-  /** Revokes a pairing link there, as `authEnvironment.revokePairingLink` does. */
-  readonly revokeAppCode: (environmentId: EnvironmentId, id: string) => Promise<unknown>;
+  /** Revokes a code this client minted there, as `authEnvironment.revokePairingLink` does. */
+  readonly revokeCode: (environmentId: EnvironmentId, id: string) => Promise<unknown>;
   readonly createInvite: (
     environmentId: EnvironmentId,
     input: AuthCreateAppInviteInput,
-  ) => Promise<Result.Result<{ readonly replacedPairingLinkIds?: ReadonlyArray<string> }, unknown>>;
+  ) => Promise<Result.Result<unknown, unknown>>;
   readonly isUnsupported?: (failure: unknown) => boolean;
 }
 
@@ -127,7 +142,7 @@ const settle = async (run: () => Promise<BothWaysOutcome>): Promise<BothWaysOutc
  * Links two environments both ways, each link with a code minted on the side it links to, after
  * turning Linked environments on where it is off. Linked sides are left alone and a failure stops
  * only its step, so a rerun retries what failed. `invite` leaves `b`'s desktop app an invite to `a`
- * when the links have full access: the invite's code gives that app full use of `a`.
+ * once a link is made at full access: the invite's code gives that app full use of `a`.
  */
 export async function runLinkBothWays(input: {
   readonly a: BothWaysSide;
@@ -136,6 +151,8 @@ export async function runLinkBothWays(input: {
   /** For both links and the invite's app session. Absent keeps each server's default. */
   readonly lifetime?: AuthSessionLifetime;
   readonly invite: boolean;
+  /** A link was made by an earlier run of this request, so a retried invite may follow it. */
+  readonly linkedEarlier?: boolean;
   readonly ops: BothWaysOps;
 }): Promise<ReadonlyMap<BothWaysStep, BothWaysOutcome>> {
   const { a, b, ops } = input;
@@ -168,16 +185,28 @@ export async function runLinkBothWays(input: {
         pairingCode: minted.success.credential,
         access: input.access,
       });
-      if (Result.isFailure(linked)) return failureOf(linked.failure, ops);
-      return input.lifetime !== undefined && minted.success.lifetime === undefined
-        ? { kind: "done", lifetimeIgnored: true }
-        : { kind: "done" };
+      if (Result.isFailure(linked)) {
+        // Best effort: an unused code would otherwise stay valid there until it expires.
+        await Promise.resolve(ops.revokeCode(target.environmentId, minted.success.id)).catch(
+          () => undefined,
+        );
+        return failureOf(linked.failure, ops);
+      }
+      return lifetimeOutcome(minted.success);
     });
 
-  const invite = () =>
+  const lifetimeOutcome = (minted: { readonly lifetime?: AuthSessionLifetime }): BothWaysOutcome =>
+    input.lifetime !== undefined && minted.lifetime === undefined
+      ? { kind: "done", lifetimeIgnored: true }
+      : { kind: "done" };
+
+  const invite = (linkedNow: boolean) =>
     settle(async (): Promise<BothWaysOutcome> => {
       if (!input.invite) return { kind: "skipped" };
       if (input.access !== "full-access") return { kind: "skipped", reason: "not_full_access" };
+      if (!linkedNow && input.linkedEarlier !== true) {
+        return { kind: "skipped", reason: "not_linked" };
+      }
       const [firstUrl, ...otherUrls] = a.urls;
       if (firstUrl === undefined) return { kind: "failed", failure: "no_address", detail: null };
       const minted = await ops.mintAppCode(a.environmentId, {
@@ -192,19 +221,17 @@ export async function runLinkBothWays(input: {
         urls: [firstUrl, ...otherUrls],
         credential: minted.success.credential,
         credentialExpiresAt: minted.success.expiresAt,
-        pairingLinkId: minted.success.id,
       });
-      // An unused code, or one whose invite was replaced, is revoked; best effort.
-      const unused = Result.isSuccess(created)
-        ? (created.success.replacedPairingLinkIds ?? [])
-        : [minted.success.id];
-      await Promise.all(
-        unused.map((id) => ops.revokeAppCode(a.environmentId, id).catch(() => undefined)),
+      if (Result.isSuccess(created)) return lifetimeOutcome(minted.success);
+      // Best effort: the code this client minted stays unused.
+      await Promise.resolve(ops.revokeCode(a.environmentId, minted.success.id)).catch(
+        () => undefined,
       );
-      return Result.isSuccess(created) ? { kind: "done" } : failureOf(created.failure, ops);
+      return failureOf(created.failure, ops);
     });
 
-  const [aToB, bToA, invited] = await Promise.all([link(a, b), link(b, a), invite()]);
+  const [aToB, bToA] = await Promise.all([link(a, b), link(b, a)]);
+  const invited = await invite(aToB.kind === "done" || bToA.kind === "done");
   return new Map<BothWaysStep, BothWaysOutcome>([
     ["enable_a", enableA],
     ["enable_b", enableB],

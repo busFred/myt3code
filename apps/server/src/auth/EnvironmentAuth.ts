@@ -25,8 +25,10 @@ import {
   AuthEnvironmentScope as AuthEnvironmentScopeSchema,
   DpopFailureReason,
   type DpopFailureReason as DpopFailureReasonType,
+  CLOUD_CONNECT_SESSION_SUBJECT,
   MCP_CLIENT_SESSION_SUBJECT,
   mcpClientScopes,
+  NON_RENEWABLE_SESSION_SUBJECTS,
   sessionLifetimeExpiresAtMillis,
 } from "@t3tools/contracts";
 import { isLocalLoopbackHost } from "@t3tools/shared/hostClassification";
@@ -66,7 +68,7 @@ import { requestUrl } from "../requestUrl.ts";
 const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
 export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
 /** Sessions and pairing links T3 Connect minted for a device signed in to the linked account. */
-export const CLOUD_CONNECT_SUBJECT = "cloud-connect";
+export const CLOUD_CONNECT_SUBJECT = CLOUD_CONNECT_SESSION_SUBJECT;
 
 export interface IssuedPairingLink {
   readonly id: string;
@@ -102,7 +104,7 @@ const PEER_LINK_RENEWAL_STEP = Duration.days(1);
 const RENEWABLE_ACCESS_TOKEN_TTL = Duration.hours(1);
 const RENEWABLE_SESSION_WINDOW = Duration.days(30);
 const PAIRING_LINK_SUBJECT = "one-time-token";
-const DESKTOP_BOOTSTRAP_SUBJECT = "desktop-bootstrap";
+const NON_RENEWABLE_SUBJECTS: ReadonlySet<string> = new Set(NON_RENEWABLE_SESSION_SUBJECTS);
 
 /**
  * A pairing link's lifetime goes to the session it creates. T3 Connect and the desktop app keep
@@ -1539,31 +1541,43 @@ export const make = Effect.gen(function* () {
   const renewSession: EnvironmentAuth["Service"]["renewSession"] = Effect.fn(
     "EnvironmentAuth.renewSession",
   )(function* (sessionId, lifetime, options) {
-    const target = (yield* listSessions()).find((session) => session.sessionId === sessionId);
-    if (
-      target === undefined ||
-      (options?.expectedSubject !== undefined && target.subject !== options.expectedSubject)
-    ) {
-      return Option.none<DateTime.Utc>();
-    }
-    if (target.subject === CLOUD_CONNECT_SUBJECT || target.subject === DESKTOP_BOOTSTRAP_SUBJECT) {
-      return yield* new ServerAuthSessionNotRenewableError({});
-    }
-    const callerScopes = options?.callerScopes;
-    if (callerScopes !== undefined) {
-      const now = yield* DateTime.now;
-      const missing = target.scopes.find((scope) => !callerScopes.has(scope));
+    const mapRenewalError = Effect.mapError(
+      (cause: SessionStore.SessionCredentialInternalError) =>
+        new ServerAuthSessionRenewalError({ cause }),
+    );
+    // The checks hold for the row as read; the write lands only if the row is unchanged, so a
+    // concurrent renewal, such as an admin shortening the session, is never undone.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const target = yield* sessions.getLive(sessionId).pipe(mapRenewalError);
       if (
-        missing !== undefined &&
-        sessionLifetimeExpiresAtMillis(lifetime, now.epochMilliseconds) >
-          target.expiresAt.epochMilliseconds
+        Option.isNone(target) ||
+        (options?.expectedSubject !== undefined && target.value.subject !== options.expectedSubject)
       ) {
-        return yield* new ServerAuthRenewScopeRequiredError({ requiredScope: missing });
+        return Option.none<DateTime.Utc>();
       }
+      if (NON_RENEWABLE_SUBJECTS.has(target.value.subject)) {
+        return yield* new ServerAuthSessionNotRenewableError({});
+      }
+      const callerScopes = options?.callerScopes;
+      if (callerScopes !== undefined) {
+        const now = yield* DateTime.now;
+        const missing = target.value.scopes.find((scope) => !callerScopes.has(scope));
+        if (
+          missing !== undefined &&
+          sessionLifetimeExpiresAtMillis(lifetime, now.epochMilliseconds) >
+            target.value.expiresAt.epochMilliseconds
+        ) {
+          return yield* new ServerAuthRenewScopeRequiredError({ requiredScope: missing });
+        }
+      }
+      const renewed = yield* sessions
+        .setExpiry(sessionId, lifetime, target.value)
+        .pipe(mapRenewalError);
+      if (Option.isSome(renewed)) return renewed;
     }
-    return yield* sessions
-      .setExpiry(sessionId, lifetime)
-      .pipe(Effect.mapError((cause) => new ServerAuthSessionRenewalError({ cause })));
+    return yield* new ServerAuthSessionRenewalError({
+      cause: new Error("The session changed while it was being renewed."),
+    });
   });
 
   const revokeOtherSessionsExcept = (sessionId: AuthSessionId) =>
@@ -1796,12 +1810,17 @@ export const make = Effect.gen(function* () {
     const windowMillis = window?.millis ?? Duration.toMillis(MCP_CLIENT_SESSION_TTL);
     const step = Duration.min(PEER_LINK_RENEWAL_STEP, Duration.millis(windowMillis / 30));
     const now = yield* DateTime.now;
-    const renewed = DateTime.add(now, { milliseconds: windowMillis });
+    const renewed = DateTime.makeUnsafe(
+      sessionLifetimeExpiresAtMillis(
+        { _tag: "duration", millis: windowMillis },
+        now.epochMilliseconds,
+      ),
+    );
     if (DateTime.distance(expiresAt, renewed).pipe(Duration.isLessThan(step))) {
       return DateTime.toUtc(expiresAt);
     }
     const current = yield* sessions
-      .extend(sessionId, renewed, step)
+      .extend(sessionId, renewed, step, window ?? null)
       .pipe(mapSessionVerificationErrors);
     // A revoke can land between the verification and the update.
     if (Option.isNone(current)) {
