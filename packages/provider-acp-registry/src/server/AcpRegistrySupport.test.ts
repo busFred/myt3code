@@ -942,7 +942,11 @@ describe("AcpRegistrySupport", () => {
       expect(yield* resolver.uninstallManagedBinary({ agentId: agent.id })).toMatchObject({
         removed: true,
       });
-      expect(yield* resolver.inspect(settings())).toMatchObject({ status: "unprepared" });
+      // Uninstalling forgets the adopted release, so the agent follows the index again.
+      expect(yield* resolver.inspect(settings())).toMatchObject({
+        status: "unprepared",
+        version: "1.2.4",
+      });
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -2319,6 +2323,35 @@ describe("acpRegistryManagedBinaryDirectories", () => {
         globalBin,
         path.join(cacheDir, "tools", "kimi", "1.50.0", "linux-x86_64", "cmd"),
         path.join(cacheDir, "tools", "kimi", "1.49.0", "linux-x86_64", "bin"),
+      ]);
+
+      // A one-click update adopts a release the saved index has not caught up to yet.
+      yield* install("kimi", "1.51.0", "linux-x86_64", "nested/bin");
+      yield* fileSystem.makeDirectory(path.join(cacheDir, "acp-registry", "adopted"), {
+        recursive: true,
+      });
+      yield* fileSystem.writeFileString(
+        path.join(cacheDir, "acp-registry", "adopted", "kimi.json"),
+        encodeUnknownJson({
+          ...makeAgent({
+            binary: {
+              "linux-x86_64": { archive: archiveUrl, cmd: "./nested/bin/kimi" },
+            },
+          }),
+          id: "kimi",
+          name: "Kimi",
+          version: "1.51.0",
+        }),
+      );
+      const adopted = yield* AcpRegistrySupport.acpRegistryManagedBinaryDirectories({
+        cacheDir,
+        toolsDir: path.join(cacheDir, "tools"),
+        platform: "linux",
+        architecture: "x64",
+      });
+      expect(adopted).toEqual([
+        globalBin,
+        path.join(cacheDir, "tools", "kimi", "1.51.0", "linux-x86_64", "nested", "bin"),
       ]);
 
       const missing = yield* AcpRegistrySupport.acpRegistryManagedBinaryDirectories({

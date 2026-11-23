@@ -97,6 +97,8 @@ interface AcpRegistryEnrichmentCache {
     readonly provider: ServerProvider;
     readonly expiresAt: number;
   } | null;
+  /** A custom executable's last probed version, which readiness checks reuse. */
+  readonly reportedVersion: string | null;
 }
 
 /** Only probing a user-chosen executable reveals its version; the registry's pin does not apply. */
@@ -114,6 +116,23 @@ export function isAcpRegistryCacheValid(
     entry.expiresAt > now &&
     ((local && inspectedVersion === null) || entry.provider.version === inspectedVersion)
   );
+}
+
+/** A probe that started before the cache moved on (such as an update) must not write its result. */
+export function recordAcpRegistryProbe(input: {
+  readonly cache: AcpRegistryEnrichmentCache;
+  readonly startedGeneration: number;
+  readonly provider: ServerProvider;
+  readonly customExecutable: boolean;
+  readonly now: number;
+}): AcpRegistryEnrichmentCache {
+  const { cache, provider, now } = input;
+  if (cache.generation !== input.startedGeneration || provider.status !== "ready") return cache;
+  return {
+    ...cache,
+    entry: { provider, expiresAt: now + acpRegistryProbeTtlMs(provider) },
+    reportedVersion: input.customExecutable ? provider.version : cache.reportedVersion,
+  };
 }
 
 export function updateAcpRegistryEnrichmentCache(input: {
@@ -817,14 +836,13 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     // A custom executable's version comes only from probing it, so readiness checks reuse the last
     // report. After invalidation (such as an update), the next check probes so it cannot report
     // the replaced version.
-    const reportedLocalVersion = yield* Ref.make<string | null>(null);
     const probeVersionOnNextCheck = yield* Ref.make(false);
     const checkProviderReadiness = checkAcpRegistryProviderReadiness(readinessInput).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.flatMap((provider) =>
         Effect.gen(function* () {
           if (!provider.installed || provider.version !== null) return provider;
-          const reported = yield* Ref.get(reportedLocalVersion);
+          const { reportedVersion: reported } = yield* Ref.get(enrichmentCache);
           if (reported !== null) return { ...provider, version: reported };
           if (!customExecutable || !(yield* Ref.getAndSet(probeVersionOnNextCheck, false))) {
             return provider;
@@ -863,11 +881,13 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     const enrichmentCache = yield* Ref.make<AcpRegistryEnrichmentCache>({
       generation: 0,
       entry: null,
+      reportedVersion: null,
     });
     const liveSnapshotSemaphore = yield* Semaphore.make(1);
     const invalidateEnrichmentCache = Ref.update(enrichmentCache, (current) => ({
       generation: current.generation + 1,
       entry: null,
+      reportedVersion: null,
     }));
     const enrichProviderCached = Effect.fn("AcpRegistryDriver.enrichProviderCached")(function* (
       baseSnapshot: ServerProvider,
@@ -885,23 +905,16 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         };
       }
       const enriched = yield* enrichProvider;
-      if (customExecutable && enriched.status === "ready") {
-        yield* Ref.set(reportedLocalVersion, enriched.version);
-      }
-      if (enriched.status === "ready") {
-        const completedAt = yield* Clock.currentTimeMillis;
-        yield* Ref.update(enrichmentCache, (current) =>
-          current.generation === cacheState.generation
-            ? {
-                ...current,
-                entry: {
-                  provider: enriched,
-                  expiresAt: completedAt + acpRegistryProbeTtlMs(enriched),
-                },
-              }
-            : current,
-        );
-      }
+      const completedAt = yield* Clock.currentTimeMillis;
+      yield* Ref.update(enrichmentCache, (current) =>
+        recordAcpRegistryProbe({
+          cache: current,
+          startedGeneration: cacheState.generation,
+          provider: enriched,
+          customExecutable,
+          now: completedAt,
+        }),
+      );
       return { provider: enriched, generation: cacheState.generation };
     });
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
@@ -1099,7 +1112,6 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         : Effect.void
       ).pipe(
         Effect.andThen(clearLearnedModels),
-        Effect.andThen(Ref.set(reportedLocalVersion, null)),
         Effect.andThen(Ref.set(probeVersionOnNextCheck, customExecutable)),
         Effect.andThen(liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache)),
       ),

@@ -33,6 +33,7 @@ import {
   checkAcpRegistryProviderReadiness,
   checkAcpRegistryProviderStatus,
   isAcpRegistryCacheValid,
+  recordAcpRegistryProbe,
   updateAcpRegistryEnrichmentCache,
 } from "./driver.ts";
 import {
@@ -821,7 +822,7 @@ describe("acpRegistryEnrichmentCache", () => {
 
   it("does not renew the cache deadline when live configuration is replayed unchanged", () => {
     const provider = providerWithModels(settledConfiguration.models, "auto");
-    const cache = { generation: 1, entry: { provider, expiresAt: 1_000 } };
+    const cache = { generation: 1, entry: { provider, expiresAt: 1_000 }, reportedVersion: null };
 
     const replayed = updateAcpRegistryEnrichmentCache({
       cache,
@@ -839,7 +840,7 @@ describe("acpRegistryEnrichmentCache", () => {
       [{ id: "smodel", name: "Default", description: null }],
       "smodel",
     );
-    const cache = { generation: 1, entry: { provider, expiresAt: 1_000 } };
+    const cache = { generation: 1, entry: { provider, expiresAt: 1_000 }, reportedVersion: null };
 
     const updated = updateAcpRegistryEnrichmentCache({
       cache,
@@ -853,8 +854,35 @@ describe("acpRegistryEnrichmentCache", () => {
     expect(updated.generation).toBe(2);
   });
 
+  it("drops a custom executable's version probed before the caches were invalidated", () => {
+    const provider = {
+      ...providerWithModels(settledConfiguration.models, "auto"),
+      version: "1.5.9",
+    };
+    const invalidated = { generation: 3, entry: null, reportedVersion: null };
+
+    expect(
+      recordAcpRegistryProbe({
+        cache: invalidated,
+        startedGeneration: 2,
+        provider,
+        customExecutable: true,
+        now: 1_000,
+      }),
+    ).toBe(invalidated);
+    expect(
+      recordAcpRegistryProbe({
+        cache: invalidated,
+        startedGeneration: 3,
+        provider,
+        customExecutable: true,
+        now: 1_000,
+      }).reportedVersion,
+    ).toBe("1.5.9");
+  });
+
   it("advances the cache epoch when a live update arrives before any probe lands", () => {
-    const cache = { generation: 4, entry: null };
+    const cache = { generation: 4, entry: null, reportedVersion: null };
 
     const updated = updateAcpRegistryEnrichmentCache({
       cache,

@@ -174,6 +174,16 @@ function isAntigravityCli(...candidates: ReadonlyArray<string>) {
   );
 }
 
+function installFailureMessage(cause: Cause.Cause<AntigravityInstallationError>) {
+  if (Cause.hasInterruptsOnly(cause)) {
+    return "Installation cancelled. The previous runtime is unchanged.";
+  }
+  const error = Cause.findErrorOption(cause);
+  return Option.isSome(error)
+    ? error.value.detail
+    : "Could not finish the Antigravity installation. Check disk space and directory access.";
+}
+
 function isRunning(state: ProviderInstallState) {
   return (
     state.phase === "downloading" || state.phase === "extracting" || state.phase === "verifying"
@@ -221,7 +231,14 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     );
   const gate = yield* Semaphore.make(1);
   const leases = new Map<string, number>();
-  let running: { readonly operationId: string; readonly fiber: Fiber.Fiber<void> } | undefined;
+  // Under the gate, a running install state always has this handle; its fiber exits with the
+  // operation's own outcome, so a waiter cannot confuse it with a later operation.
+  let running:
+    | {
+        readonly operationId: string;
+        readonly fiber: Fiber.Fiber<Exit.Exit<void, AntigravityInstallationError>>;
+      }
+    | undefined;
   const state = yield* SubscriptionRef.make<ProviderInstallState>({
     driver: DRIVER,
     operationId: null,
@@ -1269,14 +1286,12 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     );
   });
 
-  const start = Effect.gen(function* () {
-    const current = yield* SubscriptionRef.get(state);
-    if (isRunning(current)) return current;
-    yield* refreshRelease(true);
+  const begin = Effect.gen(function* () {
+    if (!isRunning(yield* SubscriptionRef.get(state))) yield* refreshRelease(true);
     return yield* gate.withPermit(
       Effect.gen(function* () {
         const current = yield* SubscriptionRef.get(state);
-        if (isRunning(current)) return current;
+        if (isRunning(current)) return { state: current, operation: running };
         if (!supported) {
           return yield* installationError(
             "start",
@@ -1340,21 +1355,15 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
               ? SubscriptionRef.update(state, (value) => {
                   if (value.operationId !== operationId || value.phase === "succeeded")
                     return value;
-                  const error = Cause.findErrorOption(exit.cause);
-                  const cancelled = Cause.hasInterruptsOnly(exit.cause);
                   return {
                     ...value,
-                    phase: cancelled ? "cancelled" : "failed",
-                    message: cancelled
-                      ? "Installation cancelled. The previous runtime is unchanged."
-                      : Option.isSome(error)
-                        ? error.value.detail
-                        : "Could not finish the Antigravity installation. Check disk space and directory access.",
+                    phase: Cause.hasInterruptsOnly(exit.cause) ? "cancelled" : "failed",
+                    message: installFailureMessage(exit.cause),
                   } satisfies ProviderInstallState;
                 })
               : Effect.void,
           ),
-          Effect.ignoreCause,
+          Effect.exit,
           Effect.ensuring(
             Effect.sync(() => {
               if (running?.operationId === operationId) running = undefined;
@@ -1363,10 +1372,11 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
         );
         const fiber = yield* Effect.forkIn(Effect.interruptible(work), serviceScope);
         running = { operationId, fiber };
-        return next;
+        return { state: next, operation: running };
       }).pipe(Effect.uninterruptible),
     );
   }).pipe(Effect.mapError(wrapFailure("start", "Could not start the Antigravity installation.")));
+  const start = begin.pipe(Effect.map(({ state }) => state));
 
   const cancel = Effect.fn("AntigravityInstallation.cancel")(function* (operationId: string) {
     return yield* gate.withPermit(
@@ -1515,27 +1525,18 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   // A startup install prunes when it activates; pruning now could delete the release it is verifying.
   if (!isRunning(yield* SubscriptionRef.get(state))) yield* pruneInactiveReleases;
 
-  const update = start.pipe(
-    Effect.flatMap((started) =>
-      SubscriptionRef.changes(state).pipe(
-        Stream.filter((value) => value.operationId === started.operationId && !isRunning(value)),
-        Stream.runHead,
-      ),
-    ),
-    Effect.flatMap((finished) =>
-      Option.isSome(finished) && finished.value.phase === "succeeded"
-        ? Effect.void
-        : Effect.fail(
-            installationError(
-              "update",
-              Option.match(finished, {
-                onNone: () => null,
-                onSome: (value) => value.message,
-              }) ?? "The Antigravity runtime update did not finish.",
-            ),
-          ),
-    ),
-  );
+  const update = Effect.gen(function* () {
+    const { operation } = yield* begin;
+    if (operation === undefined) {
+      return yield* installationError("update", "The Antigravity runtime update did not finish.");
+    }
+    // The installer outlives a dropped request, so the caller keeps its update locks until it ends.
+    const exit = yield* Effect.uninterruptible(Fiber.await(operation.fiber));
+    const outcome = Exit.isSuccess(exit) ? exit.value : exit;
+    if (Exit.isFailure(outcome)) {
+      return yield* installationError("update", installFailureMessage(outcome.cause));
+    }
+  });
 
   return AntigravityInstallation.of({
     managedDirectory,

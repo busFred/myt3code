@@ -399,15 +399,31 @@ export const acpRegistryManagedBinaryDirectories = Effect.fn("acpRegistryManaged
       ),
     );
     for (const agent of (yield* listDirectories(installsDirectory)).toSorted()) {
-      const versions = (yield* listDirectories(path.join(installsDirectory, agent))).toSorted(
-        (left, right) => right.localeCompare(left, undefined, { numeric: true }),
-      );
+      // An adopted release is the one the agent runs, so older versions must not shadow it.
+      const adopted = yield* fileSystem
+        .readFileString(
+          path.join(registryDirectory, "adopted", `${encodeURIComponent(agent)}.json`),
+        )
+        .pipe(
+          Effect.flatMap(decodeJson),
+          Effect.map(decodeRegistryAgent),
+          Effect.orElseSucceed(() => Option.none<AcpRegistryAgent>()),
+          Effect.map(Option.filter((release) => release.id === agent)),
+        );
+      const versions = Option.isSome(adopted)
+        ? [encodeURIComponent(adopted.value.version)]
+        : (yield* listDirectories(path.join(installsDirectory, agent))).toSorted((left, right) =>
+            right.localeCompare(left, undefined, { numeric: true }),
+          );
       for (const version of versions) {
         for (const candidateTarget of resolveAcpRegistryPlatformTargetCandidates(target)) {
           const installRoot = path.join(installsDirectory, agent, version, candidateTarget);
           if (yield* fileSystem.exists(installRoot).pipe(Effect.orElseSucceed(() => false))) {
-            const binaryTarget = cachedAgentByInstall.get(`${agent}\0${version}`)?.distribution
-              .binary?.[candidateTarget];
+            const binaryTarget = (
+              Option.isSome(adopted)
+                ? adopted.value
+                : cachedAgentByInstall.get(`${agent}\0${version}`)
+            )?.distribution.binary?.[candidateTarget];
             const commandSegments =
               binaryTarget === undefined
                 ? undefined
@@ -2178,7 +2194,18 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
                   }),
               ),
             );
-            if (!existed) return { agentId: safeAgentId, removed: false };
+            const forgetReleaseIfUninstalled = fileSystem.exists(agentRoot).pipe(
+              Effect.flatMap((stillInstalled) =>
+                stillInstalled
+                  ? Effect.void
+                  : fileSystem.remove(adoptedReleasePath(safeAgentId), { force: true }),
+              ),
+              Effect.ignore,
+            );
+            if (!existed) {
+              yield* forgetReleaseIfUninstalled;
+              return { agentId: safeAgentId, removed: false };
+            }
 
             let removed = false;
             yield* Effect.gen(function* () {
@@ -2207,6 +2234,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
                   }),
               ),
             );
+            yield* forgetReleaseIfUninstalled;
             return { agentId: safeAgentId, removed };
           }),
         ),

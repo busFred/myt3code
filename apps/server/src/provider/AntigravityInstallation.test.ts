@@ -403,11 +403,15 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
   it.effect("fails an update whose own installation is cancelled", () =>
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
+      let validations = 0;
       const { installation, stagingReleased } = yield* makeHarness({
         native: true,
         archive: Buffer.from(serverContents),
         platform: "win32",
-        validate: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+        validate: () =>
+          validations++ === 0
+            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+            : Effect.void,
       });
       const update = yield* installation.update.pipe(
         Effect.flip,
@@ -416,10 +420,36 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
       yield* Deferred.await(entered);
       const { operationId } = yield* installation.state;
       yield* installation.cancel(operationId!);
+      // A newer installation that starts before the update settles must not stand in for its own.
+      yield* installation.start;
       const failure = yield* Fiber.join(update);
       expect(failure.operation).toBe("update");
       expect(failure.detail).toBe("Installation cancelled. The previous runtime is unchanged.");
+      expect(yield* terminalState(installation)).toMatchObject({ phase: "succeeded" });
       yield* Deferred.await(stagingReleased);
+    }),
+  );
+
+  it.effect("keeps an interrupted update waiting until its installation ends", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const { installation } = yield* makeHarness({
+        native: true,
+        archive: Buffer.from(serverContents),
+        platform: "win32",
+        validate: () =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      });
+      const update = yield* installation.update.pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Deferred.await(entered);
+      const interrupted = yield* Fiber.interrupt(update).pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      expect(update.pollUnsafe()).toBeUndefined();
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(interrupted);
+      expect((yield* installation.state).phase).toBe("succeeded");
     }),
   );
 

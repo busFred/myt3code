@@ -22,7 +22,6 @@ import {
   defaultInstanceIdForDriver,
   type EnvironmentId,
   type AcpRegistryUrlAuthAction,
-  PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ProjectId,
   type ProviderInstanceConfig,
@@ -80,6 +79,7 @@ import {
 import {
   isProviderSettingsUpdateCandidate,
   isProviderUpdateActive,
+  providerUpdateName,
   type ProviderSettingsUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { ProviderUpdatesAction } from "../ProviderUpdatesAction";
@@ -688,7 +688,7 @@ export function EnvironmentProviderSettings({
 
   const runProviderUpdate = useStableCallback(
     async (
-      candidate: Pick<ProviderSettingsUpdateCandidate, "driver" | "instanceId">,
+      candidate: Pick<ProviderSettingsUpdateCandidate, "driver" | "instanceId" | "displayName">,
       targetVersion?: string,
     ) => {
       if (!readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
@@ -713,7 +713,7 @@ export function EnvironmentProviderSettings({
           stackedThreadToast({
             type: "error",
             title: gt("Could not update {provider}", {
-              provider: PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver,
+              provider: providerUpdateName(candidate),
             }),
             description:
               error instanceof Error
@@ -1258,7 +1258,7 @@ interface ProviderInstanceRowActions {
     action: AcpRegistryUrlAuthAction,
   ) => void;
   readonly runProviderUpdate: (
-    candidate: Pick<ProviderSettingsUpdateCandidate, "driver" | "instanceId">,
+    candidate: Pick<ProviderSettingsUpdateCandidate, "driver" | "instanceId" | "displayName">,
     targetVersion?: string,
   ) => Promise<void>;
   readonly updateInstance: (

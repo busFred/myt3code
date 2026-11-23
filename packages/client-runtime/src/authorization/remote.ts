@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import { FetchHttpClient } from "effect/http";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
@@ -113,6 +114,14 @@ export const appendClientConnectionParams = (
   }
 };
 
+// FetchHttpClient reads RequestInit from the fiber context per request.
+const withRequestInit =
+  (requestInit: RequestInit | undefined) =>
+  <A, E, R>(request: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    requestInit === undefined
+      ? request
+      : request.pipe(Effect.provideService(FetchHttpClient.RequestInit, requestInit));
+
 export const exchangeRemoteDpopAccessToken = Effect.fn(
   "clientRuntime.authorization.exchangeRemoteDpopAccessToken",
 )(function* (input: {
@@ -124,22 +133,25 @@ export const exchangeRemoteDpopAccessToken = Effect.fn(
   readonly clientMetadata?: AuthClientPresentationMetadata;
   readonly dpopProof: string;
   readonly timeoutMs?: number;
+  readonly requestInit?: RequestInit;
 }) {
   const client = yield* makeEnvironmentHttpApiGroupClient(input.httpBaseUrl, "auth");
   const response = yield* executeEnvironmentHttpRequest(
     environmentEndpointUrl(input.httpBaseUrl, "/oauth/token"),
     input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
-    client.token({
-      headers: { dpop: input.dpopProof },
-      payload: {
-        grant_type: AuthTokenExchangeGrantType,
-        subject_token: input.credential,
-        subject_token_type: input.credentialType ?? AuthEnvironmentBootstrapTokenType,
-        requested_token_type: AuthAccessTokenType,
-        ...(input.scopes ? { scope: encodeOAuthScope(input.scopes) } : {}),
-        ...clientMetadataTokenExchangeFields(input.clientMetadata),
-      },
-    }),
+    client
+      .token({
+        headers: { dpop: input.dpopProof },
+        payload: {
+          grant_type: AuthTokenExchangeGrantType,
+          subject_token: input.credential,
+          subject_token_type: input.credentialType ?? AuthEnvironmentBootstrapTokenType,
+          requested_token_type: AuthAccessTokenType,
+          ...(input.scopes ? { scope: encodeOAuthScope(input.scopes) } : {}),
+          ...clientMetadataTokenExchangeFields(input.clientMetadata),
+        },
+      })
+      .pipe(withRequestInit(input.requestInit)),
   );
   return response;
 });
@@ -152,22 +164,25 @@ export const bootstrapRemoteBearerSession = Effect.fn(
   readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
   readonly clientMetadata?: AuthClientPresentationMetadata;
   readonly timeoutMs?: number;
+  readonly requestInit?: RequestInit;
 }) {
   const client = yield* makeEnvironmentHttpApiGroupClient(input.httpBaseUrl, "auth");
   return yield* executeEnvironmentHttpRequest(
     environmentEndpointUrl(input.httpBaseUrl, "/oauth/token"),
     input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
-    client.token({
-      headers: {},
-      payload: {
-        grant_type: AuthTokenExchangeGrantType,
-        subject_token: input.credential,
-        subject_token_type: AuthEnvironmentBootstrapTokenType,
-        requested_token_type: AuthAccessTokenType,
-        ...(input.scopes ? { scope: encodeOAuthScope(input.scopes) } : {}),
-        ...clientMetadataTokenExchangeFields(input.clientMetadata),
-      },
-    }),
+    client
+      .token({
+        headers: {},
+        payload: {
+          grant_type: AuthTokenExchangeGrantType,
+          subject_token: input.credential,
+          subject_token_type: AuthEnvironmentBootstrapTokenType,
+          requested_token_type: AuthAccessTokenType,
+          ...(input.scopes ? { scope: encodeOAuthScope(input.scopes) } : {}),
+          ...clientMetadataTokenExchangeFields(input.clientMetadata),
+        },
+      })
+      .pipe(withRequestInit(input.requestInit)),
   );
 });
 

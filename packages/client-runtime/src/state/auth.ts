@@ -25,6 +25,8 @@ import { executeConnectedEnvironmentHttpRequest } from "./environmentHttpAuth.ts
 import { createEnvironmentCommand, createEnvironmentSubscriptionAtomFamily } from "./runtime.ts";
 
 const ACCESS_REQUEST_TIMEOUT_MS = 8_000;
+// These carry or return pairing codes, which must not follow a redirect to another origin.
+const NO_REDIRECTS: RequestInit = { redirect: "error" };
 
 export const EMPTY_AUTH_ACCESS_SNAPSHOT: AuthAccessSnapshot = {
   pairingLinks: [],
@@ -148,6 +150,7 @@ export function createAuthEnvironmentAtoms<R, E>(
           method: "POST",
           url: (urls) => urls.createAppInvite(),
           timeoutMs: ACCESS_REQUEST_TIMEOUT_MS,
+          requestInit: NO_REDIRECTS,
           request: ({ client, headers }) => client.createAppInvite({ headers, payload: input }),
         }),
     }),
@@ -171,6 +174,7 @@ export function createAuthEnvironmentAtoms<R, E>(
           method: "POST",
           url: (urls) => urls.takePendingAppInvites(),
           timeoutMs: ACCESS_REQUEST_TIMEOUT_MS,
+          requestInit: NO_REDIRECTS,
           request: ({ client, headers }) => client.takePendingAppInvites({ headers }),
         }),
     }),
@@ -184,6 +188,7 @@ export function createAuthEnvironmentAtoms<R, E>(
           url: (urls) => urls.linkPeer(),
           // Linking probes the other environment's addresses and signs in there.
           timeoutMs: 60_000,
+          requestInit: NO_REDIRECTS,
           request: ({ client, headers }) => client.linkPeer({ headers, payload: input }),
         }),
     }),

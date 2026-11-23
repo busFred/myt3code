@@ -282,6 +282,17 @@ describe("connection onboarding", () => {
       expect(tokenParams.get("client_label")).toBe("T3 Code Test");
       expect(tokenParams.get("client_device_type")).toBe("desktop");
       expect(tokenParams.get("client_os")).toBe("Test OS");
+      expect(tokenRequest?.init.redirect).toBeUndefined();
+
+      const pickupCalls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+      yield* preparePairingRegistration({
+        host: "remote.example.test",
+        pairingCode: "pairing-token",
+        refuseRedirects: true,
+      }).pipe(Effect.provide(layerPairingOnboarding(undefined, pickupCalls)));
+      expect(pickupCalls.find((call) => call.url.endsWith("/oauth/token"))?.init.redirect).toBe(
+        "error",
+      );
     }),
   );
 
