@@ -533,23 +533,22 @@ const historyReads = (
     )
       reads.push("every message");
   };
-  const projection = McpToolAccessTestkit.idleThreadProjection(
+  const idle = McpToolAccessTestkit.idleThreadProjection(
     McpToolAccessTestkit.liveThreadShell(threadId),
   );
+  const projection = {
+    ...idle,
+    runs:
+      queued === undefined
+        ? idle.runs
+        : [{ id: "run:queued", status: "queued", userMessageId: "message:queued" }],
+  } as never;
   return Layer.mock(ThreadManagement.ThreadManagementService)({
     getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
     getProjectThreadRecords: (_target, fields, filter) =>
-      Effect.sync(() => record(fields, filter)).pipe(Effect.as(projection as never)),
+      Effect.sync(() => record(fields, filter)).pipe(Effect.as(projection)),
     getThreadRecords: (_id, fields, filter) =>
-      Effect.sync(() => record(fields, filter)).pipe(
-        Effect.as({
-          ...projection,
-          runs:
-            queued === undefined
-              ? projection.runs
-              : [{ id: "run:queued", status: "queued", userMessageId: "message:queued" }],
-        } as never),
-      ),
+      Effect.sync(() => record(fields, filter)).pipe(Effect.as(projection)),
     getMessagesById: () =>
       Effect.succeed(new Map(queued === undefined ? [] : [["message:queued", queued]]) as never),
     hasReceipt: () => Effect.succeed(false),
@@ -560,6 +559,14 @@ const historyReads = (
 
 it.effect("t3_queue list and read load only the queued runs and their messages", () => {
   const reads: Array<string> = [];
+  const agentMessage = {
+    id: "message:queued",
+    text: "Status",
+    createdBy: "agent",
+    senderThreadId: "thread:sender",
+    attachments: [],
+    dispatched: [],
+  };
   return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const call = (args: Record<string, unknown>) =>
@@ -569,15 +576,25 @@ it.effect("t3_queue list and read load only the queued runs and their messages",
           Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
           Effect.provideService(McpSchema.McpServerClient, client),
         );
-    yield* call({ action: "list" });
-    yield* call({ action: "read", queuedRunId: "run:queued" });
+    const listed = yield* call({ action: "list" });
+    const read = yield* call({ action: "read", queuedRunId: "run:queued" });
     expect(reads).toEqual([]);
+    // Agents tell another thread's message from the user's without parsing its text.
+    const entry = {
+      queuedRunId: "run:queued",
+      createdBy: "agent",
+      senderThreadId: "thread:sender",
+      text: "Status",
+      truncated: false,
+    };
+    expect(listed.structuredContent).toEqual({ items: [entry], nextCursor: null });
+    expect(read.structuredContent).toEqual(entry);
   }).pipe(
     Effect.provide(
       layerThreadToolkit.pipe(
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
-        Layer.provide(historyReads(reads)),
+        Layer.provide(historyReads(reads, agentMessage)),
       ),
     ),
   );

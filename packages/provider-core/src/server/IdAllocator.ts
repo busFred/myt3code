@@ -276,6 +276,12 @@ const DELEGATED_TASK_THREAD_PREFIX = joinId("thread", "delegated-task", "");
 export const isDelegatedTaskThread = (threadId: ThreadId): boolean =>
   threadId.startsWith(DELEGATED_TASK_THREAD_PREFIX);
 
+const DELEGATED_TASK_MESSAGE_PREFIX = joinId("message", "delegated-task", "");
+
+/** The task brief a delegate_task child starts with. */
+export const isDelegatedTaskMessage = (messageId: MessageId): boolean =>
+  messageId.startsWith(DELEGATED_TASK_MESSAGE_PREFIX);
+
 export const derive: IdAllocatorV2Derive = {
   providerSession: (input) =>
     ProviderSessionId.make(
@@ -285,7 +291,7 @@ export const derive: IdAllocatorV2Derive = {
   delegatedTaskThread: (input) =>
     ThreadId.make(`${DELEGATED_TASK_THREAD_PREFIX}${encodePart(input.commandId)}`),
   delegatedTaskMessage: (input) =>
-    MessageId.make(joinId("message", "delegated-task", input.commandId)),
+    MessageId.make(`${DELEGATED_TASK_MESSAGE_PREFIX}${encodePart(input.commandId)}`),
   delegatedTaskTurnItem: (input) =>
     TurnItemId.make(joinId("turn-item", "delegated-task", input.commandId)),
   createdThreadTurnItem: (input) =>

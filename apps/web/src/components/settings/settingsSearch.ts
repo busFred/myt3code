@@ -502,6 +502,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("usage quota rate limit reset recover continue")],
   },
   {
+    id: "batch-queued-agent-messages",
+    title: msg("Batch queued messages from other threads"),
+    to: "/settings/threads",
+    searchTerms: [msg("queue agent messages combine merge one turn coordinator send")],
+  },
+  {
     id: "working-shelf",
     title: msg("Working section"),
     to: "/settings/general",

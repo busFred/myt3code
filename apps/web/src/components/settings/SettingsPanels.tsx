@@ -563,6 +563,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads
       ? [gt("Snooze until limits reset")]
       : []),
+    ...(settings.batchQueuedAgentMessages !== DEFAULT_UNIFIED_SETTINGS.batchQueuedAgentMessages
+      ? [gt("Batch queued messages from other threads")]
+      : []),
     ...(!Equal.equals(settings.snoozePresets, DEFAULT_UNIFIED_SETTINGS.snoozePresets)
       ? [gt("Snooze options")]
       : []),
@@ -744,6 +747,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
+      batchQueuedAgentMessages: DEFAULT_UNIFIED_SETTINGS.batchQueuedAgentMessages,
       snoozePresets: DEFAULT_UNIFIED_SETTINGS.snoozePresets,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
@@ -2097,6 +2101,43 @@ export function ThreadsSettingsPanel() {
                 updateSettings({ snoozeLimitedThreads: Boolean(checked) })
               }
               aria-label={gt("Snooze until limits reset")}
+            />
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        id="queue"
+        title={gt("Queue", { $context: "settings section for queued messages" })}
+      >
+        <SettingsRow
+          serverScoped
+          {...setting("batch-queued-agent-messages")}
+          description={gt(
+            "When messages from other threads wait at the front of a thread's queue, send them to the agent together as one turn. Your own messages always get their own turn.",
+          )}
+          settingKeys={["batchQueuedAgentMessages"]}
+          resetAction={
+            settings.batchQueuedAgentMessages !==
+            DEFAULT_UNIFIED_SETTINGS.batchQueuedAgentMessages ? (
+              <SettingResetButton
+                ariaLabel={gt("Reset batch queued messages from other threads to default")}
+                onClick={() =>
+                  updateSettings({
+                    batchQueuedAgentMessages: DEFAULT_UNIFIED_SETTINGS.batchQueuedAgentMessages,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <ScopedSwitch
+              settingKeys={["batchQueuedAgentMessages"]}
+              checked={settings.batchQueuedAgentMessages}
+              onCheckedChange={(checked) =>
+                updateSettings({ batchQueuedAgentMessages: Boolean(checked) })
+              }
+              aria-label={gt("Batch queued messages from other threads")}
             />
           }
         />

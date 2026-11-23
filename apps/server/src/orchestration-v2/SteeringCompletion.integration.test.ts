@@ -527,6 +527,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
     turn: ProviderAdapter.ProviderAdapterV2SteerInput,
   ) => Effect.Effect<void, ProviderAdapter.ProviderAdapterV2Error> = () => Effect.void,
   extraAdapters: ReadonlyArray<ProviderAdapter.ProviderAdapterV2["Service"]> = [],
+  batchQueuedAgentMessages?: boolean,
 ) {
   const driver = ProviderDriverKind.make(nativeGoals === undefined ? "codex" : "opencode");
   const cwd = yield* checkpointWorkspace(name);
@@ -664,7 +665,10 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
   const layer = ProviderReplayHarness.layerWithRegistry(
     { name },
     ProviderAdapterRegistry.layerFromAdapters([adapter, ...extraAdapters]),
-    { runEffectWorker: false },
+    {
+      runEffectWorker: false,
+      ...(batchQueuedAgentMessages === undefined ? {} : { batchQueuedAgentMessages }),
+    },
   );
   const startFirstTurn = Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -2167,10 +2171,65 @@ it.effect("refuses a limited caller's answer to a turn started above its limit",
 );
 
 // regression: #39404 a later agent message steers ahead of one queued behind /compact
+const finishStartedTurn = Effect.fn("finishStartedTurn")(function* (
+  harness: {
+    readonly events: Queue.Queue<ProviderAdapter.ProviderAdapterV2Event>;
+    readonly started: ReadonlyArray<ProviderAdapter.ProviderAdapterV2TurnInput>;
+  },
+  threadId: ThreadId,
+  index: number,
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+  const turnInput = harness.started[index]!;
+  const turn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns.find(
+    (candidate) => candidate.runAttemptId === turnInput.attemptId,
+  )!;
+  const settled = yield* orchestrator.streamDomainEvents.pipe(
+    Stream.filter(
+      (event) =>
+        event.type === "run.updated" &&
+        event.payload.id === turnInput.runId &&
+        (event.payload.status === "waiting" || event.payload.status === "completed"),
+    ),
+    Stream.take(1),
+    Stream.runDrain,
+    Effect.forkScoped,
+  );
+  yield* Queue.offer(harness.events, {
+    type: "provider_turn.updated",
+    driver,
+    providerTurn: { ...turn, status: "completed", completedAt: yield* DateTime.now },
+  });
+  yield* Queue.offer(harness.events, {
+    type: "turn.terminal",
+    driver,
+    providerThreadId: turn.providerThreadId,
+    providerTurnId: turn.id,
+    runOrdinal: turnInput.runOrdinal,
+    status: "completed",
+    failure: null,
+    threadDisposition: "reusable",
+  });
+  yield* Fiber.join(settled);
+  yield* worker.drain();
+  yield* orchestrator.resumeQueuedRuns;
+  yield* worker.drain();
+});
+
 it.effect("delivers agent messages queued behind /compact before a later one steers", () =>
   Effect.gen(function* () {
+    // Batching would start ALPHA and BRAVO as one run; this checks their order as separate runs.
     const { events, started, steered, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
       "agent-order-after-compact",
+      false,
+      true,
+      Effect.void,
+      true,
+      undefined,
+      () => Effect.void,
+      [],
+      false,
     );
     yield* Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -2190,42 +2249,7 @@ it.effect("delivers agent messages queued behind /compact before a later one ste
         threadId,
         Effect.void,
       );
-      const finishTurn = Effect.fn("finishTurn")(function* (index: number) {
-        const turnInput = started[index]!;
-        const turn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns.find(
-          (candidate) => candidate.runAttemptId === turnInput.attemptId,
-        )!;
-        const settled = yield* orchestrator.streamDomainEvents.pipe(
-          Stream.filter(
-            (event) =>
-              event.type === "run.updated" &&
-              event.payload.id === turnInput.runId &&
-              event.payload.status === "completed",
-          ),
-          Stream.take(1),
-          Stream.runDrain,
-          Effect.forkScoped,
-        );
-        yield* Queue.offer(events, {
-          type: "provider_turn.updated",
-          driver,
-          providerTurn: { ...turn, status: "completed", completedAt: yield* DateTime.now },
-        });
-        yield* Queue.offer(events, {
-          type: "turn.terminal",
-          driver,
-          providerThreadId: turn.providerThreadId,
-          providerTurnId: turn.id,
-          runOrdinal: turnInput.runOrdinal,
-          status: "completed",
-          failure: null,
-          threadDisposition: "reusable",
-        });
-        yield* Fiber.join(settled);
-        yield* worker.drain();
-        yield* orchestrator.resumeQueuedRuns;
-        yield* worker.drain();
-      });
+      const finishTurn = (index: number) => finishStartedTurn({ events, started }, threadId, index);
       yield* finishTurn(0);
       const compactRunning = yield* nextRunning();
       yield* orchestrator.dispatch({
@@ -2337,6 +2361,141 @@ it.effect("an agent's automatic send steers past another sender's queued message
       );
     }).pipe(Effect.provide(layer));
   }),
+);
+
+it.effect.each([true, false])(
+  "starts queued messages from other threads together when batching is %s, never the user's",
+  (batching) =>
+    Effect.gen(function* () {
+      const harness = yield* nextTurnSelectionHarness(
+        `batch-agent-messages-${batching}`,
+        false,
+        true,
+        Effect.void,
+        true,
+        undefined,
+        () => Effect.void,
+        [],
+        batching,
+      );
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = yield* harness.startFirstTurn;
+        const queue = Effect.fn("queue")(function* (text: string, sender?: string) {
+          yield* TestClock.adjust("1 second");
+          const messageId = MessageId.make(`message:${text}`);
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`send-${text}`),
+            threadId,
+            messageId,
+            text,
+            attachments: [],
+            dispatchMode: { type: "queue_after_active" },
+            ...(sender === undefined
+              ? { createdBy: "user" as const, creationSource: "web" as const }
+              : {
+                  createdBy: "agent" as const,
+                  creationSource: "mcp" as const,
+                  senderThreadId: ThreadId.make(sender),
+                }),
+          });
+          yield* worker.drain();
+          return (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+            (run) => run.userMessageId === messageId,
+          )!.id;
+        });
+        const alpha = yield* queue("ALPHA", "thread:lead-a");
+        const bravo = yield* queue("BRAVO", "thread:lead-b");
+        const cancelled = yield* queue("CANCELLED", "thread:lead-a");
+        const edited = yield* queue("DRAFT", "thread:lead-b");
+        yield* queue("USER");
+        yield* queue("DELTA", "thread:lead-a");
+        yield* queue("ECHO", "thread:lead-a");
+        yield* orchestrator.dispatch({
+          type: "queued-run.cancel",
+          commandId: CommandId.make("cancel-queued"),
+          threadId,
+          runId: cancelled,
+        });
+        yield* orchestrator.dispatch({
+          type: "queued-run.edit",
+          commandId: CommandId.make("edit-queued"),
+          threadId,
+          runId: edited,
+          text: "EDITED",
+        });
+        yield* worker.drain();
+        for (
+          let index = 0;
+          (yield* orchestrator.getThreadProjection(threadId)).runs.some(
+            (run) => run.status === "queued",
+          );
+          index += 1
+        ) {
+          const nextRunning = yield* orchestrator.streamDomainEvents.pipe(
+            Stream.filter(
+              (event) =>
+                event.type === "provider-turn.updated" && event.payload.status === "running",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+          yield* finishStartedTurn(harness, threadId, index);
+          yield* Fiber.join(nextRunning);
+          yield* (yield* ThreadCommandExecutor.ThreadCommandExecutor).withLock(
+            threadId,
+            Effect.void,
+          );
+        }
+
+        const fromLead = (lead: string, text: string) =>
+          `[T3 Code: the agent in T3 thread "thread:lead-${lead}" sent this message, not the user.]\n\n${text}`;
+        assert.deepEqual(
+          harness.started.map((turn) => turn.message.text),
+          batching
+            ? [
+                "first",
+                [
+                  "[T3 Code: this message came through T3 Code's tools, not from the user typing in this chat.]",
+                  "[T3 Code: 3 messages from other threads, batched by T3, oldest first.]",
+                  '[T3 Code: message 1 of 3, sent 1970-01-01T00:00:01.000Z by the agent in T3 thread "thread:lead-a".]\nALPHA',
+                  '[T3 Code: message 2 of 3, sent 1970-01-01T00:00:02.000Z by the agent in T3 thread "thread:lead-b".]\nBRAVO',
+                  '[T3 Code: message 3 of 3, sent 1970-01-01T00:00:04.000Z by the agent in T3 thread "thread:lead-b".]\nEDITED',
+                ].join("\n\n"),
+                "USER",
+                fromLead(
+                  "a",
+                  [
+                    "[T3 Code: 2 messages from other threads, batched by T3, oldest first.]",
+                    '[T3 Code: message 1 of 2, sent 1970-01-01T00:00:06.000Z by the agent in T3 thread "thread:lead-a".]\nDELTA',
+                    '[T3 Code: message 2 of 2, sent 1970-01-01T00:00:07.000Z by the agent in T3 thread "thread:lead-a".]\nECHO',
+                  ].join("\n\n"),
+                ),
+              ]
+            : [
+                "first",
+                fromLead("a", "ALPHA"),
+                fromLead("b", "BRAVO"),
+                fromLead("b", "EDITED"),
+                "USER",
+                fromLead("a", "DELTA"),
+                fromLead("a", "ECHO"),
+              ],
+        );
+        // The batch leaves the queue in one write: its other messages end with the run that took them.
+        const runs = (yield* orchestrator.getThreadProjection(threadId)).runs;
+        const statusOf = (runId: string) => runs.find((run) => run.id === runId)?.status;
+        assert.deepEqual(
+          [alpha, bravo, edited, cancelled].map(statusOf),
+          batching
+            ? ["completed", "cancelled", "cancelled", "cancelled"]
+            : ["completed", "completed", "completed", "cancelled"],
+        );
+      }).pipe(Effect.provide(harness.layer));
+    }),
 );
 
 // regression: #33454 a steer that restarts a completion wake run left its cohort claimed forever

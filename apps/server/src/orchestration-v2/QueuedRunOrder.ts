@@ -1,4 +1,11 @@
-import type { OrchestrationV2Run, OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import {
+  startsWithProviderCommand,
+  type OrchestrationV2ConversationMessage,
+  type OrchestrationV2Run,
+  type OrchestrationV2ThreadProjection,
+} from "@t3tools/contracts";
+import { isDelegatedTaskMessage } from "@t3tools/provider-core/server/IdAllocator";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
 
 export function isAutomaticCompletionRun(
@@ -48,4 +55,117 @@ export function queuedRunsInDeliveryOrder(
       messageIndex += 1;
     }
   }
+}
+
+export interface QueuedAgentMessage {
+  readonly run: OrchestrationV2Run;
+  readonly message: OrchestrationV2ConversationMessage;
+}
+
+function batchesAsAgentMessage(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "turnItems">,
+  head: OrchestrationV2Run,
+  { run, message }: QueuedAgentMessage,
+): boolean {
+  const fromOtherThread =
+    message.linkedSender !== undefined ||
+    (message.senderThreadId !== undefined && message.senderThreadId !== projection.thread.id);
+  return (
+    run.status === "queued" &&
+    run.queueHeld !== true &&
+    run.steerWhenReadyRunId === undefined &&
+    run.freshContext !== true &&
+    run.restartContinuationOfRunId === undefined &&
+    run.manualContinuationOfRunId === undefined &&
+    run.usageLimitContinuationOfRunId === undefined &&
+    run.delegatedTaskId === undefined &&
+    run.sourcePlanRef === undefined &&
+    run.delegatedCompletion === undefined &&
+    modelSelectionsEqual(run.modelSelection, head.modelSelection) &&
+    // A steer that fell back to the queue keeps its own user item.
+    !projection.turnItems.some((item) => item.type === "user_message" && item.runId === run.id) &&
+    message.role === "user" &&
+    message.createdBy === "agent" &&
+    fromOtherThread &&
+    message.attachments.length === 0 &&
+    message.context === undefined &&
+    message.notification === undefined &&
+    message.delegatedCompletion === undefined &&
+    message.scheduledTaskId === undefined &&
+    message.idleCompaction === undefined &&
+    message.workflowScript === undefined &&
+    message.followsThreadSelection === undefined &&
+    !isDelegatedTaskMessage(message.id) &&
+    !startsWithProviderCommand(message.text)
+  );
+}
+
+/**
+ * The queued messages from other threads that start with `head` as one run: `head` and the ones
+ * right behind it, stopping at the first that is not one (such as a person's message). A message
+ * moved ahead of older ones, as a restart or a reorder does, ends the batch and runs on its own.
+ * Empty when there is nothing to merge.
+ */
+export function queuedAgentMessageBatch(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "messages" | "turnItems">,
+  head: OrchestrationV2Run,
+): ReadonlyArray<QueuedAgentMessage> {
+  const ordered = queuedRunsInDeliveryOrder(projection);
+  const start = ordered.findIndex((run) => run.id === head.id);
+  if (start === -1) return [];
+  const batch: Array<QueuedAgentMessage> = [];
+  for (const run of ordered.slice(start)) {
+    const message = projection.messages.find((candidate) => candidate.id === run.userMessageId);
+    const previous = batch.at(-1);
+    if (
+      message === undefined ||
+      !batchesAsAgentMessage(projection, head, { run, message }) ||
+      (previous !== undefined && DateTime.isLessThan(run.requestedAt, previous.run.requestedAt))
+    ) {
+      break;
+    }
+    batch.push({ run, message });
+  }
+  return batch.length > 1 ? batch : [];
+}
+
+function agentSender(message: OrchestrationV2ConversationMessage): string {
+  return message.linkedSender === undefined
+    ? `the agent in T3 thread ${JSON.stringify(message.senderThreadId)}`
+    : `the agent in T3 thread ${JSON.stringify(message.linkedSender.threadId)} on linked environment ${JSON.stringify(message.linkedSender.environmentId)}`;
+}
+
+function batchedAgentMessagesText(
+  messages: ReadonlyArray<OrchestrationV2ConversationMessage>,
+): string {
+  return [
+    `[T3 Code: ${messages.length} messages from other threads, batched by T3, oldest first.]`,
+    ...messages.map(
+      (message, index) =>
+        `[T3 Code: message ${index + 1} of ${messages.length}, sent ${DateTime.formatIso(message.createdAt)} by ${agentSender(message)}.]\n${message.text}`,
+    ),
+  ].join("\n\n");
+}
+
+/** The head message carrying the whole batch; a sender stays only when every message has it. */
+export function batchedAgentMessage(
+  batch: ReadonlyArray<QueuedAgentMessage>,
+  updatedAt: DateTime.Utc,
+): OrchestrationV2ConversationMessage {
+  const messages = batch.map((entry) => entry.message);
+  const head = messages[0]!;
+  const sameSender = messages.every(
+    (message) =>
+      message.senderThreadId === head.senderThreadId &&
+      message.linkedSender?.threadId === head.linkedSender?.threadId &&
+      message.linkedSender?.environmentId === head.linkedSender?.environmentId,
+  );
+  const { senderThreadId, linkedSender, ...rest } = head;
+  return {
+    ...rest,
+    ...(sameSender && senderThreadId !== undefined ? { senderThreadId } : {}),
+    ...(sameSender && linkedSender !== undefined ? { linkedSender } : {}),
+    text: batchedAgentMessagesText(messages),
+    updatedAt,
+  };
 }

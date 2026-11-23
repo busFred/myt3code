@@ -15,6 +15,7 @@ import {
   IsoDateTime,
   OrchestratorMcpFailure,
   OrchestrationV2DispatchCommandResult,
+  OrchestrationV2Actor,
   ThreadId,
   RunId,
   NonNegativeInt,
@@ -77,6 +78,9 @@ const commandTool = {
 };
 const queueEntry = Schema.Struct({
   queuedRunId: RunId,
+  createdBy: OrchestrationV2Actor,
+  /** The local thread whose agent sent it. */
+  senderThreadId: Schema.optional(ThreadId),
   text: Schema.String,
   truncated: Schema.Boolean,
 });
