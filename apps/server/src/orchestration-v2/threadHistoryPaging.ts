@@ -6,6 +6,7 @@ import type {
   TurnItemId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { latestRun as latestThreadRun } from "./QueuedRunOrder.ts";
 
 /**
  * Every window stops at the byte budget. A window that holds a user turn also
@@ -602,10 +603,7 @@ function messagesForBoundedProjection(
     }
   }
 
-  const latestRun = projection.runs.reduce<(typeof projection.runs)[number] | null>(
-    (latest, run) => (latest === null || run.ordinal > latest.ordinal ? run : latest),
-    null,
-  );
+  const latestRun = latestThreadRun(projection) ?? null;
   const retainedRunIds = new Set<string>();
   for (const run of projection.runs) {
     if (

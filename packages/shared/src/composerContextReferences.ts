@@ -10,7 +10,10 @@ import {
   type ThreadContextRecord,
 } from "@t3tools/contracts";
 
-import { expandAssistantCitationsForProvider } from "./assistantCitations.ts";
+import {
+  expandAssistantCitationsForProvider,
+  type AssistantCitationCommentAuthor,
+} from "./assistantCitations.ts";
 import { replaceThreadLinks, threadLinkCandidates } from "./threadLinks.ts";
 
 const CONTEXT_PROTOCOL = "t3-context:";
@@ -394,9 +397,11 @@ function formatEnvelopeEntry(
 export function projectComposerContextForProvider(input: {
   text: string;
   records: ReadonlyArray<ComposerContextRecord>;
+  citationCommentAuthor?: AssistantCitationCommentAuthor;
 }): string {
   const occurrences = collectComposerContextReferences(input.text);
-  if (occurrences.length === 0) return expandAssistantCitationsForProvider(input.text);
+  if (occurrences.length === 0)
+    return expandAssistantCitationsForProvider(input.text, input.citationCommentAuthor);
   const recordsById = new Map<ComposerContextId, ComposerContextRecord | undefined>();
   for (const record of input.records) {
     recordsById.set(record.contextId, recordsById.has(record.contextId) ? undefined : record);
@@ -409,6 +414,7 @@ export function projectComposerContextForProvider(input: {
         occurrence.contextId,
       ),
     ),
+    input.citationCommentAuthor,
   );
   const seen = new Set<ComposerContextId>();
   const entries: string[] = [];

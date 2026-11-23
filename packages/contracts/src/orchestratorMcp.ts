@@ -579,7 +579,10 @@ export const OrchestratorMcpThreadSendResult = Schema.Struct({
   messageId: MessageId,
   runId: RunId,
   taskId: Schema.optional(NodeId),
+  /** With `batchedIntoRunId`, that run's status. */
   status: OrchestrationV2RunStatus,
+  /** The message started together with other queued messages in this run, whose result it shares. */
+  batchedIntoRunId: Schema.optional(RunId),
   delivery: Schema.Literals(["started", "queued", "steered", "restarted"]),
 });
 export type OrchestratorMcpThreadSendResult = typeof OrchestratorMcpThreadSendResult.Type;

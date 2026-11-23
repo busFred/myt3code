@@ -696,6 +696,9 @@ export const layer: Layer.Layer<
           ? projection.messages.find((source) => source.id === resumeSource.userMessageId)
           : undefined;
       const providerMessage = unsentResumeMessage ?? message;
+      // A batch carries only other threads' agents' messages, so they wrote its quote comments.
+      const citationCommentAuthor =
+        providerMessage.batchedMessageCount === undefined ? "user" : "agent";
       const settleStartFailure = Effect.fn("ProviderTurnStartService.settleStartFailure")(
         function* (failed: {
           readonly signal: string;
@@ -726,7 +729,7 @@ export const layer: Layer.Layer<
         },
       );
       if (
-        expandAssistantCitationsForProvider(providerMessage.text).length >
+        expandAssistantCitationsForProvider(providerMessage.text, citationCommentAuthor).length >
         PROVIDER_SEND_TURN_MAX_INPUT_CHARS
       ) {
         yield* settleRunBeforeStart({
@@ -788,6 +791,7 @@ export const layer: Layer.Layer<
                 text: projectComposerContextForProvider({
                   text: providerMessage.text,
                   records: providerMessage.context?.records ?? [],
+                  citationCommentAuthor,
                 }),
                 hasAttachments: false,
                 // A scheduled delivery keeps its task author's createdBy.
@@ -1085,6 +1089,7 @@ export const layer: Layer.Layer<
         projectComposerContextForProvider({
           text: providerMessage.text,
           records: providerMessage.context?.records ?? [],
+          citationCommentAuthor,
         }),
       );
       const slashCommand = isSlashCommandMessage(providerMessage);

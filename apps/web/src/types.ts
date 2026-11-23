@@ -86,6 +86,8 @@ export interface ChatMessage {
   readonly senderThreadId?: ThreadId;
   readonly linkedSender?: OrchestrationV2LinkedSender;
   readonly idleCompaction?: import("@t3tools/contracts").OrchestrationV2IdleCompaction;
+  /** Queued messages from other threads' agents that this one carries, each with its sender. */
+  readonly batchedMessageCount?: number;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly inputIntent?: OrchestrationV2UserMessageInputIntent | undefined;
