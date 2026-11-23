@@ -384,16 +384,31 @@ it.effect("waitForThread on a queued run batched into another answers with that 
     const runId = RunId.make("run:thread-management:wait-batched");
     const headId = RunId.make("run:thread-management:wait-batched:head");
     const subscribed = yield* Deferred.make<void>();
+    const mergedRead = yield* Deferred.make<void>();
+    const headEventFiltered = yield* Deferred.make<void>();
     const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
-    let runs: Array<Pick<OrchestrationV2Run, "id" | "status" | "batchedIntoRunId">> = [
+    type Runs = Array<Pick<OrchestrationV2Run, "id" | "status" | "batchedIntoRunId">>;
+    let runs: Runs = [
       { id: headId, status: "queued" },
       { id: runId, status: "queued" },
     ];
-    const stored = (sequence: number, payload: (typeof runs)[number]) =>
+    // The head starts with this run's message; this run ends without running.
+    const merged = { id: runId, status: "cancelled" as const, batchedIntoRunId: headId };
+    const headRunning: Runs = [{ id: headId, status: "running" }, merged];
+    const stored = (sequence: number, payload: Runs[number]) =>
       ({
         sequence,
         event: { threadId, type: "run.updated", payload },
       }) as unknown as OrchestrationV2StoredEvent;
+    // Tells the test when the wait's event filter reads this event, so it is done with earlier ones.
+    const observed = (event: OrchestrationV2StoredEvent) =>
+      ({
+        sequence: event.sequence,
+        get event() {
+          Deferred.doneUnsafe(headEventFiltered, Effect.void);
+          return event.event;
+        },
+      }) as OrchestrationV2StoredEvent;
     const layerTest = ThreadManagementService.layer.pipe(
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
@@ -408,13 +423,20 @@ it.effect("waitForThread on a queued run batched into another answers with that 
                 )
               : Stream.never,
           getThreadRecords: () =>
-            Effect.sync(
-              () =>
-                ({
-                  thread: { id: threadId, projectId, deletedAt: null },
-                  runs,
-                }) as unknown as OrchestrationV2ThreadProjection,
-            ),
+            Effect.suspend(() => {
+              const projection = {
+                thread: { id: threadId, projectId, deletedAt: null },
+                runs,
+              } as unknown as OrchestrationV2ThreadProjection;
+              // The read for the merged run's update sees the head still running and finishes
+              // only after the head's terminal update passed the event filter.
+              return runs === headRunning
+                ? Deferred.succeed(mergedRead, undefined).pipe(
+                    Effect.andThen(Deferred.await(headEventFiltered)),
+                    Effect.as(projection),
+                  )
+                : Effect.succeed(projection);
+            }),
         }),
       ),
       Layer.provide(ServerSettings.layerTest()),
@@ -427,12 +449,20 @@ it.effect("waitForThread on a queued run batched into another answers with that 
       .waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 })
       .pipe(Effect.forkChild);
     yield* Effect.raceFirst(Deferred.await(subscribed), Fiber.await(fiber));
-    // The head starts with this run's message; this run ends without running.
-    const merged = { id: runId, status: "cancelled" as const, batchedIntoRunId: headId };
-    runs = [{ id: headId, status: "running" }, merged];
+    runs = headRunning;
     yield* Queue.offer(events, stored(1, merged));
+    yield* Deferred.await(mergedRead);
     runs = [{ id: headId, status: "failed" }, merged];
     yield* Queue.offer(events, stored(2, runs[0]!));
+    yield* Queue.offer(
+      events,
+      observed(
+        stored(3, {
+          id: RunId.make("run:thread-management:wait-batched:other"),
+          status: "running",
+        }),
+      ),
+    );
 
     expect(yield* Fiber.join(fiber)).toMatchObject({
       timedOut: false,
@@ -462,6 +492,7 @@ it.effect("sendToThread reports a message batched into another run as delivered"
             },
             // A retry, or another start, finds the queued run already merged into the next turn.
             runs: [
+              { id: RunId.make("run:thread-management:send-batched:head"), status: "running" },
               {
                 id: runId,
                 status: "cancelled",
@@ -490,7 +521,11 @@ it.effect("sendToThread reports a message batched into another run as delivered"
       createdBy: "agent",
       creationSource: "mcp",
     });
-    expect(sent).toMatchObject({ delivery: "queued", run: { id: runId } });
+    expect(sent).toMatchObject({
+      delivery: "queued",
+      run: { id: runId },
+      batchedInto: { id: "run:thread-management:send-batched:head", status: "running" },
+    });
   }).pipe(Effect.provide(layerTest));
 });
 
@@ -817,6 +852,8 @@ it.effect.each([
   // A delegated-completion wake cancelled unstarted because the turn already took the result.
   { status: "completed" as const, followUp: "cancelled-delegated", settles: true },
   { status: "completed" as const, followUp: "stopped-delegated", settles: false },
+  // A queued message that started in this run keeps its own, later run, which never ran.
+  { status: "completed" as const, followUp: "batched", settles: true },
 ])("settleAfterRun handles $status with $followUp follow-up", ({ status, followUp, settles }) =>
   Effect.gen(function* () {
     const projectId = ProjectId.make("project:thread-management:settle-after-run");
@@ -829,7 +866,22 @@ it.effect.each([
     let sequence = 0;
     let sequenceReads = 0;
     let rejectedCommandId: CommandId | undefined;
-    const runs = [{ id: runId, ordinal: 1, status, userMessageId: MessageId.make("original") }];
+    const batchedRunId = RunId.make(`${runId}:batched`);
+    const races = followUp !== "none" && followUp !== "batched";
+    const runs = [
+      { id: runId, ordinal: 1, status, userMessageId: MessageId.make("original") },
+      ...(followUp === "batched"
+        ? [
+            {
+              id: batchedRunId,
+              ordinal: 2,
+              status: "cancelled" as const,
+              userMessageId: MessageId.make("batched"),
+              batchedIntoRunId: runId,
+            },
+          ]
+        : []),
+    ];
     const nextRun = {
       id: followUpId,
       ordinal: 2,
@@ -871,6 +923,7 @@ it.effect.each([
                       ...(followUp.endsWith("delegated") ? { delegatedCompletion: {} } : {}),
                     },
                     { id: MessageId.make("reply"), runId: followUpId, role: "assistant" as const },
+                    { id: MessageId.make("batched"), runId: batchedRunId, role: "user" as const },
                     ...(followUp === "steered-notification"
                       ? [
                           {
@@ -893,7 +946,7 @@ it.effect.each([
             ),
           dispatch: (command) =>
             Effect.gen(function* () {
-              if (followUp !== "none" && !raced) {
+              if (races && !raced) {
                 raced = true;
                 rejectedCommandId = command.commandId;
                 return yield* new Orchestrator.OrchestratorDispatchError({
@@ -924,7 +977,7 @@ it.effect.each([
     const fiber = yield* service
       .settleAfterRun({ projectId, threadId, runId })
       .pipe(Effect.forkChild);
-    if (followUp !== "none") {
+    if (races) {
       yield* Deferred.await(subscribed);
       expect(dispatched).toEqual([]);
       nextRun.status =
@@ -1122,6 +1175,49 @@ it.effect("Force stop refuses once a newer run has started, before killing anyth
     }).pipe(Effect.provide(layerTest));
     expect(error.reason).toBe("superseded");
     expect(killed).toBe(false);
+  }),
+);
+
+it.effect("Force stop of a batch's run is not superseded by the queued runs it took", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread:thread-management:force-stop-batched");
+    const headId = RunId.make("run:head");
+    let killed = false;
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadRecords: () =>
+            Effect.succeed({
+              thread: { id: threadId, deletedAt: null },
+              runs: [
+                { id: headId, ordinal: 1, status: "completed" },
+                {
+                  id: RunId.make("run:merged"),
+                  ordinal: 2,
+                  status: "cancelled",
+                  batchedIntoRunId: headId,
+                },
+              ],
+              providerThreads: [],
+              providerTurns: [],
+            } as unknown as OrchestrationV2ThreadProjection),
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(AgentScope, {
+          ...AgentScope.defaultValue(),
+          kill: () => Effect.sync(() => (killed = true)),
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ThreadManagementService.ThreadManagementService;
+      yield* service.forceStopThread({ threadId, runId: headId });
+    }).pipe(Effect.provide(layerTest));
+    expect(killed).toBe(true);
   }),
 );
 

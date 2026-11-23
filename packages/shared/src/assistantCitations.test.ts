@@ -15,6 +15,7 @@ import {
   collectAssistantCitations,
   expandAssistantCitationsForProvider,
   formatAssistantCitationHref,
+  makeExpandedCitationLengthMeter,
   parseAssistantCitationHref,
   renderAssistantCitationsAsText,
   serializeAssistantCitation,
@@ -219,6 +220,38 @@ describe("assistant citation references", () => {
     expect(expanded.match(/<\/assistant_citations>/g)).toHaveLength(1);
     expect(expanded).not.toContain("<other>");
     expect(expanded).not.toContain("t3-citation://");
+    const fromAgent = expandAssistantCitationsForProvider(`${marker}`, "agent");
+    expect(fromAgent).toContain("from the agent that sent the message it appears in");
+    expect(fromAgent).not.toContain("user-authored");
+  });
+
+  it("measures the expanded length part by part as expanding the whole text does", () => {
+    const commented = { ...citation, comment: "Compare <this> & that." };
+    const other = { ...citation, start: 7, text: "Second quote" };
+    const parts = [
+      "Header with no quote.\n",
+      `\n${serializeAssistantCitation(other)} first\n`,
+      `\nagain ${serializeAssistantCitation(other)} and ${serializeAssistantCitation(commented)}\n`,
+      "\nplain",
+      ...Array.from(
+        { length: 9 },
+        (_, index) => `\n${serializeAssistantCitation({ ...citation, start: 200 + index })}`,
+      ),
+    ];
+    for (const author of ["user", "agent"] as const) {
+      const meter = makeExpandedCitationLengthMeter(author);
+      for (const [index, part] of parts.entries()) {
+        const expected = expandAssistantCitationsForProvider(
+          parts.slice(0, index + 1).join(""),
+          author,
+        ).length;
+        // Measuring alone leaves the meter as it was.
+        expect(meter.measure(part).length).toBe(expected);
+        const measured = meter.measure(part);
+        measured.keep();
+        expect(meter.measure("").length).toBe(expected);
+      }
+    }
   });
 
   it("includes bound comments in plain-text titles and stash previews without escaping", () => {

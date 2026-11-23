@@ -69,6 +69,7 @@ import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import { cancelledBeforeStart } from "./RestartBackgroundNote.ts";
+import { latestRun } from "./QueuedRunOrder.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { ThreadWorktreeRestore } from "../workspace/restoreMissingWorktree.ts";
@@ -172,6 +173,8 @@ export interface ThreadManagementSendResult {
   >;
   readonly message: OrchestrationV2ConversationMessage;
   readonly run: OrchestrationV2Run;
+  /** The run `run`'s message started in together with other queued messages; its state is the message's. */
+  readonly batchedInto?: OrchestrationV2Run;
   readonly turnItem: Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }> | null;
   readonly delivery: "started" | "queued" | "steered" | "restarted";
 }
@@ -559,11 +562,7 @@ export function isTerminalRunStatus(
   );
 }
 
-export function latestRun(
-  projection: Pick<OrchestrationV2ThreadProjection, "runs">,
-): OrchestrationV2Run | undefined {
-  return projection.runs.toSorted((left, right) => right.ordinal - left.ordinal)[0];
-}
+export { latestRun };
 
 /** The run that carries `run`'s work now: its restart continuation, or the run it was batched into. */
 function latestContinuation(
@@ -994,7 +993,19 @@ const make = Effect.gen(function* () {
           : mode === "restart"
             ? "restarted"
             : "steered";
-    return { dispatch: dispatched, projection, message, run, turnItem, delivery };
+    const batchedInto =
+      run.batchedIntoRunId === undefined
+        ? undefined
+        : projection.runs.find((candidate) => candidate.id === run.batchedIntoRunId);
+    return {
+      dispatch: dispatched,
+      projection,
+      message,
+      run,
+      ...(batchedInto === undefined ? {} : { batchedInto }),
+      turnItem,
+      delivery,
+    };
   });
 
   const waitForThread: ThreadManagementServiceShape["waitForThread"] = Effect.fn(
@@ -1107,13 +1118,15 @@ const make = Effect.gen(function* () {
         { concurrency: "unbounded" },
       ).pipe(
         Stream.mapError(loadError),
-        Stream.filter(
-          (stored) =>
-            untilDelegatedWorkSettled ||
-            stored.event.type !== "run.updated" ||
-            followedRunIds.has(stored.event.payload.id) ||
-            stored.event.payload.restartContinuationOfRunId !== undefined,
-        ),
+        Stream.filter((stored) => {
+          if (untilDelegatedWorkSettled || stored.event.type !== "run.updated") return true;
+          const run = stored.event.payload;
+          if (!followedRunIds.has(run.id)) return run.restartContinuationOfRunId !== undefined;
+          // A merged run's update comes before its batch's own, which must pass before the
+          // projection read below adds that run.
+          if (run.batchedIntoRunId !== undefined) followedRunIds.add(run.batchedIntoRunId);
+          return true;
+        }),
       ),
       initial.pending
         ? Stream.fromEffect(orchestrator.awaitRestartContinuation(initial.run))
@@ -1155,7 +1168,9 @@ const make = Effect.gen(function* () {
         )
       )
         return true;
-      const later = records.runs.filter((candidate) => candidate.ordinal > run.ordinal);
+      const later = records.runs.filter(
+        (candidate) => candidate.ordinal > run.ordinal && candidate.batchedIntoRunId === undefined,
+      );
       const cancelledMessageIds = later
         .filter((candidate) => candidate.status === "cancelled")
         .map((candidate) => candidate.userMessageId);
@@ -1330,7 +1345,7 @@ const make = Effect.gen(function* () {
           const target =
             latestActiveRun(records) ??
             records.runs
-              .filter((run) => run.status !== "queued")
+              .filter((run) => run.status !== "queued" && run.batchedIntoRunId === undefined)
               .reduce<OrchestrationV2Run | undefined>(
                 (current, run) =>
                   current === undefined || run.ordinal > current.ordinal ? run : current,

@@ -8233,7 +8233,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
       )`;
     };
-    // The newest run not held or outlived before it started, matching latestUnheldRun.
+    // A run merged into a batch never ran; the run it names carries its outcome.
+    const isBatchedAwayRun = (alias: string) => {
+      const run = sql.literal(alias);
+      return sql`(
+        ${run}.status = 'cancelled'
+        AND json_extract(${run}.payload_json, '$.batchedIntoRunId') IS NOT NULL
+      )`;
+    };
+    // The newest run not held, batched away or outlived before it started, matching latestUnheldRun.
     const presentedShellRunId = (threadId: Statement.Fragment) => sql`(
       SELECT candidate.run_id
       FROM orchestration_v2_projection_runs candidate
@@ -8242,6 +8250,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           candidate.status = 'queued'
           AND json_extract(candidate.payload_json, '$.queueHeld') IS 1
         )
+        AND NOT ${isBatchedAwayRun("candidate")}
         AND NOT (
           candidate.status = 'cancelled'
           AND json_extract(candidate.payload_json, '$.startedAt') IS NULL
@@ -8748,6 +8757,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               SELECT latest.run_id FROM orchestration_v2_projection_runs latest
               WHERE latest.thread_id = t.thread_id
                 AND NOT ${isSilentShellRun("latest")}
+                AND NOT ${isBatchedAwayRun("latest")}
               ORDER BY latest.ordinal DESC, latest.run_id DESC
               LIMIT 1
             )

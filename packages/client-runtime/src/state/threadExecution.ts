@@ -613,8 +613,12 @@ export function presentRunStop(
   let active: ThreadStructure["runs"][number] | null = null;
   let latest: ThreadStructure["runs"][number] | null = null;
   for (const candidate of projection.runs) {
-    // Queued follow-ups never ran, so they hold no Stop of their own.
-    if (candidate.status !== "queued" && candidate.ordinal > (latest?.ordinal ?? -1))
+    // Queued follow-ups and runs merged into a batch never ran, so they hold no Stop of their own.
+    if (
+      candidate.status !== "queued" &&
+      candidate.batchedIntoRunId === undefined &&
+      candidate.ordinal > (latest?.ordinal ?? -1)
+    )
       latest = candidate;
     if (
       INTERRUPTIBLE_RUN_STATUSES.has(candidate.status) &&

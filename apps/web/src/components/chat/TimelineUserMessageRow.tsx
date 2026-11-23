@@ -597,10 +597,14 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   );
   const promptLink = promptLinkFor(plainText);
   const foldSummary =
-    plainText
-      .split(/\r?\n/)
-      .find((line) => line.trim().length > 0)
-      ?.trim() ?? "";
+    row.message.batchedMessageCount === undefined
+      ? (plainText
+          .split(/\r?\n/)
+          .find((line) => line.trim().length > 0)
+          ?.trim() ?? "")
+      : gt("{count} queued messages from other threads", {
+          count: row.message.batchedMessageCount,
+        });
   const mediaCopyRecords = mediaOnly
     ? resolvedContext.records.flatMap((record) => {
         const known = asKnownContextRecord(record);

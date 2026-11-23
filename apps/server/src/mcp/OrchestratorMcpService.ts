@@ -3665,7 +3665,8 @@ const make = Effect.gen(function* () {
         messageId,
         runId: result.run.id,
         ...(result.run.delegatedTaskId === undefined ? {} : { taskId: result.run.delegatedTaskId }),
-        status: result.run.status,
+        status: (result.batchedInto ?? result.run).status,
+        ...(result.batchedInto === undefined ? {} : { batchedIntoRunId: result.batchedInto.id }),
         delivery: result.delivery,
       } satisfies OrchestratorMcpThreadSendResult;
     }),

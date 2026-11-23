@@ -583,6 +583,20 @@ describe("presentRunStop", () => {
       turnItems: [{ ...request, unresponsiveAt: now }],
       state: "unresponsive",
     },
+    {
+      name: "a settled batch whose background work ignored Stop, after the messages it took",
+      runs: [
+        { ...running, status: "completed" as const, completedAt: now },
+        {
+          ...run("run-merged", 2, "cancelled"),
+          startedAt: null,
+          completedAt: now,
+          batchedIntoRunId: running.id,
+        },
+      ],
+      turnItems: [{ ...request, unresponsiveAt: now }],
+      state: "unresponsive",
+    },
   ])("presents $name", ({ runs, turnItems, state }) => {
     expect(presentRunStop({ runs, turnItems })?.state ?? null).toBe(state);
   });

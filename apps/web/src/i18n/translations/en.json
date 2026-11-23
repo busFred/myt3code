@@ -4263,6 +4263,7 @@
   "d56fa7a67d6daa37": "Preview {label}",
   "d4864819331ed9fc": "Download {label}",
   "f8dfafaf42c3a957": "Agent",
+  "c00739c4a333db21": "{count} queued messages from other threads",
   "0647cef26e3b1fa5": "The snapshot is too large to copy.",
   "c036ab3d20c54b5b": "You",
   "6b2294cfd43aee15": "{name} (guest)",

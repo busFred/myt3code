@@ -7,9 +7,24 @@ import {
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import { isDelegatedTaskMessage } from "@t3tools/provider-core/server/IdAllocator";
-import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
+import { makeExpandedCitationLengthMeter } from "@t3tools/shared/assistantCitations";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
+
+/**
+ * The thread's newest run. A run merged into a batch keeps its higher ordinal but never ran; the
+ * run it names carries its work, so it never counts as newest.
+ */
+export function latestRun(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs">,
+): OrchestrationV2Run | undefined {
+  let latest: OrchestrationV2Run | undefined;
+  for (const run of projection.runs) {
+    if (run.batchedIntoRunId !== undefined) continue;
+    if (latest === undefined || run.ordinal > latest.ordinal) latest = run;
+  }
+  return latest;
+}
 
 export function isAutomaticCompletionRun(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
@@ -122,6 +137,9 @@ export function queuedAgentMessageBatch(
   if (next === undefined || !runJoinsBatch(next, head)) return [];
   let messages: ReadonlyMap<MessageId, OrchestrationV2ConversationMessage> | undefined;
   let runsWithUserItem: ReadonlySet<OrchestrationV2Run["id"]> | undefined;
+  // The provider-start check's length of the batch text, kept as each message joins.
+  const meter = makeExpandedCitationLengthMeter("agent");
+  let entryPrefixesLength = 0;
   const batch: Array<QueuedAgentMessage> = [];
   for (const run of ordered.slice(start)) {
     if (!runJoinsBatch(run, head)) break;
@@ -135,14 +153,19 @@ export function queuedAgentMessageBatch(
       ),
     );
     if (runsWithUserItem.has(run.id)) break;
-    if (
-      batch.length > 0 &&
-      expandAssistantCitationsForProvider(
-        batchedAgentMessagesText([...batch.map((entry) => entry.message), message]),
-      ).length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS
-    ) {
-      break;
-    }
+    const count = batch.length + 1;
+    const prefixLength = batchEntryPrefix(count, "", message).length;
+    const measured = meter.measure(`${BATCH_SEPARATOR}${batchEntryRest(message)}`);
+    // Every header names the count, so each grows with its digits.
+    const length =
+      batchHeadline("").length +
+      entryPrefixesLength +
+      prefixLength +
+      (count + 1) * String(count).length +
+      measured.length;
+    if (batch.length > 0 && length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) break;
+    measured.keep();
+    entryPrefixesLength += prefixLength;
     batch.push({ run, message });
   }
   return batch.length > 1 ? batch : [];
@@ -154,21 +177,43 @@ function agentSender(message: OrchestrationV2ConversationMessage): string {
     : `the agent in T3 thread ${JSON.stringify(message.linkedSender.threadId)} on linked environment ${JSON.stringify(message.linkedSender.environmentId)}`;
 }
 
+// Spaces, including invisible ones, that a line can hide a header behind.
+const BLANK = String.raw`[\p{Zs}\t\u180E\u200B-\u200D\u2060\uFEFF]`;
+const HEADER_LOOKALIKE = new RegExp(
+  String.raw`^((?:${BLANK}|>)*)(\[${BLANK}*T3${BLANK}*Code${BLANK}*:)`,
+  "gimu",
+);
+
 /** A body line cannot pass for one of the batch's own headers. */
 function framedBody(text: string): string {
-  return text.replace(/^([ \t]*)\[T3 Code:/gm, "$1\\[T3 Code:");
+  return text.replace(HEADER_LOOKALIKE, "$1\\$2");
 }
+
+const BATCH_SEPARATOR = "\n\n";
+
+const batchHeadline = (count: number | string) =>
+  `[T3 Code: ${count} queued messages from other threads' agents, not the user, sent together by T3 Code, oldest first.]`;
+
+// No citation can reach into a header's count, which spaces surround.
+const batchEntryPrefix = (
+  index: number,
+  count: number | string,
+  message: OrchestrationV2ConversationMessage,
+) => `[T3 Code: message ${index} of ${count}, sent ${DateTime.formatIso(message.createdAt)} by `;
+
+const batchEntryRest = (message: OrchestrationV2ConversationMessage) =>
+  `${agentSender(message)}.]\n${framedBody(message.text)}`;
 
 function batchedAgentMessagesText(
   messages: ReadonlyArray<OrchestrationV2ConversationMessage>,
 ): string {
   return [
-    `[T3 Code: ${messages.length} queued messages from other threads' agents, not the user, sent together by T3 Code, oldest first.]`,
+    batchHeadline(messages.length),
     ...messages.map(
       (message, index) =>
-        `[T3 Code: message ${index + 1} of ${messages.length}, sent ${DateTime.formatIso(message.createdAt)} by ${agentSender(message)}.]\n${framedBody(message.text)}`,
+        `${batchEntryPrefix(index + 1, messages.length, message)}${batchEntryRest(message)}`,
     ),
-  ].join("\n\n");
+  ].join(BATCH_SEPARATOR);
 }
 
 /** The head message carrying the whole batch; a sender stays only when every message has it. */

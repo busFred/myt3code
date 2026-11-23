@@ -1909,18 +1909,22 @@ const queueBehindTurn = Effect.fn("queueBehindTurn")(function* (
   )!.id;
 });
 
-/** Finishes each started turn until nothing is left in the queue. */
+/** Finishes each started turn, from the `from`th, until nothing is left in the queue. */
 const runQueueDry = Effect.fn("runQueueDry")(function* (
   harness: {
     readonly events: Queue.Queue<ProviderAdapter.ProviderAdapterV2Event>;
     readonly started: ReadonlyArray<ProviderAdapter.ProviderAdapterV2TurnInput>;
   },
   threadId: ThreadId,
+  from = 0,
+  untilQueued = 0,
 ) {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   for (
-    let index = 0;
-    (yield* orchestrator.getThreadProjection(threadId)).runs.some((run) => run.status === "queued");
+    let index = from;
+    (yield* orchestrator.getThreadProjection(threadId)).runs.filter(
+      (run) => run.status === "queued",
+    ).length > untilQueued;
     index += 1
   ) {
     const nextRunning = yield* orchestrator.streamDomainEvents.pipe(
@@ -2056,6 +2060,35 @@ it.effect("runs a queued message someone moved on its own, and its neighbours to
       assert.deepEqual(
         harness.started.map((turn) => turn.message.text),
         ["first", fromLead("a", "M1"), fromLead("a", "M3"), fromLead("a", "M2")],
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("runs a queued message moved down on its own when its queue number stays", () =>
+  Effect.gen(function* () {
+    const harness = yield* batchingHarness("batch-agent-messages-moved-down", true);
+    yield* Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = yield* harness.startFirstTurn;
+      yield* queueBehindTurn(threadId, "USER");
+      const b = yield* queueBehindTurn(threadId, "B", "thread:lead-a");
+      yield* queueBehindTurn(threadId, "C", "thread:lead-a");
+      // The user's message starts on its own and leaves B and C at 2 and 3.
+      yield* runQueueDry(harness, threadId, 0, 2);
+      // Moving B after C renumbers C to 1 and leaves B at 2.
+      yield* orchestrator.dispatch({
+        type: "queued-run.reorder",
+        commandId: CommandId.make("reorder-queued-down"),
+        threadId,
+        runId: b,
+        beforeRunId: null,
+      });
+      yield* runQueueDry(harness, threadId, 1);
+
+      assert.deepEqual(
+        harness.started.map((turn) => turn.message.text),
+        ["first", "USER", fromLead("a", "C"), fromLead("a", "B")],
       );
     }).pipe(Effect.provide(harness.layer));
   }),

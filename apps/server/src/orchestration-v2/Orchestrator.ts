@@ -196,6 +196,7 @@ import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import {
   batchedAgentMessage,
   isAutomaticCompletionRun,
+  latestRun as latestThreadRun,
   queuedAgentMessageBatch,
   queuedRunsInDeliveryOrder,
 } from "./QueuedRunOrder.ts";
@@ -4613,10 +4614,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const projection = yield* loadProjectionForCommand(command, ["runs", "runtimeRequests"]);
       if (
         command.expectedLatestRunId !== undefined &&
-        projection.runs.reduce<OrchestrationV2Run | undefined>(
-          (latest, run) => (latest === undefined || run.ordinal > latest.ordinal ? run : latest),
-          undefined,
-        )?.id !== command.expectedLatestRunId
+        latestThreadRun(projection)?.id !== command.expectedLatestRunId
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -12051,7 +12049,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (run, index) =>
         Effect.gen(function* () {
           const queuePosition = index + 1;
-          if (run.queuePosition === queuePosition) {
+          const moved = run.id === command.runId;
+          // A run moved down past later ones can keep its number; it still gets the flag.
+          if (run.queuePosition === queuePosition && (!moved || run.queueStandalone === true)) {
             return;
           }
           yield* emitEvent({
@@ -12065,7 +12065,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ...run,
               queuePosition,
               // Someone chose where it runs, so it never starts with its new neighbours.
-              ...(run.id === command.runId ? { queueStandalone: true } : {}),
+              ...(moved ? { queueStandalone: true } : {}),
             },
           });
         }),
@@ -14208,7 +14208,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       )
         ? Effect.void
         : Ref.update(effects, (existing) => [...existing, delegatedTasksStopEffect(command)]);
-    const latestRun = projection.runs.findLast((run) => run.status !== "queued");
+    const latestRun = projection.runs.findLast(
+      (run) => run.status !== "queued" && run.batchedIntoRunId === undefined,
+    );
     const target =
       projection.runs.findLast(
         (run) =>

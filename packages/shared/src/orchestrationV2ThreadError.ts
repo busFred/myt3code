@@ -129,6 +129,7 @@ export function latestUnheldRun(
   let latest: OrchestrationV2Run | null = null;
   for (const run of runs) {
     if (run.status === "queued" && run.queueHeld === true) continue;
+    if (run.batchedIntoRunId !== undefined) continue;
     if (outlivedBeforeStart(run, runs)) continue;
     if (latest === null || run.ordinal > latest.ordinal) latest = run;
   }
