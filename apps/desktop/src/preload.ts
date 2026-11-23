@@ -11,6 +11,7 @@ import type {
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 
+import { supportsTray } from "./window/CloseToTray.ts";
 import * as IpcChannels from "./ipc/channels.ts";
 import { mergeLegacyLocalStorage } from "./legacyLocalStorageMerge.ts";
 
@@ -160,7 +161,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setServiceQuitBehavior: (behavior) =>
     ipcRenderer.invoke(IpcChannels.SET_SERVICE_QUIT_BEHAVIOR_CHANNEL, behavior),
   // The Dock keeps a macOS app alive after its window closes, so only Windows and Linux get a tray.
-  ...(clientPlatform === "darwin"
+  ...(!supportsTray(clientPlatform)
     ? {}
     : {
         getCloseToTray: () => ipcRenderer.sendSync(IpcChannels.GET_CLOSE_TO_TRAY_CHANNEL) === true,

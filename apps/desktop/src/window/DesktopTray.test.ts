@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -37,25 +38,48 @@ interface Recorded {
   hides: number;
   activations: number;
   quits: number;
+  forkedDone: Deferred.Deferred<void>;
 }
 
-const harness = (platform: "linux" | "win32" | "darwin", closeToTray: boolean) => {
-  const recorded: Recorded = { shown: [], hides: 0, activations: 0, quits: 0 };
+const harness = (
+  platform: "linux" | "win32" | "darwin",
+  closeToTray: boolean,
+  show?: () => Effect.Effect<void>,
+) => {
+  const recorded: Recorded = {
+    shown: [],
+    hides: 0,
+    activations: 0,
+    quits: 0,
+    forkedDone: Deferred.makeUnsafe<void>(),
+  };
+  // Completes once the three forked tray callbacks (two shows, one quit) have run.
+  const settle = () => {
+    if (recorded.activations >= 2 && recorded.quits >= 1) {
+      Deferred.doneUnsafe(recorded.forkedDone, Effect.void);
+    }
+  };
   const layer = DesktopTray.layer.pipe(
     Layer.provideMerge(
       Layer.succeed(ElectronTray.ElectronTray, {
-        show: (input) => Effect.sync(() => void recorded.shown.push(input)),
+        show: (input) => show?.() ?? Effect.sync(() => void recorded.shown.push(input)),
         hide: Effect.sync(() => void (recorded.hides += 1)),
       }),
     ),
     Layer.provideMerge(
       Layer.mock(DesktopWindow.DesktopWindow)({
-        activate: Effect.sync(() => void (recorded.activations += 1)),
+        activate: Effect.sync(() => {
+          recorded.activations += 1;
+          settle();
+        }),
       }),
     ),
     Layer.provideMerge(
       Layer.mock(ElectronApp.ElectronApp)({
-        quit: Effect.sync(() => void (recorded.quits += 1)),
+        quit: Effect.sync(() => {
+          recorded.quits += 1;
+          settle();
+        }),
       }),
     ),
     Layer.provideMerge(
@@ -81,8 +105,6 @@ const harness = (platform: "linux" | "win32" | "darwin", closeToTray: boolean) =
   return { recorded, layer };
 };
 
-const flushForked = Effect.promise(() => Promise.resolve());
-
 describe("DesktopTray", () => {
   it.effect.each([
     { platform: "linux", icon: "/icons/icon.png" },
@@ -107,7 +129,7 @@ describe("DesktopTray", () => {
       items[0]?.click?.({} as never, undefined, {} as never);
       shown?.onClick();
       items[1]?.click?.({} as never, undefined, {} as never);
-      yield* flushForked;
+      yield* Deferred.await(recorded.forkedDone);
       assert.equal(recorded.activations, 2);
       assert.equal(recorded.quits, 1);
     }).pipe(Effect.provide(layer));
@@ -150,6 +172,18 @@ describe("DesktopTray", () => {
       yield* tray.sync;
       assert.isTrue(yield* Ref.get(state.trayActive));
       assert.equal(recorded.shown.length, 2);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps closing the window quitting when the native tray fails", () => {
+    const { recorded, layer } = harness("linux", true, () => Effect.die(new Error("no tray")));
+    return Effect.gen(function* () {
+      const tray = yield* DesktopTray.DesktopTray;
+      const state = yield* DesktopState.DesktopState;
+      yield* tray.sync;
+
+      assert.isFalse(yield* Ref.get(state.trayActive));
+      assert.equal(recorded.hides, 1);
     }).pipe(Effect.provide(layer));
   });
 });
