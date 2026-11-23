@@ -303,6 +303,7 @@ function layerTest(input: {
     setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
     setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
     setCloseToTray: () => Effect.die("unexpected close-to-tray toggle"),
+    setLastNotifiedUpstreamVersion: () => Effect.die("unexpected upstream notice update"),
     markCloseToTrayNoticeShown: Effect.sync(() => {
       const changed = !desktopSettings.closeToTrayNoticeShown;
       desktopSettings = { ...desktopSettings, closeToTrayNoticeShown: true };

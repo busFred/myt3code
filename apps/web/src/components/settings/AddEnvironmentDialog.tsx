@@ -157,7 +157,7 @@ export function AddEnvironmentDialog({
   const [bothWays, setBothWays] = useState(true);
   const [access, setAccess] = useState<AuthMcpClientAccess>("approval-required");
   const [lifetime, setLifetime] = useState<LifetimeChoice>(DEFAULT_LIFETIME_CHOICE);
-  // Set once an environment was added with "Link both ways" on, until the dialog closes.
+  // Set once an environment was added with "Bi-directional link" on, until the dialog closes.
   const [bothWaysRun, setBothWaysRun] = useState<{
     readonly environmentId: EnvironmentId;
     readonly label: string;
@@ -246,7 +246,7 @@ export function AddEnvironmentDialog({
       current({
         running: false,
         reason: gt(
-          "This pairing code cannot manage access there, so it cannot link both ways. Create a link with access management to do that.",
+          "This pairing code cannot manage access there, so it cannot link bi-directionally. Create a link with access management to do that.",
         ),
       });
       return;
@@ -268,17 +268,17 @@ export function AddEnvironmentDialog({
     current({
       running: false,
       outcomes,
-      reason: outcomes === null ? gt("Could not link both ways.") : null,
+      reason: outcomes === null ? gt("Could not link bi-directionally.") : null,
     });
     const summary = outcomes === null ? null : summarizeBothWays(outcomes);
     if (summary !== null && summary.complete && summary.changed) {
       toastManager.add({
         type: "success",
         title: summary.invited
-          ? gt("Linked {label} both ways and invited its desktop app to connect", {
+          ? gt("Linked {label} bi-directionally and invited its desktop app to connect", {
               label: readEnvironment(environmentId)?.label ?? label ?? gt("The new environment"),
             })
-          : gt("Linked both ways"),
+          : gt("Linked bi-directionally"),
       });
     }
   };
@@ -602,7 +602,7 @@ export function AddEnvironmentDialog({
         ) : null}
         {bothWaysRun.running ? (
           <p className="text-xs text-muted-foreground">
-            <T>Linking both ways…</T>
+            <T>Linking bi-directionally…</T>
           </p>
         ) : bothWaysRun.reason !== null ? (
           <p className="text-xs text-destructive">{bothWaysRun.reason}</p>

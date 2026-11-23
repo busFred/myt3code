@@ -91,8 +91,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 :root {
   --app-scrollbar-width: 6px;
   --appearance-contrast-base: 100%;
-  --appearance-contrast-boost: 0%;
-  --appearance-contrast-border-boost: 0%;
+  --appearance-contrast-boost: 100%;
+  --appearance-contrast-border-boost: 25%;
   --appearance-contrast-target: black;
   --app-scrollbar-thumb: rgb(217 217 217);
   --app-scrollbar-thumb-hover: rgb(191 191 191);
@@ -117,7 +117,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      previewMiniPlayerLayout.ts), then dialogs and popovers (50 and up). */
   --z-sheet: 46;
   --glass-blur: 12px;
-  --glass-opacity: 80%;
+  --glass-opacity: 100%;
   --glass-saturation: 1.14;
   --desktop-window-right-resize-inset: 0px;
   --workspace-topbar-height: 52px;

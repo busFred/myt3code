@@ -39,6 +39,8 @@ import * as Schema from "effect/Schema";
 import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
 import { AboutVersionTitle } from "./AboutVersionTitle";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
+import { DesktopAppSection } from "./DesktopAppSettings";
+import { UpstreamReleaseNotice } from "./UpstreamReleaseNotice";
 import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
 import {
   canCheckForUpdate,
@@ -118,8 +120,6 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
-import { nativeLanguageName, SYSTEM_LANGUAGE } from "@t3tools/client-runtime/locales";
-import { SUPPORTED_LOCALES } from "../../i18n/locales";
 import { BackgroundActivitySettingsRow } from "./BackgroundActivitySettings";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { PullRequestLinksOpenInAppSetting } from "./IntegrationsSettings";
@@ -176,6 +176,7 @@ function AboutVersionSection() {
   const updateState = useDesktopUpdateState();
   const [switchChannel, setSwitchChannel] = useState<DesktopUpdateChannel | null>(null);
   const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
+  const [isReinstalling, setIsReinstalling] = useState(false);
   const { environments } = useEnvironments();
   const sessionStates = useAtomValue(
     environmentSessionStatesAtom(
@@ -317,6 +318,27 @@ function AboutVersionSection() {
       });
   };
 
+  const reinstall = () => {
+    const bridge = window.desktopBridge;
+    if (!bridge || isReinstalling) return;
+    setIsReinstalling(true);
+    void bridge
+      .reinstallCurrentVersion()
+      .catch((error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: gt("Could not reinstall"),
+            description:
+              error instanceof Error
+                ? (thrownErrorMessage(error, resolveMessage) ?? error.message)
+                : gt("Reinstall failed."),
+          }),
+        );
+      })
+      .finally(() => setIsReinstalling(false));
+  };
+
   const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
   const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState, messages) : null;
   const buttonDisabled =
@@ -364,6 +386,18 @@ function AboutVersionSection() {
           </Tooltip>
         }
       />
+      {hasDesktopBridge ? <UpstreamReleaseNotice /> : null}
+      {hasDesktopBridge ? (
+        <SettingsRow
+          {...setting("reinstall")}
+          description={gt("Download and reinstall this version of T3 Code")}
+          control={
+            <Button size="sm" variant="outline" disabled={isReinstalling} onClick={reinstall}>
+              <T>Reinstall</T>
+            </Button>
+          }
+        />
+      ) : null}
       {hasDesktopBridge ? (
         <SettingsRow
           {...setting("update-track")}
@@ -528,7 +562,6 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode
       ? [gt("Environment identification")]
       : []),
-    ...(settings.language !== DEFAULT_UNIFIED_SETTINGS.language ? [gt("Language")] : []),
     ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
       ? [gt("Time format")]
       : []),
@@ -718,7 +751,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       htmlPreviewWidth: DEFAULT_UNIFIED_SETTINGS.htmlPreviewWidth,
       effortDisplay: DEFAULT_UNIFIED_SETTINGS.effortDisplay,
       mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
-      language: DEFAULT_UNIFIED_SETTINGS.language,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
@@ -856,9 +888,6 @@ export function GeneralSettingsPanel() {
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
   );
-  const languageValue = SUPPORTED_LOCALES.includes(settings.language)
-    ? settings.language
-    : SYSTEM_LANGUAGE;
 
   return (
     <SettingsPageContainer>
@@ -1141,50 +1170,6 @@ export function GeneralSettingsPanel() {
 
       <SettingsSection id="display" title={gt("Display")}>
         <SettingsRow
-          {...setting("language")}
-          description={<T>System default follows your browser or OS language.</T>}
-          resetAction={
-            settings.language !== DEFAULT_UNIFIED_SETTINGS.language ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset language to default")}
-                onClick={() =>
-                  updateSettings({
-                    language: DEFAULT_UNIFIED_SETTINGS.language,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Select
-              value={languageValue}
-              onValueChange={(value) => {
-                if (value) {
-                  updateSettings({ language: value });
-                }
-              }}
-            >
-              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={gt("Language")}>
-                <SelectValue>
-                  {languageValue === SYSTEM_LANGUAGE
-                    ? m(TIMESTAMP_FORMAT_LABELS.locale)
-                    : nativeLanguageName(languageValue)}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value={SYSTEM_LANGUAGE}>
-                  {m(TIMESTAMP_FORMAT_LABELS.locale)}
-                </SelectItem>
-                {SUPPORTED_LOCALES.map((locale) => (
-                  <SelectItem hideIndicator key={locale} value={locale}>
-                    {nativeLanguageName(locale)}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
-        />
-        <SettingsRow
           {...setting("time-format")}
           description={<T>System default follows your browser or OS clock preference.</T>}
           resetAction={
@@ -1230,6 +1215,8 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <DesktopAppSection />
     </SettingsPageContainer>
   );
 }

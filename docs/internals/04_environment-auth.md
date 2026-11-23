@@ -27,26 +27,44 @@ model.
   them off.
 - **The session row holds the deadline.** Verification takes a session's expiry from its row, not
   the token's `exp`, so peer-link use, a renewing device, or `renew` (`t3 auth session renew`,
-  `POST /api/auth/clients/renew`, `access:write` like revoke) can move it. Only a renewing device's
-  token (`rnw`) is also bound by its own short `exp`. A live socket's watcher wakes on any change
-  to its session, so a renew that shortens a session closes its sockets on time. Renew refuses
-  T3 Connect and desktop app sessions, whose short fixed lifetimes are what make unlinking Connect
-  or rotating the desktop secret cut them off.
-- **Pairing links can set a session lifetime.** A duration or never, for browser, bearer,
-  renewing-device and peer-link sessions, never T3 Connect or the desktop app. For a renewing
-  device it is the stored renewal window. Never is a fixed far-future expiry
-  (`NEVER_EXPIRES_AT_MILLIS`, 9999-12-31), not a null, so every `expiresAt` field, token claim and
-  `expires_at > now` query keeps working; `isNeverExpiring` tests a threshold because a linking
-  side derives its copy from `expires_in`. Extending a session never moves its expiry earlier;
-  only `renew` can. Browsers keep a cookie at most 400 days, so the session endpoint sets it again,
-  capped at 400 days, when the row no longer matches the token's expiry or outlives the cap.
-- **App invites.** A client that links two environments can leave an invite on one for that
-  machine's desktop app to connect to the other
-  ([AppInvites](../../apps/server/src/auth/AppInvites.ts)). The invite holds a one-time pairing code,
-  so the code lives in the secret store like a peer link's token and the access stream lists
-  invites without it. Only a desktop-bootstrap session can take invites, each once; a newer invite
-  for the same environment replaces the pending one. Invite changes reach the access stream as a
-  fresh snapshot because older clients cannot decode a new event type.
+  `POST /api/auth/clients/renew`, `access:write` like revoke) can move it. Lengthening a session
+  over HTTP also needs every scope it holds; shortening needs only `access:write`. The write is
+  conditional on the expiry and window it read, and the automatic extensions on the window they
+  read, so a concurrent shortening is never undone. A client renewing a peer link passes
+  `expectedSubject`, so a misreported session id cannot renew another kind of session. Only a
+  renewing device's token (`rnw`) is also bound by its own short `exp`. A live socket's or media
+  stream's watcher wakes on any change to its session, so a shortening closes them on time. Renew
+  refuses T3 Connect and desktop app sessions (`NON_RENEWABLE_SESSION_SUBJECTS`), whose short fixed
+  lifetimes are what make unlinking Connect or rotating the desktop secret cut them off.
+- **Pairing links can set a session lifetime.** A duration (at most 100 years) or never, for
+  browser, bearer, renewing-device and peer-link sessions, never T3 Connect or the desktop app. It
+  is stored on the row as the session's window and `renew` replaces it, so a renewing device or
+  peer link keeps sliding by the lifetime it was last given; a renewing device's window is at
+  least its one-hour token. Never is a fixed far-future expiry (`NEVER_EXPIRES_AT_MILLIS`,
+  9999-12-31), not a null, so every `expiresAt` field, token claim and `expires_at > now` query
+  keeps working; `isNeverExpiring` tests a threshold because a linking side derives its copy from
+  `expires_in`. Extending never moves an expiry earlier; only `renew` can. Browsers keep a cookie
+  at most 400 days, so the session endpoint sets it again, capped, when the row no longer matches
+  the token's expiry; a browser renewed from another device keeps its old cookie until it next
+  loads the app.
+- **Fork schema lives outside the numbered migrations.**
+  [ForkAuthLifetimes](../../apps/server/src/persistence/Migrations/ForkAuthLifetimes.ts) adds the
+  lifetime and window columns and the invite table idempotently after the numbered migrations, so
+  a fork id never hides upstream's next migration. An upstream migration that rebuilds
+  `auth_sessions` or `auth_pairing_links` would drop the columns: lifetimes and windows reset to
+  the defaults, expiries survive.
+- **App invites.** A client that links two environments can leave an invite for that machine's
+  desktop app to connect to the other ([AppInvites](../../apps/server/src/auth/AppInvites.ts)). The
+  app adds it without asking, so leaving one needs every standard scope, and clients leave one only
+  when the app's environment has a full-access link to the other: the code is a standard one, and
+  anything narrower would hand the app more than the link allows. Its code lives in the secret
+  store like a peer link's token, the access stream lists invites without it, and both last at
+  most a day. Invites list only https, loopback and Tailscale addresses, the rule peer links
+  follow. Only a desktop app session takes invites, each once: `desktop-bootstrap`, or
+  `desktop-service`, which only the local `t3 pair --desktop-service` can mint. A newer invite for
+  the same environment replaces the pending one; creating, revoking and taking run one at a time.
+  Invite changes reach the access stream as a fresh snapshot, because older clients cannot decode a
+  new event type.
 - **WebSocket tickets and per-RPC authorization.** Bearer and DPoP clients mint short-lived tickets
   over authenticated HTTP so long-lived tokens never appear in socket URLs. DPoP RPC tickets stay
   proof-key bound at upgrade. A successful handshake grants no extra authority: every RPC declares

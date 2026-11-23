@@ -145,7 +145,7 @@ export const GlassOpacity = Schema.Int.check(
   }),
 );
 export type GlassOpacity = typeof GlassOpacity.Type;
-const DEFAULT_GLASS_OPACITY: GlassOpacity = 80;
+const DEFAULT_GLASS_OPACITY: GlassOpacity = 100;
 
 export const MIN_APPEARANCE_CONTRAST = 50;
 export const MAX_APPEARANCE_CONTRAST = 200;
@@ -153,7 +153,7 @@ export const AppearanceContrast = Schema.Int.check(
   Schema.isBetween({ minimum: MIN_APPEARANCE_CONTRAST, maximum: MAX_APPEARANCE_CONTRAST }),
 );
 export type AppearanceContrast = typeof AppearanceContrast.Type;
-const DEFAULT_APPEARANCE_CONTRAST: AppearanceContrast = 100;
+const DEFAULT_APPEARANCE_CONTRAST: AppearanceContrast = 200;
 export const MIN_PANEL_ANIMATION_DURATION_MS = 0;
 export const MAX_PANEL_ANIMATION_DURATION_MS = 400;
 export const PanelAnimationDurationMs = Schema.Int.check(
@@ -1512,7 +1512,7 @@ export const ServerSettings = Schema.Struct({
   /** Beta: guest links for this machine's threads. Off refuses new links and pauses existing ones. */
   guestSharingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
-   * Beta: links to the user's other machines, both ways. Off refuses new links, calls over links
+   * Beta: links to the user's other machines, bi-directionally. Off refuses new links, calls over links
    * and tasks on another machine; tasks already running there finish.
    */
   linkedEnvironmentsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),

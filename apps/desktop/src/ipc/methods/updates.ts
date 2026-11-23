@@ -3,11 +3,15 @@ import {
   DesktopUpdateChannelSchema,
   DesktopUpdateCheckResultSchema,
   DesktopUpdateStateSchema,
+  DesktopUpstreamReleaseSchema,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as DesktopUpdates from "../../updates/DesktopUpdates.ts";
+import * as DesktopUpstreamRelease from "../../updates/DesktopUpstreamRelease.ts";
+import { reinstallWithConfirmation } from "../../updates/reinstallWithConfirmation.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 
@@ -64,5 +68,25 @@ export const checkForUpdate = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.updates.check")(function* () {
     const updates = yield* DesktopUpdates.DesktopUpdates;
     return yield* updates.check("web-ui");
+  }),
+});
+
+/** The same confirmation and reinstall as Help > Reinstall This Version. */
+export const reinstallCurrentVersion = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.UPDATE_REINSTALL_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.updates.reinstall")(function* () {
+    yield* reinstallWithConfirmation;
+  }),
+});
+
+export const getUpstreamRelease = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.UPDATE_GET_UPSTREAM_RELEASE_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.NullOr(DesktopUpstreamReleaseSchema),
+  handler: Effect.fn("desktop.ipc.updates.getUpstreamRelease")(function* () {
+    const upstream = yield* DesktopUpstreamRelease.DesktopUpstreamRelease;
+    return Option.getOrNull(yield* upstream.newerRelease);
   }),
 });

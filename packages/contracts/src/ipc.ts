@@ -380,6 +380,17 @@ export const DesktopUpdateCheckResultSchema = Schema.Struct({
   state: DesktopUpdateStateSchema,
 });
 
+/** A stable upstream release newer than this build. It is only announced, never installed. */
+export interface DesktopUpstreamRelease {
+  version: string;
+  url: string;
+}
+
+export const DesktopUpstreamReleaseSchema = Schema.Struct({
+  version: Schema.String,
+  url: Schema.String,
+});
+
 export const PRIMARY_LOCAL_ENVIRONMENT_ID = "primary";
 
 export interface DesktopEnvironmentBootstrap {
@@ -1243,6 +1254,10 @@ export interface DesktopBridge {
   ) => Promise<DesktopUpdateState>;
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
+  /** The newer upstream release, if any; announces only and never installs. */
+  getUpstreamRelease: () => Promise<DesktopUpstreamRelease | null>;
+  /** Asks for confirmation, then downloads and reinstalls the running version. */
+  reinstallCurrentVersion: () => Promise<void>;
   /** With a version, installs only that downloaded build. */
   installUpdate: (expectedVersion?: string) => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;

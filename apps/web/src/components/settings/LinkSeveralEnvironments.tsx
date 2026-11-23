@@ -142,7 +142,7 @@ export function LinkSeveralEnvironmentsDialog({
   const unlisted = (preset ?? []).filter(
     (id) => !candidates.some(({ machine }) => machine.environmentId === id),
   ).length;
-  // A both-ways run that left every link as it was linked nothing new.
+  // A bi-directional run that left every link as it was linked nothing new.
   const isKept = (id: EnvironmentId) => {
     const done = steps.get(id);
     return (
