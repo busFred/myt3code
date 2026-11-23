@@ -225,6 +225,23 @@ describe("DesktopSettings", () => {
     ),
   );
 
+  it.effect("persists the last announced upstream version once per version", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+
+        assert.isTrue((yield* settings.setLastNotifiedUpstreamVersion("0.1.12")).changed);
+        assert.isFalse((yield* settings.setLastNotifiedUpstreamVersion("0.1.12")).changed);
+        assert.include(
+          yield* fileSystem.readFileString(environment.desktopSettingsPath),
+          '"lastNotifiedUpstreamVersion":"0.1.12"',
+        );
+      }),
+    ),
+  );
+
   it.effect("loads lenient persisted desktop settings JSON", () =>
     withSettings(
       Effect.gen(function* () {
@@ -252,6 +269,7 @@ describe("DesktopSettings", () => {
           localEnvironmentEnabled: true,
           closeToTray: true,
           closeToTrayNoticeShown: true,
+          lastNotifiedUpstreamVersion: null,
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
           mainWindowMaximized: false,
           serverExposureMode: "network-accessible",
@@ -409,6 +427,7 @@ describe("DesktopSettings", () => {
           localEnvironmentEnabled: true,
           closeToTray: false,
           closeToTrayNoticeShown: false,
+          lastNotifiedUpstreamVersion: null,
           mainWindowBounds: null,
           mainWindowMaximized: false,
           serverExposureMode: "local-only",
@@ -442,6 +461,7 @@ describe("DesktopSettings", () => {
           localEnvironmentEnabled: true,
           closeToTray: false,
           closeToTrayNoticeShown: false,
+          lastNotifiedUpstreamVersion: null,
           mainWindowBounds: null,
           mainWindowMaximized: false,
           serverExposureMode: "local-only",

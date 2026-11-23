@@ -118,7 +118,7 @@ Unlinking on the linking side only forgets the token.
   from its token's signed but unencrypted claims and reports it as
   `peerSessionId`, so a client with access on the receiving side can renew that
   session there.
-- **Both ways is two links.** Each is made as a single link is, with a code
+- **A bi-directional link is two links.** Each is made as a single link is, with a code
   minted on the side being linked to.
   [`runLinkBothWays`](../../packages/client-runtime/src/linkBothWays.ts) runs
   both for a client connected to each side, turns Linked environments on first
@@ -126,7 +126,7 @@ Unlinking on the linking side only forgets the token.
   when the other side's link back is full access. Both link through
   `POST /api/peer-links/link`, which keeps a link a side already has rather
   than replacing its working token.
-  `t3 environment link --both-ways` first checks that the other side has
+  `t3 environment link --bidirectional` first checks that the other side has
   renew, then spends one standard code for a session that must manage access
   there, shortened to minutes, and has the other side link back through
   `POST /api/peer-links/link`, the HTTP form of `peerLinks.link` that keeps an

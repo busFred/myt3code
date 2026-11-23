@@ -1,13 +1,8 @@
-import { resolveLocale } from "@t3tools/client-runtime/locales";
 import { getTranslationsSnapshot } from "gt-react";
 
-import {
-  getClientSettings,
-  subscribeClientSettings,
-  updateClientSettings,
-} from "../hooks/useSettings";
+import { updateClientSettings } from "../hooks/useSettings";
 import { initializeI18n } from "./initializeI18n";
-import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "./locales";
+import { DEFAULT_LOCALE } from "./locales";
 import { setActiveLocale } from "./messages";
 
 type LocaleTranslations = Awaited<ReturnType<typeof getTranslationsSnapshot>>;
@@ -52,17 +47,6 @@ function activateLocale(locale: string): void {
   for (const listener of listeners) listener();
 }
 
-function applyLanguageSetting(): void {
-  // Not desktopBridge.getSystemLocale(): that is the regional/time locale, not the UI language.
-  requestedLocale = resolveLocale(
-    getClientSettings().language,
-    navigator.languages,
-    SUPPORTED_LOCALES,
-    DEFAULT_LOCALE,
-  );
-  void whenLocaleReady();
-}
-
 /** GT's own locale setters write the saved setting, which stays the only source of truth. */
 export function persistGTLocale(locale: string): void {
   void updateClientSettings({ language: locale });
@@ -70,8 +54,8 @@ export function persistGTLocale(locale: string): void {
 
 export function startI18n(): void {
   initializeI18n(persistGTLocale);
-  subscribeClientSettings(applyLanguageSetting);
-  applyLanguageSetting();
+  // Fork: the UI is English only, whatever the saved `language` setting or system language says.
+  void whenLocaleReady();
 }
 
 /** Resolves once the requested locale's translations are ready; immediate for English. */

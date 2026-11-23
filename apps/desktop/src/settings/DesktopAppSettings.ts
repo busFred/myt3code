@@ -35,6 +35,8 @@ export interface DesktopSettings {
   readonly localEnvironmentEnabled: boolean;
   readonly closeToTray: boolean;
   readonly closeToTrayNoticeShown: boolean;
+  /** The newest upstream release already announced, so each one notifies once. */
+  readonly lastNotifiedUpstreamVersion: string | null;
   readonly linuxPasswordStore: LinuxPasswordStorePreference;
   readonly mainWindowBounds: DesktopWindowBounds | null;
   readonly mainWindowMaximized: boolean;
@@ -80,6 +82,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   localEnvironmentEnabled: true,
   closeToTray: false,
   closeToTrayNoticeShown: false,
+  lastNotifiedUpstreamVersion: null,
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   mainWindowBounds: null,
   mainWindowMaximized: false,
@@ -111,6 +114,7 @@ const DesktopSettingsDocument = Schema.Struct({
   localEnvironmentEnabled: optionalReadableKey(Schema.Boolean),
   closeToTray: optionalReadableKey(Schema.Boolean),
   closeToTrayNoticeShown: optionalReadableKey(Schema.Boolean),
+  lastNotifiedUpstreamVersion: optionalReadableKey(Schema.NullOr(Schema.String)),
   linuxPasswordStore: optionalReadableKey(Schema.Unknown),
   mainWindowBounds: optionalReadableKey(Schema.NullOr(DesktopWindowBoundsDocument)),
   mainWindowMaximized: optionalReadableKey(Schema.Boolean),
@@ -185,6 +189,9 @@ export class DesktopAppSettings extends Context.Service<
       DesktopSettingsChange,
       DesktopSettingsWriteError
     >;
+    readonly setLastNotifiedUpstreamVersion: (
+      version: string,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setMainWindowBounds: (
       bounds: DesktopWindowBounds,
       isMaximized: boolean,
@@ -260,6 +267,7 @@ function normalizeDesktopSettingsDocument(
     localEnvironmentEnabled: parsed.localEnvironmentEnabled !== false,
     closeToTray: parsed.closeToTray === true,
     closeToTrayNoticeShown: parsed.closeToTrayNoticeShown === true,
+    lastNotifiedUpstreamVersion: parsed.lastNotifiedUpstreamVersion ?? null,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
@@ -295,6 +303,9 @@ function toDesktopSettingsDocument(
   }
   if (settings.closeToTrayNoticeShown !== defaults.closeToTrayNoticeShown) {
     document.closeToTrayNoticeShown = settings.closeToTrayNoticeShown;
+  }
+  if (settings.lastNotifiedUpstreamVersion !== defaults.lastNotifiedUpstreamVersion) {
+    document.lastNotifiedUpstreamVersion = settings.lastNotifiedUpstreamVersion;
   }
 
   if (settings.linuxPasswordStore !== defaults.linuxPasswordStore) {
@@ -432,6 +443,15 @@ function setCloseToTray(settings: DesktopSettings, enabled: boolean): DesktopSet
 
 function markCloseToTrayNoticeShown(settings: DesktopSettings): DesktopSettings {
   return settings.closeToTrayNoticeShown ? settings : { ...settings, closeToTrayNoticeShown: true };
+}
+
+function setLastNotifiedUpstreamVersion(
+  settings: DesktopSettings,
+  version: string,
+): DesktopSettings {
+  return settings.lastNotifiedUpstreamVersion === version
+    ? settings
+    : { ...settings, lastNotifiedUpstreamVersion: version };
 }
 
 function applyWslWindowsFallback(settings: DesktopSettings): DesktopSettings {
@@ -665,6 +685,13 @@ export const make = Effect.gen(function* () {
 
       return yield* persist((settings) => setCloseToTray(settings, enabled));
     }),
+    setLastNotifiedUpstreamVersion: Effect.fn("desktop.settings.setLastNotifiedUpstreamVersion")(
+      function* (version) {
+        yield* Effect.annotateCurrentSpan({ version });
+
+        return yield* persist((settings) => setLastNotifiedUpstreamVersion(settings, version));
+      },
+    ),
     markCloseToTrayNoticeShown: persist(markCloseToTrayNoticeShown).pipe(
       Effect.withSpan("desktop.settings.markCloseToTrayNoticeShown"),
     ),
@@ -742,6 +769,11 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         ),
         setCloseToTray: Effect.fn("DesktopAppSettings.setCloseToTray")(function (enabled) {
           return update((settings) => setCloseToTray(settings, enabled));
+        }),
+        setLastNotifiedUpstreamVersion: Effect.fn(
+          "DesktopAppSettings.setLastNotifiedUpstreamVersion",
+        )(function (version) {
+          return update((settings) => setLastNotifiedUpstreamVersion(settings, version));
         }),
         markCloseToTrayNoticeShown: update(markCloseToTrayNoticeShown),
         applyWslWindowsFallback: update(applyWslWindowsFallback),

@@ -104,7 +104,7 @@ export function LinkSeveralEnvironmentsAction({
   const chosen = selectable.filter((machine) => selected.has(machine.environmentId));
   const busy = linking.size > 0;
   const summary = linkBatchSummary(outcomes);
-  // A both-ways run that left every link as it was linked nothing new.
+  // A bi-directional run that left every link as it was linked nothing new.
   const isKept = (id: EnvironmentId) => {
     const done = steps.get(id);
     return (

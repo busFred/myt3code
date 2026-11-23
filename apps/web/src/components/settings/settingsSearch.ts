@@ -740,16 +740,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("notification toast popup completion input approval failure")],
   },
   {
-    id: "language",
-    title: msg("Language"),
-    to: "/settings/general",
-    searchTerms: [
-      msg(
-        "locale translation english deutsch german español spanish français french português portuguese brasil brazilian chinese 中文 japanese 日本語 korean 한국어 russian русский swedish svenska sprache idioma langue 语言 言語 언어 язык",
-      ),
-    ],
-  },
-  {
     id: "time-format",
     title: msg("Time format"),
     to: "/settings/general",
@@ -935,6 +925,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Version"),
     to: "/settings/about",
     searchTerms: [msg("about check for updates download install upgrade release")],
+  },
+  {
+    id: "reinstall",
+    title: msg("Reinstall"),
+    to: "/settings/about",
+    searchTerms: [msg("repair download reinstall this version fix broken install")],
+    desktopOnly: true,
   },
   {
     id: "update-track",
@@ -1337,7 +1334,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "close-to-tray",
     title: msg("Close to system tray"),
-    to: "/settings/connections",
+    to: "/settings/general",
     searchTerms: [msg("close window hide background keep running tray notification area quit")],
     desktopOnly: true,
     hiddenOnMac: true,

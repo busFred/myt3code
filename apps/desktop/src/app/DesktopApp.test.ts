@@ -52,6 +52,7 @@ import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopSnapShot from "../snapShot/DesktopSnapShot.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
+import * as DesktopUpstreamRelease from "../updates/DesktopUpstreamRelease.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
@@ -156,6 +157,10 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
         Effect.provideService(DesktopUpdates.DesktopUpdates, {
           configure: Effect.void,
         } as unknown as DesktopUpdates.DesktopUpdates["Service"]),
+        Effect.provideService(DesktopUpstreamRelease.DesktopUpstreamRelease, {
+          start: Effect.void,
+          newerRelease: Effect.succeedNone,
+        }),
         Effect.provideService(DesktopLinuxUrlHandler.DesktopLinuxUrlHandler, {
           register: stub.registerLinuxUrlHandler,
         }),

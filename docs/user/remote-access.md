@@ -507,13 +507,13 @@ an address you trust: the code is sent there.
   that long after its last use instead, or always with `never`, and
   `t3 auth session renew` on the machine it links to changes that later.
 
-### Link both ways
+### Bi-directional link
 
-A link works in one direction. To link two machines both ways from a terminal
+A link works in one direction. To link two machines bi-directionally from a terminal
 on one of them, make a code with `t3 pair` on the other machine and run:
 
 ```bash
-t3 environment link <address> --pairing-code <code> --both-ways --expire never
+t3 environment link <address> --pairing-code <code> --bidirectional --expire never
 ```
 
 It links each machine to the other and turns on Linked environments on both.
@@ -532,7 +532,7 @@ The other machine
 reaches this one at its Tailscale address; pass `--self-url <url>` to give
 another. Each step prints its result. Run the command again with a fresh code to
 retry the steps that failed; finished ones are left as they are. A machine on an
-older T3 Code cannot link both ways, and the command says so.
+older T3 Code cannot link bi-directionally, and the command says so.
 
 An agent can also hand a task to a linked machine with `delegate_task`: it runs
 there as an ordinary thread, in the project with the same repository (or the

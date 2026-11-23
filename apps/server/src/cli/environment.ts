@@ -244,7 +244,7 @@ const environmentLinkCommand = Command.make("link", {
     ),
     Flag.withDefault("approval-required" as const),
   ),
-  bothWays: Flag.Boolean("both-ways").pipe(
+  bothWays: Flag.Boolean("bidirectional").pipe(
     Flag.withDescription(
       "Also link the other environment to this one, turn on Linked environments on both, and, with full-access, invite its desktop app to connect here. The pairing code must be a standard one from `t3 pair` there.",
     ),
@@ -252,18 +252,18 @@ const environmentLinkCommand = Command.make("link", {
   ),
   inviteApp: Flag.Boolean("invite-app").pipe(
     Flag.withDescription(
-      "With --both-ways and --access full-access: leave the other side's desktop app a one-day invite to connect here. --no-invite-app skips it.",
+      "With --bidirectional and --access full-access: leave the other side's desktop app a one-day invite to connect here. --no-invite-app skips it.",
     ),
     Flag.withDefault(true),
   ),
   expire: expireFlag.pipe(
     Flag.withDescription(
-      "With --both-ways: how long both links and the desktop app's session last, `never` or a duration such as `90d`. Defaults to 30 days.",
+      "With --bidirectional: how long both links and the desktop app's session last, `never` or a duration such as `90d`. Defaults to 30 days.",
     ),
   ),
   selfUrl: Flag.String("self-url").pipe(
     Flag.withDescription(
-      "With --both-ways: an address of this environment the other one can reach. Defaults to this machine's Tailscale addresses.",
+      "With --bidirectional: an address of this environment the other one can reach. Defaults to this machine's Tailscale addresses.",
     ),
     Flag.atLeast(0),
   ),
@@ -307,7 +307,7 @@ const environmentLinkCommand = Command.make("link", {
       if (Option.isSome(flags.expire) || flags.selfUrl.length > 0) {
         return yield* new EnvironmentLinkUsageError({
           detail:
-            "--expire and --self-url need --both-ways. A one-way link lasts as long as its pairing code says; set that with `t3 pair --expire` there.",
+            "--expire and --self-url need --bidirectional. A one-way link lasts as long as its pairing code says; set that with `t3 pair --expire` there.",
         });
       }
       return yield* runWithPeerLinks(flags, (links) =>

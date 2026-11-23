@@ -86,7 +86,7 @@ export function SessionLifetimePicker({
   );
 }
 
-/** The "Link both ways" choice with the device lifetime it applies to both links. */
+/** The "Bi-directional link" choice with the device lifetime it applies to both links. */
 export function BothWaysOption({
   checked,
   onCheckedChange,
@@ -112,7 +112,7 @@ export function BothWaysOption({
         />
         <span className="min-w-0">
           <span className="block text-xs font-medium text-foreground">
-            <T>Link both ways</T>
+            <T>Bi-directional link</T>
           </span>
           <span className="block text-xs text-muted-foreground">
             <T>

@@ -73,7 +73,7 @@ const isMissingEndpoint = (error: unknown) =>
 
 const olderPeer = (label: string) =>
   new EnvironmentBothWaysError({
-    detail: `${label} runs an older T3 Code that cannot link both ways. Update it, then run this again.`,
+    detail: `${label} runs an older T3 Code that cannot link bi-directionally. Update it, then run this again.`,
   });
 
 /**

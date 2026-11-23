@@ -63,11 +63,13 @@ const loadCatalog = async (locale: string): Promise<Catalog> => {
   return catalog;
 };
 
-/** Activates the saved `language` client setting; "system" follows the OS language order. */
-export const applyLanguage = Effect.fn("desktop.i18n.applyLanguage")(function* (language: string) {
+/** Fork: native menus and dialogs are English only; the saved `language` setting is ignored. */
+export const applyLanguage = Effect.fn("desktop.i18n.applyLanguage")(function* (
+  _savedLanguage: string,
+) {
   const electronApp = yield* ElectronApp.ElectronApp;
   const locale = resolveLocale(
-    language,
+    DEFAULT_LOCALE,
     yield* electronApp.preferredSystemLanguages,
     SUPPORTED_LOCALES,
     DEFAULT_LOCALE,

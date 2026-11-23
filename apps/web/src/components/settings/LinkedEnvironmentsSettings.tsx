@@ -274,7 +274,7 @@ function LinkedEnvironmentRow({
                 disabled={busy || renewing}
                 onClick={() => void neverExpire()}
               >
-                {renewing ? gt("Updating…") : gt("Never expire (both ways)")}
+                {renewing ? gt("Updating…") : gt("Never expire (bi-directional)")}
               </Button>
             ) : null}
             <Button
@@ -345,7 +345,7 @@ function LinkEnvironmentAction({
     Option.isSome(connected) &&
     mayMint &&
     !mintFailed.has(targetId);
-  // Both ways mints a code on each machine with this app's own sessions, so only a
+  // A bi-directional link mints a code on each machine with this app's own sessions, so only a
   // machine this app is signed in to offers it.
   const canLinkBothWays = machine !== null && canMint;
   const linkingBothWays = canLinkBothWays && bothWays;
@@ -406,10 +406,10 @@ function LinkEnvironmentAction({
       toastManager.add({
         type: "success",
         title: summary.invited
-          ? gt("Linked {label} both ways and invited its desktop app to connect", {
+          ? gt("Linked {label} bi-directionally and invited its desktop app to connect", {
               label: target.label,
             })
-          : gt("Linked {label} both ways", { label: target.label }),
+          : gt("Linked {label} bi-directionally", { label: target.label }),
       });
       if (summary.lifetimeIgnored) warnLifetimeIgnored();
       handleOpenChange(false);
@@ -509,10 +509,10 @@ function LinkEnvironmentAction({
               <p className="text-xs text-muted-foreground">
                 {linkingBothWays ? (
                   <T>
-                    Already linked. Link both ways keeps existing links as they are. To change how
-                    long they last, use Never expire (both ways), or Renew under Authorized clients
-                    on the other machine. To change the access, forget the link first or untick Link
-                    both ways.
+                    Already linked. Bi-directional link keeps existing links as they are. To change
+                    how long they last, use Never expire (bi-directional), or Renew under Authorized
+                    clients on the other machine. To change the access, forget the link first or
+                    untick Bi-directional link.
                   </T>
                 ) : (
                   <T>Already linked. Linking again renews it with the access you pick.</T>
