@@ -221,23 +221,19 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
   },
 );
 
+// No timeout here: an installer can outlive an interrupted wait, so the update keeps its lock
+// until the installer's own bounds settle it.
 const runInAppUpdate = Effect.fn("ProviderMaintenanceRunner.runInAppUpdate")(function* (
   run: Effect.Effect<void, Error>,
 ) {
-  const result = { stdout: "", stdoutTruncated: false, stderrTruncated: false };
+  const result = { stdout: "", stdoutTruncated: false, stderrTruncated: false, timedOut: false };
   return yield* run.pipe(
-    Effect.timeoutOption(Duration.millis(UPDATE_TIMEOUT_MS)),
-    Effect.map((completed): ProviderMaintenanceCommandResult =>
-      Option.isSome(completed)
-        ? { ...result, stderr: "", exitCode: 0, timedOut: false }
-        : { ...result, stderr: "", exitCode: null, timedOut: true },
-    ),
+    Effect.as<ProviderMaintenanceCommandResult>({ ...result, stderr: "", exitCode: 0 }),
     Effect.catch((error) =>
       Effect.succeed<ProviderMaintenanceCommandResult>({
         ...result,
         stderr: truncateText(error.message, UPDATE_OUTPUT_MAX_BYTES),
-        exitCode: 1,
-        timedOut: false,
+        exitCode: null,
       }),
     ),
   );
@@ -303,12 +299,13 @@ function failureReason(result: ProviderMaintenanceCommandResult): string | null 
   );
 }
 
-function failureMessage(result: ProviderMaintenanceCommandResult): string {
+function failureMessage(result: ProviderMaintenanceCommandResult, inApp: boolean): string {
   if (result.timedOut) {
     return `Update timed out after ${UPDATE_TIMEOUT_MINUTES} minutes.`;
   }
-  const summary =
-    result.exitCode !== null && result.exitCode !== 0
+  const summary = inApp
+    ? "Update failed"
+    : result.exitCode !== null && result.exitCode !== 0
       ? `Update command exited with code ${result.exitCode}`
       : "Update command failed";
   const reason = failureReason(result);
@@ -568,7 +565,9 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               );
             }
 
-            if (targetVersion === undefined) {
+            // In-app updates skip an installed release themselves; this shared refresh could
+            // instead read another update's result.
+            if (targetVersion === undefined && command.run === undefined) {
               const prior = (yield* providerRegistry.getProviders).find(
                 (candidate) => candidate.instanceId === instanceId,
               );
@@ -630,7 +629,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                   status: "failed",
                   startedAt,
                   finishedAt,
-                  message: failureMessage(result),
+                  message: failureMessage(result, command.run !== undefined),
                   output: commandOutput(result),
                 }),
               );

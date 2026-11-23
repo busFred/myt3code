@@ -361,7 +361,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
   );
 
   it.effect.each([true, false])(
-    "respects background update checks (%s) while allowing explicit installation",
+    "respects background update checks (%s) while allowing explicit lookups and installation",
     (enabled) =>
       Effect.gen(function* () {
         const { installation, requests } = yield* makeHarness({
@@ -371,22 +371,56 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
           updateChecksEnabled: Effect.succeed(enabled),
         });
         yield* installation.checkForUpdate;
-        if (enabled) {
-          yield* installation.changes.pipe(
-            Stream.filter((value) => value.version === "1.5.7"),
-            Stream.runHead,
-          );
-          yield* installation.state;
-          expect(yield* installation.latestVersion).toBe("1.5.7");
-          expect(requests).toHaveLength(1);
-        } else {
-          yield* installation.changes.pipe(Stream.runHead);
-          expect(yield* installation.latestVersion).toBeNull();
-          expect(requests).toEqual([]);
-        }
+        expect(requests).toHaveLength(enabled ? 1 : 0);
+        // Its cache belongs to the latest-version lookup, not the background check's cooldown.
+        expect(yield* installation.latestVersion).toBe("1.5.7");
+        expect(requests).toHaveLength(enabled ? 2 : 1);
+        yield* installation.checkForUpdate;
+        expect(requests).toHaveLength(enabled ? 2 : 1);
         yield* installation.update;
         expect((yield* installation.state).phase).toBe("succeeded");
       }),
+  );
+
+  it.effect("retries a background update check whose manifest was unusable", () =>
+    Effect.gen(function* () {
+      let usable = false;
+      const { installation, requests } = yield* makeHarness({
+        native: true,
+        archive: Buffer.from(serverContents),
+        platform: "win32",
+        nativeManifest: (manifest) => (usable ? manifest : {}),
+      });
+      yield* installation.checkForUpdate;
+      expect(requests).toHaveLength(1);
+      usable = true;
+      yield* installation.checkForUpdate;
+      expect(requests).toHaveLength(2);
+      expect((yield* installation.state).version).toBe("1.5.7");
+    }),
+  );
+
+  it.effect("fails an update whose own installation is cancelled", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const { installation, stagingReleased } = yield* makeHarness({
+        native: true,
+        archive: Buffer.from(serverContents),
+        platform: "win32",
+        validate: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+      });
+      const update = yield* installation.update.pipe(
+        Effect.flip,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* Deferred.await(entered);
+      const { operationId } = yield* installation.state;
+      yield* installation.cancel(operationId!);
+      const failure = yield* Fiber.join(update);
+      expect(failure.operation).toBe("update");
+      expect(failure.detail).toBe("Installation cancelled. The previous runtime is unchanged.");
+      yield* Deferred.await(stagingReleased);
+    }),
   );
 
   it.effect("keeps withdrawn native releases from activating or launching", () =>

@@ -896,7 +896,7 @@ describe("AcpRegistrySupport", () => {
     );
   });
 
-  it.effect("keeps a prepared binary ready after the registry advances its version", () => {
+  it.effect("keeps an agent's installed release when a registry search advances the index", () => {
     const makeBinaryAgent = (version: string) => ({
       ...makeAgent({
         binary: {
@@ -909,6 +909,7 @@ describe("AcpRegistrySupport", () => {
       version,
     });
     let agent = makeBinaryAgent("1.2.3");
+    const requests: Array<string> = [];
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -928,14 +929,15 @@ describe("AcpRegistrySupport", () => {
       expect(yield* resolver.inspect(settings())).toMatchObject({
         status: "ready",
         distribution: "binary",
+        version: "1.2.3",
       });
       const resolved = yield* resolver.resolve(settings(), "/workspace", {});
-      expect(resolved.spawn.command).toContain(
-        "/tools/example-agent/1.2.4/linux-x86_64/bin/example-agent",
-      );
       expect(yield* fileSystem.readFileString(resolved.spawn.command)).toBe(
-        "#!/bin/sh\necho 1.2.4\n",
+        "#!/bin/sh\necho 1.2.3\n",
       );
+      expect(requests.filter((url) => url !== registryUrl)).toEqual([
+        "https://registry.test/example-agent-1.2.3.bin",
+      ]);
 
       expect(yield* resolver.uninstallManagedBinary({ agentId: agent.id })).toMatchObject({
         removed: true,
@@ -944,18 +946,121 @@ describe("AcpRegistrySupport", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        layerResolver((request) =>
-          Effect.succeed(
+        layerResolver((request) => {
+          requests.push(request.url);
+          return Effect.succeed(
             HttpClientResponse.fromWeb(
               request,
               new Response(
                 request.url === registryUrl
                   ? makeRegistry(agent)
-                  : `#!/bin/sh\necho ${agent.version}\n`,
+                  : `#!/bin/sh\necho ${/(\d+\.\d+\.\d+)\.bin$/u.exec(request.url)?.[1]}\n`,
               ),
+            ),
+          );
+        }),
+      ),
+    );
+  });
+
+  it.effect("updates only the requested agent, and only once its release installs", () => {
+    const makeBinaryAgent = (id: string, version: string) => ({
+      ...makeAgent({
+        binary: {
+          "linux-x86_64": {
+            archive: `https://registry.test/${id}-${version}.bin`,
+            cmd: "./bin/agent",
+          },
+        },
+      }),
+      id,
+      version,
+    });
+    let agents = [makeBinaryAgent("agent-a", "1.0.0"), makeBinaryAgent("agent-b", "1.0.0")];
+    let archivesAvailable = true;
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-update-",
+      });
+      const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir,
+        toolsDir: `${cacheDir}/tools`,
+        registryUrl,
+      });
+      const agentA = settings({ agentId: "agent-a" });
+      const agentB = settings({ agentId: "agent-b" });
+      yield* resolver.prepare({ agentId: "agent-a" });
+      yield* resolver.prepare({ agentId: "agent-b" });
+
+      agents = [makeBinaryAgent("agent-a", "2.0.0"), makeBinaryAgent("agent-b", "2.0.0")];
+      archivesAvailable = false;
+      yield* resolver.update(agentA).pipe(Effect.flip);
+      expect(yield* resolver.inspect(agentA)).toMatchObject({ status: "ready", version: "1.0.0" });
+      expect(yield* resolver.latestVersion(agentA)).toBe("2.0.0");
+
+      archivesAvailable = true;
+      yield* resolver.update(agentA);
+      expect(yield* resolver.inspect(agentA)).toMatchObject({ status: "ready", version: "2.0.0" });
+      expect(yield* resolver.inspect(agentB)).toMatchObject({ status: "ready", version: "1.0.0" });
+      expect((yield* resolver.resolve(agentB, "/workspace", {})).spawn.command).toContain(
+        "/tools/agent-b/1.0.0/",
+      );
+
+      yield* resolver.update(agentB);
+      expect(yield* resolver.inspect(agentB)).toMatchObject({ status: "ready", version: "2.0.0" });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        layerResolver((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              request.url === registryUrl
+                ? new Response(JSON.stringify({ version: "1.0.0", agents }))
+                : archivesAvailable
+                  ? new Response("#!/bin/sh\n")
+                  : new Response(null, { status: 503 }),
             ),
           ),
         ),
+      ),
+    );
+  });
+
+  it.effect("looks up a registry agent's latest release without adopting it", () => {
+    const agent = makeAgent({
+      binary: { "linux-x86_64": { archive: archiveUrl, cmd: "./bin/example-agent" } },
+    });
+    const requests: Array<string> = [];
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-latest-",
+      });
+      const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir,
+        toolsDir: `${cacheDir}/tools`,
+        registryUrl,
+      });
+      expect(
+        yield* resolver.latestVersion(settings({ source: "local", commandPath: "agent" })),
+      ).toBeNull();
+      expect(yield* resolver.latestVersion(settings({ agentId: " " }))).toBeNull();
+      expect(requests).toEqual([]);
+
+      expect(yield* resolver.latestVersion(settings({ distribution: "npx" }))).toBeNull();
+      expect(yield* resolver.latestVersion(settings())).toBe("1.2.3");
+      expect(yield* fileSystem.exists(`${cacheDir}/acp-registry/registry.json`)).toBe(false);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        layerResolver((request) => {
+          requests.push(request.url);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response(makeRegistry(agent))),
+          );
+        }),
       ),
     );
   });

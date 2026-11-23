@@ -73,6 +73,14 @@ function chooseRepresentativeProvider(
 const updateGroupKey = (provider: Pick<ServerProvider, "driver" | "instanceId">): string =>
   provider.driver === "acpRegistry" ? `${provider.driver}:${provider.instanceId}` : provider.driver;
 
+/** ACP Registry instances are different agents, so each goes by its own name. */
+export function providerUpdateName(
+  provider: Pick<ServerProvider, "driver"> & { readonly displayName?: string | undefined },
+): string {
+  const driverName = PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver;
+  return provider.driver === "acpRegistry" ? (provider.displayName ?? driverName) : driverName;
+}
+
 function dedupeProvidersByDriver<T extends ServerProvider>(providers: ReadonlyArray<T>): T[] {
   const latestProviderByGroup = new Map<string, T>();
 
@@ -88,10 +96,10 @@ function dedupeProvidersByDriver<T extends ServerProvider>(providers: ReadonlyAr
 }
 
 function getProviderUpdatedTitle(
-  provider: Pick<ServerProvider, "driver" | "version" | "installedVersion">,
+  provider: Pick<ServerProvider, "driver" | "displayName" | "version" | "installedVersion">,
   resolve: MessageResolver,
 ): string {
-  const providerName = PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver;
+  const providerName = providerUpdateName(provider);
   const version = provider.installedVersion ?? provider.version;
   return version
     ? resolve(
@@ -122,10 +130,10 @@ function getProviderUpdatedDescription(providerCount: number, resolve: MessageRe
 }
 
 function getProviderFailedUpdateTitle(
-  provider: Pick<ServerProvider, "driver" | "versionAdvisory">,
+  provider: Pick<ServerProvider, "driver" | "displayName" | "versionAdvisory">,
   resolve: MessageResolver,
 ): string {
-  const providerName = PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver;
+  const providerName = providerUpdateName(provider);
   const attemptedVersion = provider.versionAdvisory?.latestVersion;
   return attemptedVersion
     ? resolve(
@@ -215,12 +223,10 @@ export function canOneClickUpdateProviderCandidate(
 }
 
 function formatProviderList(
-  providers: ReadonlyArray<Pick<ServerProvider, "driver">>,
+  providers: ReadonlyArray<Pick<ServerProvider, "driver" | "displayName">>,
   resolve: MessageResolver,
 ) {
-  const names = providers.map(
-    (provider) => PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver,
-  );
+  const names = providers.map(providerUpdateName);
   if (names.length <= 1) return names.join("");
   if (names.length === 2) {
     return resolve(msg("{first} and {second}", { first: names[0], second: names[1] }));
@@ -238,6 +244,7 @@ export interface ProviderUpdateRun {
   readonly machineLabel: string;
   readonly driver: ProviderDriverKind;
   readonly instanceId: ProviderInstanceId;
+  readonly displayName?: string | undefined;
   readonly result: AtomCommandResult<
     { readonly providers: ReadonlyArray<ServerProvider> },
     unknown
@@ -252,7 +259,7 @@ export function getProviderUpdateRunOutcome(
   | { readonly status: "updated"; readonly message: string | null }
   | { readonly status: "failed"; readonly line: string } {
   if (isAtomCommandInterrupted(run.result)) return { status: "interrupted" };
-  const label = `${run.machineLabel} · ${PROVIDER_DISPLAY_NAMES[run.driver] ?? run.driver}`;
+  const label = `${run.machineLabel} · ${providerUpdateName(run)}`;
   if (run.result._tag === "Failure") {
     const error = squashAtomCommandFailure(run.result);
     return {
@@ -362,18 +369,19 @@ function latestFinishedAtForProviders(providers: ReadonlyArray<ServerProvider>):
   }, null);
 }
 
-/** Use each driver's latest finished instance so an older default-instance result cannot hide it. */
-function latestTerminalProvidersByDriver(providers: ReadonlyArray<ServerProvider>) {
-  const latestProviderByDriver = new Map<ProviderDriverKind, ServerProvider>();
+/** Use each update group's latest finished instance so an older default-instance result cannot hide it. */
+function latestTerminalProvidersByGroup(providers: ReadonlyArray<ServerProvider>) {
+  const latestProviderByGroup = new Map<string, ServerProvider>();
 
   for (const provider of providers) {
-    const current = latestProviderByDriver.get(provider.driver);
+    const key = updateGroupKey(provider);
+    const current = latestProviderByGroup.get(key);
     if (!current || (getUpdateFinishedAt(provider) ?? "") >= (getUpdateFinishedAt(current) ?? "")) {
-      latestProviderByDriver.set(provider.driver, provider);
+      latestProviderByGroup.set(key, provider);
     }
   }
 
-  return [...latestProviderByDriver.values()];
+  return [...latestProviderByGroup.values()];
 }
 
 export function getProviderUpdateSidebarPillView(
@@ -385,11 +393,10 @@ export function getProviderUpdateSidebarPillView(
   const activeProviders = dedupeProvidersByDriver(providers.filter(isProviderUpdateActive));
   if (activeProviders.length > 0) {
     const activeProvider = activeProviders[0]!;
-    const activeProviderName =
-      PROVIDER_DISPLAY_NAMES[activeProvider.driver] ?? activeProvider.driver;
+    const activeProviderName = providerUpdateName(activeProvider);
     return {
       key: `loading:${activeProviders
-        .map((provider) => `${provider.driver}:${provider.updateState?.status ?? "idle"}`)
+        .map((provider) => `${updateGroupKey(provider)}:${provider.updateState?.status ?? "idle"}`)
         .toSorted()
         .join("|")}`,
       tone: "loading",
@@ -417,7 +424,7 @@ export function getProviderUpdateSidebarPillView(
     };
   }
 
-  const recentTerminalProviders = latestTerminalProvidersByDriver(
+  const recentTerminalProviders = latestTerminalProvidersByGroup(
     providers.filter((provider) => isRecentTerminalProvider(provider, options?.visibleAfterIso)),
   );
   const terminalCandidates: ProviderUpdateSidebarPillView[] = [];
@@ -431,7 +438,7 @@ export function getProviderUpdateSidebarPillView(
       key: `failed:${failedProviders
         .map(
           (provider) =>
-            `${provider.driver}:${provider.updateState?.finishedAt ?? "pending"}:${provider.updateState?.message ?? ""}`,
+            `${updateGroupKey(provider)}:${provider.updateState?.finishedAt ?? "pending"}:${provider.updateState?.message ?? ""}`,
         )
         .toSorted()
         .join("|")}`,
@@ -455,13 +462,12 @@ export function getProviderUpdateSidebarPillView(
   );
   if (unchangedProviders.length > 0) {
     const unchangedProvider = unchangedProviders[0]!;
-    const unchangedProviderName =
-      PROVIDER_DISPLAY_NAMES[unchangedProvider.driver] ?? unchangedProvider.driver;
+    const unchangedProviderName = providerUpdateName(unchangedProvider);
     terminalCandidates.push({
       key: `unchanged:${unchangedProviders
         .map(
           (provider) =>
-            `${provider.driver}:${provider.updateState?.finishedAt ?? "pending"}:${provider.updateState?.message ?? ""}`,
+            `${updateGroupKey(provider)}:${provider.updateState?.finishedAt ?? "pending"}:${provider.updateState?.message ?? ""}`,
         )
         .toSorted()
         .join("|")}`,
@@ -500,7 +506,7 @@ export function getProviderUpdateSidebarPillView(
       key: `succeeded:${succeededProviders
         .map(
           (provider) =>
-            `${provider.driver}:${provider.updateState?.finishedAt ?? "pending"}:${provider.updateState?.message ?? ""}`,
+            `${updateGroupKey(provider)}:${provider.updateState?.finishedAt ?? "pending"}:${provider.updateState?.message ?? ""}`,
         )
         .toSorted()
         .join("|")}`,

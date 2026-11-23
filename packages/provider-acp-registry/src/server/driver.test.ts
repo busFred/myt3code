@@ -926,7 +926,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (method === "initialize") {
     send({
       id,
-      result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [], agentInfo: { name: "fake", version: "1.5.9" } },
+      result: {
+        protocolVersion: 1,
+        agentCapabilities: {},
+        authMethods: [],
+        agentInfo: { name: "fake", version: process.argv[3] ? readFileSync(process.argv[3], "utf8") : "1.5.9" },
+      },
     });
   } else if (method === "session/new") {
     const modelIds = JSON.parse(readFileSync(process.argv[2], "utf8"));
@@ -1040,10 +1045,18 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
       expect(updates).toEqual(["github-copilot-cli"]);
 
       // A user-chosen executable belongs to whatever installed it, not the registry.
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-driver-" });
+      const copilotPath = path.join(directory, "copilot");
+      yield* fileSystem.writeFileString(copilotPath, "#!/bin/sh\n");
+      yield* fileSystem.chmod(copilotPath, 0o755);
       const overridden = yield* create(
-        decodeSettings({ agentId: "github-copilot-cli", commandPath: "/missing/copilot" }),
+        decodeSettings({ agentId: "github-copilot-cli", commandPath: copilotPath }),
       );
-      expect((yield* overridden.snapshot.resolveMaintenance()).update).toBeNull();
+      const overrideMaintenance = yield* overridden.snapshot.resolveMaintenance();
+      expect(overrideMaintenance.update).toBeNull();
+      expect(overrideMaintenance.installPath).toBe(yield* fileSystem.realPath(copilotPath));
     }),
   );
 
@@ -1114,54 +1127,68 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
     }),
   );
 
-  it.effect("keeps a local agent's reported version through the next readiness check", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-driver-" });
-      const agentPath = path.join(directory, "agent.mjs");
-      const modelsPath = path.join(directory, "models.json");
-      yield* fileSystem.writeFileString(agentPath, fakeAgentSource);
-      yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["model-a"]));
+  it.effect.each([
+    { name: "local", config: { source: "local", commandPath: "agent" }, distribution: "local" },
+    {
+      name: "override",
+      config: { agentId: "test-agent", commandPath: "agent" },
+      distribution: "npx",
+    },
+  ] as const)(
+    "reports a custom executable's probed version, probed again after an update ($name)",
+    ({ config, distribution }) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-driver-" });
+        const agentPath = path.join(directory, "agent.mjs");
+        const modelsPath = path.join(directory, "models.json");
+        const versionPath = path.join(directory, "version");
+        yield* fileSystem.writeFileString(agentPath, fakeAgentSource);
+        // Two models: a single one makes the probe wait out its model-catalog grace period.
+        yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["model-a", "model-b"]));
+        yield* fileSystem.writeFileString(versionPath, "1.5.9");
 
-      const instance = yield* AcpRegistryDriver.create({
-        instanceId: identity.instanceId,
-        displayName: identity.displayName,
-        enabled: true,
-        environment: [],
-        config: decodeSettings({ source: "local", commandPath: "agent" }),
-      }).pipe(
-        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
-          ...catalogWithInspection({
-            status: "ready",
-            agentId: "agent",
-            version: null,
-            distribution: "local",
-          }),
-          resolve: () =>
-            Effect.succeed({
-              distribution: "local" as const,
-              spawn: { command: process.execPath, args: [agentPath, modelsPath] },
+        const instance = yield* AcpRegistryDriver.create({
+          instanceId: identity.instanceId,
+          displayName: identity.displayName,
+          enabled: true,
+          environment: [],
+          config: decodeSettings(config),
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+            ...catalogWithInspection({
+              status: "ready",
+              agentId: "agent",
+              version: null,
+              distribution,
             }),
-        }),
-      );
-      const probed = yield* instance.snapshot.streamChanges.pipe(
-        Stream.filter((snapshot) => snapshot.version === "1.5.9"),
-        Stream.runHead,
-        Effect.forkScoped({ startImmediately: true }),
-      );
-      yield* instance.snapshot.refresh;
-      yield* Fiber.join(probed);
+            resolve: () =>
+              Effect.succeed({
+                distribution,
+                spawn: { command: process.execPath, args: [agentPath, modelsPath, versionPath] },
+              }),
+          }),
+        );
+        const probed = yield* instance.snapshot.streamChanges.pipe(
+          Stream.filter((snapshot) => snapshot.version === "1.5.9"),
+          Stream.runHead,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* instance.snapshot.refresh;
+        yield* Fiber.join(probed);
 
-      const nextPublished = yield* instance.snapshot.streamChanges.pipe(
-        Stream.runHead,
-        Effect.forkScoped({ startImmediately: true }),
-      );
-      yield* instance.invalidateCaches ?? Effect.void;
-      yield* instance.snapshot.refresh;
-      const next = yield* Fiber.join(nextPublished);
-      expect(Option.map(next, (snapshot) => snapshot.version)).toEqual(Option.some("1.5.9"));
-    }),
+        // Readiness checks keep the reported version, so the next one after an update re-probes.
+        yield* fileSystem.writeFileString(versionPath, "1.6.0");
+        const nextPublished = yield* instance.snapshot.streamChanges.pipe(
+          Stream.runHead,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* instance.invalidateCaches ?? Effect.void;
+        yield* instance.snapshot.refresh;
+        const next = yield* Fiber.join(nextPublished);
+        expect(Option.map(next, (snapshot) => snapshot.version)).toEqual(Option.some("1.6.0"));
+      }),
   );
 
   it.effect("keeps options learned for each model across a refresh", () =>

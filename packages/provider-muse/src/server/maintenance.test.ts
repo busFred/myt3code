@@ -153,7 +153,13 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
         env: { MUSE_LOGIN: "0", MUSE_NO_AUTO_UPDATE: "0", MUSE_SYNC_UPDATE: "1" },
       });
       expect(result.update?.command).toBe(
-        `$env:MUSE_LOGIN='0'; $env:MUSE_NO_AUTO_UPDATE='0'; $env:MUSE_SYNC_UPDATE='1'; $env:MUSE_UPDATE_INTERVAL_SECONDS='0'; & '${shim}' --version`,
+        `cmd /d /c 'set MUSE_LOGIN=0&& set MUSE_NO_AUTO_UPDATE=0&& set MUSE_SYNC_UPDATE=1&& set MUSE_UPDATE_INTERVAL_SECONDS=0&& "${shim}" --version'`,
+      );
+      expect(
+        (yield* museMaintenance.resolve({ ...context, env: { MUSE_CHANNEL: "it's & co" } })).update
+          ?.command,
+      ).toBe(
+        `cmd /d /c 'set "MUSE_CHANNEL=it''s & co"&& set MUSE_LOGIN=0&& set MUSE_NO_AUTO_UPDATE=0&& set MUSE_SYNC_UPDATE=1&& set MUSE_UPDATE_INTERVAL_SECONDS=0&& "${shim}" --version'`,
       );
       // The bash launcher is not how Windows runs Muse, and a bare binary has no updater.
       expect((yield* museMaintenance.resolve({ ...context, platform: "linux" })).update).toBeNull();

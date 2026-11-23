@@ -527,7 +527,7 @@ export class AcpRegistryCatalog extends Context.Service<
     ) => Effect.Effect<AcpRegistryPrepareResult, AcpRegistryError>;
     /** The registry's current release of the configured agent, without adopting it. */
     readonly latestVersion: (settings: AcpRegistrySettings) => Effect.Effect<string | null>;
-    /** Adopts the registry's current release and installs it as these settings run it. */
+    /** Installs the registry's current release, then makes it this agent's release. */
     readonly update: (
       settings: AcpRegistrySettings,
       environment?: NodeJS.ProcessEnv,
@@ -695,6 +695,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       ? packageInstallRoot(agent, distribution)
       : path.join(packageInstallRoot(agent, distribution), "bin");
   const packageReceiptsDirectory = path.join(registryDirectory, "package-installs");
+  const adoptedReleasesDirectory = path.join(registryDirectory, "adopted");
   const registryRef = yield* Ref.make<AcpRegistryIndex | undefined>(undefined);
   // When the network last served registryRef; unset while it holds the disk cache.
   const registryFetchedAtMs = yield* Ref.make<number | undefined>(undefined);
@@ -889,6 +890,38 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       Effect.ignore,
     );
 
+  const adoptedReleasePath = (agentId: string) =>
+    path.join(adoptedReleasesDirectory, `${encodeURIComponent(agentId)}.json`);
+  // Each agent runs the release it last installed, so index refreshes and other agents' updates
+  // never move it. Agents installed before this record existed follow the shared index until then.
+  const readAdoptedRelease = (agentId: string) =>
+    fileSystem.readFileString(adoptedReleasePath(agentId)).pipe(
+      Effect.flatMap(decodeJson),
+      Effect.map(decodeRegistryAgent),
+      Effect.orElseSucceed(() => Option.none<AcpRegistryAgent>()),
+      Effect.map(Option.filter((agent) => agent.id === agentId)),
+    );
+  const adoptRelease = (agent: AcpRegistryAgent) =>
+    random.uuidV4().pipe(
+      Effect.flatMap((id) => {
+        const releasePath = adoptedReleasePath(agent.id);
+        const temporaryPath = `${releasePath}.${process.pid}-${id}.tmp`;
+        return fileSystem
+          .makeDirectory(adoptedReleasesDirectory, { recursive: true })
+          .pipe(
+            Effect.andThen(fileSystem.writeFileString(temporaryPath, JSON.stringify(agent))),
+            Effect.andThen(fileSystem.rename(temporaryPath, releasePath)),
+            Effect.ensuring(fileSystem.remove(temporaryPath, { force: true }).pipe(Effect.ignore)),
+          );
+      }),
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not record the installed ACP Registry release.", {
+          agentId: agent.id,
+          cause,
+        }),
+      ),
+    );
+
   const fetchRegistry = Effect.fn("AcpRegistryCatalog.fetchRegistry")(function* (persist = true) {
     yield* assertHttpsUrl(registryUrl, "ACP Registry index URL must use HTTPS.");
     const response = yield* httpClient.execute(HttpClientRequest.get(registryUrl)).pipe(
@@ -1005,6 +1038,13 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     if (Option.isNone(cached)) return yield* refreshRegistry();
     yield* Ref.set(registryRef, cached.value);
     return cached.value;
+  });
+
+  const agentRelease = Effect.fn("AcpRegistryCatalog.agentRelease")(function* (agentId: string) {
+    const adopted = yield* readAdoptedRelease(agentId);
+    if (Option.isSome(adopted)) return { agent: adopted.value, adopted: true };
+    const registry = yield* loadRegistry();
+    return { agent: registry.agents.find((candidate) => candidate.id === agentId), adopted: false };
   });
 
   const runCommand = Effect.fn("AcpRegistryCatalog.runCommand")(function* (
@@ -1791,36 +1831,33 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     },
   );
 
-  const installCurrentRelease = Effect.fn("AcpRegistryCatalog.installCurrentRelease")(function* (
-    agentId: string,
+  const installAndAdoptRelease = Effect.fn("AcpRegistryCatalog.installAndAdoptRelease")(function* (
+    agent: AcpRegistryAgent,
     preference: AcpRegistryDistributionPreference,
     environment: NodeJS.ProcessEnv,
   ) {
-    const registry = yield* refreshRegistry();
-    const agent = yield* findAgent(registry, agentId);
     const distribution = yield* compatibleDistribution(agent, preference);
-    if (distribution.kind === "binary") {
-      // Only explicit command overrides may use PATH copies with different ACP capabilities.
-      yield* withInstallPermit(agent.id)(
-        installBinary(agent, distribution.binaryTarget!).pipe(
-          Effect.tap(() => reservePreparedBinary(agent.id)),
-        ),
-      );
-    } else {
-      yield* withInstallPermit(agent.id)(
-        ensureGlobalPackage(agent, distribution.kind, distribution.packageName!, environment),
-      );
-    }
-    return { agent, distribution };
+    const install =
+      distribution.kind === "binary"
+        ? // Only explicit command overrides may use PATH copies with different ACP capabilities.
+          installBinary(agent, distribution.binaryTarget!).pipe(
+            Effect.andThen(reservePreparedBinary(agent.id)),
+          )
+        : ensureGlobalPackage(
+            agent,
+            distribution.kind,
+            distribution.packageName!,
+            environment,
+          ).pipe(Effect.asVoid);
+    yield* withInstallPermit(agent.id)(install.pipe(Effect.andThen(adoptRelease(agent))));
+    return distribution;
   });
 
   const prepare: AcpRegistryCatalog["Service"]["prepare"] = Effect.fn("AcpRegistryCatalog.prepare")(
     function* (input) {
-      const { agent, distribution } = yield* installCurrentRelease(
-        input.agentId,
-        "auto",
-        hostEnvironment,
-      );
+      const registry = yield* refreshRegistry();
+      const agent = yield* findAgent(registry, input.agentId);
+      const distribution = yield* installAndAdoptRelease(agent, "auto", hostEnvironment);
       return {
         agentId: agent.id,
         version: agent.version,
@@ -1830,7 +1867,6 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     },
   );
 
-  // Sessions keep the release this server adopted until an update installs a newer one.
   const latestVersion: AcpRegistryCatalog["Service"]["latestVersion"] = Effect.fn(
     "AcpRegistryCatalog.latestVersion",
   )(function* (settings) {
@@ -1846,12 +1882,14 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       : null;
   });
 
-  const update: AcpRegistryCatalog["Service"]["update"] = (settings, environment) =>
-    installCurrentRelease(
-      settings.agentId,
-      settings.distribution,
-      environment ?? hostEnvironment,
-    ).pipe(Effect.asVoid);
+  // Reads the index without sharing it, so only this agent moves, and only once it installed.
+  const update: AcpRegistryCatalog["Service"]["update"] = Effect.fn("AcpRegistryCatalog.update")(
+    function* (settings, environment) {
+      const registry = yield* fetchRegistry(false);
+      const agent = yield* findAgent(registry, settings.agentId);
+      yield* installAndAdoptRelease(agent, settings.distribution, environment ?? hostEnvironment);
+    },
+  );
 
   const validateLocalExecutable = (command: string) =>
     platform === "win32" && /\.(?:cmd|bat)$/iu.test(command)
@@ -1881,8 +1919,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       }
       const agentId = settings.agentId.trim();
       if (agentId.length === 0) return { status: "unconfigured" } as const;
-      const registry = yield* loadRegistry();
-      const agent = registry.agents.find((candidate) => candidate.id === agentId);
+      const { agent, adopted } = yield* agentRelease(agentId);
       if (agent === undefined) return { status: "not_found", agentId } as const;
       const documentationUrl = agent.website ?? agent.repository;
       const distribution = resolveAcpRegistryDistribution({
@@ -1927,8 +1964,9 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
             const exists = yield* fileSystem
               .exists(paths.executablePath)
               .pipe(Effect.orElseSucceed(() => false));
-            // Any prepared version keeps the agent ready; resolve installs the current one on demand.
-            if (!exists && !(yield* hasInstalledBinaryVersion(agent.id))) {
+            // Before an agent records its release, any prepared version keeps it ready and
+            // resolve installs the index's release on demand.
+            if (!exists && (adopted || !(yield* hasInstalledBinaryVersion(agent.id)))) {
               return {
                 status: "unprepared",
                 agentId,
@@ -2012,9 +2050,22 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           detail: "ACP Registry provider requires a registry agent ID.",
         });
       }
-      const registry = yield* loadRegistry();
-      const agent = yield* findAgent(registry, agentId);
+      const release = yield* agentRelease(agentId);
+      if (release.agent === undefined) {
+        return yield* new AcpRegistryError({
+          reason: "agent_not_found",
+          detail: `ACP Registry does not contain agent '${agentId}'.`,
+        });
+      }
+      const agent = release.agent;
       const distribution = yield* compatibleDistribution(agent, settings.distribution);
+      const adoptOnce = release.adopted
+        ? Effect.void
+        : readAdoptedRelease(agent.id).pipe(
+            Effect.flatMap((current) =>
+              Option.isNone(current) ? adoptRelease(agent) : Effect.void,
+            ),
+          );
 
       let command: string;
       let args: ReadonlyArray<string>;
@@ -2038,7 +2089,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
             distribution.kind,
             distribution.packageName!,
             effectiveEnvironment,
-          ),
+          ).pipe(Effect.tap(() => adoptOnce)),
         );
         command = installed.executablePath;
         args = distribution.args;
@@ -2048,6 +2099,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         command = yield* withInstallPermit(agent.id)(
           installBinary(agent, target).pipe(
             Effect.tap(() => consumePreparedBinaryReservation(agent.id)),
+            Effect.tap(() => adoptOnce),
           ),
         );
         args = distribution.args;

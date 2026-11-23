@@ -99,6 +99,11 @@ interface AcpRegistryEnrichmentCache {
   } | null;
 }
 
+/** Only probing a user-chosen executable reveals its version; the registry's pin does not apply. */
+function usesCustomExecutable(settings: AcpRegistrySettings): boolean {
+  return settings.source === "local" || settings.commandPath.trim().length > 0;
+}
+
 export function isAcpRegistryCacheValid(
   entry: NonNullable<AcpRegistryEnrichmentCache["entry"]>,
   inspectedVersion: string | null,
@@ -502,10 +507,9 @@ export function buildCheckedAcpRegistrySnapshot(
       ? { documentationUrl: input.inspection.documentationUrl }
       : {}),
     installed: readiness.installed,
-    version:
-      input.settings.source === "local"
-        ? (input.probe?.probe.agentVersion ?? readiness.version)
-        : readiness.version,
+    version: usesCustomExecutable(input.settings)
+      ? (input.probe?.probe.agentVersion ?? readiness.version)
+      : readiness.version,
     // Failed discovery is a warning: an installed agent may still run real turns.
     status: probeFailed ? "warning" : readiness.status,
     auth: input.probe
@@ -716,10 +720,8 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         processEnvironment,
       });
     const agentId = effectiveConfig.agentId.trim();
-    const registryManaged =
-      effectiveConfig.source === "registry" &&
-      agentId.length > 0 &&
-      effectiveConfig.commandPath.trim().length === 0;
+    const customExecutable = usesCustomExecutable(effectiveConfig);
+    const registryManaged = !customExecutable && agentId.length > 0;
     const resolveMaintenance = registryManaged
       ? () =>
           Effect.succeed(
@@ -812,18 +814,24 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             }),
           );
     });
-    // A local executable's version comes only from probing it, so readiness checks reuse the last report.
+    // A custom executable's version comes only from probing it, so readiness checks reuse the last
+    // report. After invalidation (such as an update), the next check probes so it cannot report
+    // the replaced version.
     const reportedLocalVersion = yield* Ref.make<string | null>(null);
+    const probeVersionOnNextCheck = yield* Ref.make(false);
     const checkProviderReadiness = checkAcpRegistryProviderReadiness(readinessInput).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.flatMap((provider) =>
-        Ref.get(reportedLocalVersion).pipe(
-          Effect.map((version) =>
-            provider.installed && provider.version === null && version !== null
-              ? { ...provider, version }
-              : provider,
-          ),
-        ),
+        Effect.gen(function* () {
+          if (!provider.installed || provider.version !== null) return provider;
+          const reported = yield* Ref.get(reportedLocalVersion);
+          if (reported !== null) return { ...provider, version: reported };
+          if (!customExecutable || !(yield* Ref.getAndSet(probeVersionOnNextCheck, false))) {
+            return provider;
+          }
+          const { provider: probed } = yield* enrichProviderCached(provider);
+          return probed.version === null ? provider : { ...provider, version: probed.version };
+        }),
       ),
       Effect.flatMap(withLiveRuntimeState),
     );
@@ -869,12 +877,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       const cached = cacheState.entry;
       if (
         cached !== null &&
-        isAcpRegistryCacheValid(
-          cached,
-          baseSnapshot.version,
-          effectiveConfig.source === "local",
-          now,
-        )
+        isAcpRegistryCacheValid(cached, baseSnapshot.version, customExecutable, now)
       ) {
         return {
           provider: { ...cached.provider, checkedAt: baseSnapshot.checkedAt },
@@ -882,7 +885,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         };
       }
       const enriched = yield* enrichProvider;
-      if (effectiveConfig.source === "local" && enriched.status === "ready") {
+      if (customExecutable && enriched.status === "ready") {
         yield* Ref.set(reportedLocalVersion, enriched.version);
       }
       if (enriched.status === "ready") {
@@ -1096,6 +1099,8 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         : Effect.void
       ).pipe(
         Effect.andThen(clearLearnedModels),
+        Effect.andThen(Ref.set(reportedLocalVersion, null)),
+        Effect.andThen(Ref.set(probeVersionOnNextCheck, customExecutable)),
         Effect.andThen(liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache)),
       ),
       orchestrationAdapter,
