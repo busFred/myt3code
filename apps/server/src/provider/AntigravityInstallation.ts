@@ -1031,8 +1031,14 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
       } else {
         yield* Effect.gen(function* () {
           const tar = cliArchiveTarCommand(platform, environment);
-          const list = yield* spawner.string(ChildProcess.make(tar, ["-tzf", archivePath]));
-          const types = yield* spawner.string(ChildProcess.make(tar, ["-tvzf", archivePath]));
+          // A tar that ignores SIGTERM at the deadline would otherwise hold the update locks.
+          const killHung = { forceKillAfter: "1 second" } as const;
+          const list = yield* spawner.string(
+            ChildProcess.make(tar, ["-tzf", archivePath], killHung),
+          );
+          const types = yield* spawner.string(
+            ChildProcess.make(tar, ["-tvzf", archivePath], killHung),
+          );
           if (
             list.trim() !== asset.executable.name ||
             types.trim().split(/\r?\n/u).length !== 1 ||
@@ -1048,6 +1054,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
               ChildProcess.make(tar, ["-xOzf", archivePath, asset.executable.name], {
                 stdout: "pipe",
                 stderr: "ignore",
+                ...killHung,
               }),
             );
             let extractedBytes = 0;
