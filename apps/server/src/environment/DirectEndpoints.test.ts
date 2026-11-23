@@ -120,6 +120,27 @@ describe("resolveBoundEndpoints", () => {
     ]);
   });
 
+  it("adds the MagicDNS name only while it listens on Tailscale, as linking needs", () => {
+    const input = { platform: "linux" as const, port: 3773, interfaces: INTERFACES };
+    expect(
+      resolveBoundEndpoints({ ...input, host: "0.0.0.0", tailnetName: "bb-1.tail1234.ts.net" }),
+    ).toEqual([
+      { kind: "lan", httpBaseUrl: "http://192.168.1.10:3773/" },
+      { kind: "tailnet", httpBaseUrl: "http://100.101.102.103:3773/" },
+      { kind: "tailnet", httpBaseUrl: "http://bb-1.tail1234.ts.net:3773/" },
+    ]);
+    expect(
+      resolveBoundEndpoints({
+        ...input,
+        host: "192.168.1.10",
+        tailnetName: "bb-1.tail1234.ts.net",
+      }),
+    ).toEqual([{ kind: "lan", httpBaseUrl: "http://192.168.1.10:3773/" }]);
+    expect(
+      resolveBoundEndpoints({ ...input, host: "0.0.0.0", tailnetName: "bb-1.headscale.lan" }),
+    ).toHaveLength(2);
+  });
+
   it("skips container and VM networks, which only this machine reaches", () => {
     const interfaces = {
       ...INTERFACES,

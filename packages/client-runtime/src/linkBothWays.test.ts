@@ -3,6 +3,7 @@ import {
   AuthSessionId,
   type AuthSessionLifetime,
   EnvironmentId,
+  EnvironmentPeerLinkFailedError,
   PeerLinkError,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -15,6 +16,7 @@ import {
   runLinkBothWays,
   runRenewBothWays,
 } from "./linkBothWays.ts";
+import { RemoteEnvironmentAuthFetchError } from "./rpc/http.ts";
 
 const side = (name: string, overrides: Partial<BothWaysSide> = {}): BothWaysSide => ({
   environmentId: EnvironmentId.make(`environment-${name}`),
@@ -196,6 +198,44 @@ describe("runLinkBothWays", () => {
     // The kept link and the failed one each revoke the code they left unused.
     expect(retry.calls).toContain("revoke:environment-b:link-code-environment-b");
     expect(first.calls).toContain("revoke:environment-a:link-code-environment-a");
+  });
+
+  it("links through the address the server accepts first and shows the HTTP failure's reason", async () => {
+    const refused = new EnvironmentPeerLinkFailedError({
+      code: "peer_link_failed",
+      reason: "unreachable",
+      detail: "This environment could not reach a.",
+    });
+    const wrapped = (cause: unknown) =>
+      new RemoteEnvironmentAuthFetchError({ message: "Failed to fetch code-123", cause });
+    const { ops } = recordingOps({
+      "link:environment-b->environment-a:code-environment-a": wrapped(refused),
+      "link:environment-a->environment-b:code-environment-b": wrapped(new Error("code-123")),
+    });
+    const sent: Array<string> = [];
+    const outcomes = await runLinkBothWays({
+      a: side("a", {
+        urls: ["http://192.168.1.10:3773/", "http://a.tail1234.ts.net:3773/"],
+      }),
+      b: side("b"),
+      access: "approval-required",
+      invite: false,
+      ops: {
+        ...ops,
+        link: (environmentId, input) => {
+          if (environmentId === "environment-b") sent.push(input.url);
+          return ops.link(environmentId, input);
+        },
+      },
+    });
+    expect(sent).toEqual(["http://a.tail1234.ts.net:3773/"]);
+    expect(outcomes.get("b_to_a")).toEqual({
+      kind: "failed",
+      failure: "unreachable",
+      detail: "This environment could not reach a.",
+    });
+    // Neither the wrapper's text nor an unknown cause's, which may hold the code.
+    expect(outcomes.get("a_to_b")).toEqual({ kind: "failed", failure: "other", detail: null });
   });
 
   it("does not link when links cannot be turned on, and names servers too old for a call", async () => {

@@ -121,9 +121,30 @@ export interface BothWaysOps {
   readonly isUnsupported?: (failure: unknown) => boolean;
 }
 
+/** A peer link error, the socket's or the HTTP one, or the request error wrapping the latter. */
+const peerLinkFailureOf = (
+  failure: unknown,
+): {
+  readonly error: Parameters<typeof peerLinkFailureKind>[0];
+  readonly detail: string;
+} | null => {
+  if (typeof failure !== "object" || failure === null || !("_tag" in failure)) return null;
+  if (failure._tag === "RemoteEnvironmentAuthFetchError" && "cause" in failure) {
+    return peerLinkFailureOf(failure.cause);
+  }
+  const text =
+    failure._tag === "EnvironmentPeerLinkFailedError" && "detail" in failure
+      ? failure.detail
+      : failure._tag === "PeerLinkError" && "message" in failure
+        ? failure.message
+        : undefined;
+  if (typeof text !== "string" || !("reason" in failure)) return null;
+  return { error: failure as unknown as Parameters<typeof peerLinkFailureKind>[0], detail: text };
+};
+
 /**
- * Only a peer link error, the socket's or the HTTP one, passes its message through: anything else
- * may carry the request, and with it the pairing code.
+ * Only a peer link error passes its text through, never a wrapper's own: anything else may carry
+ * the request, and with it the pairing code.
  */
 const failureOf = (
   failure: unknown,
@@ -133,19 +154,10 @@ const failureOf = (
   if (ops.isUnsupported?.(failure) === true) {
     return { kind: "failed", failure: "unsupported", detail: null };
   }
-  if (
-    typeof failure === "object" &&
-    failure !== null &&
-    "_tag" in failure &&
-    (failure._tag === "PeerLinkError" || failure._tag === "EnvironmentPeerLinkFailedError") &&
-    "reason" in failure &&
-    "message" in failure &&
-    typeof failure.message === "string"
-  ) {
-    const error = failure as unknown as Parameters<typeof peerLinkFailureKind>[0];
-    return { kind: "failed", failure: peerLinkFailureKind(error), detail: failure.message };
-  }
-  return { kind: "failed", failure: fallback, detail: null };
+  const peerLink = peerLinkFailureOf(failure);
+  return peerLink === null
+    ? { kind: "failed", failure: fallback, detail: null }
+    : { kind: "failed", failure: peerLinkFailureKind(peerLink.error), detail: peerLink.detail };
 };
 
 const settle = async (run: () => Promise<BothWaysOutcome>): Promise<BothWaysOutcome> =>
@@ -184,7 +196,11 @@ export async function runLinkBothWays(input: {
   const link = (linking: BothWaysSide, target: BothWaysSide): Promise<LinkResult> =>
     (async (): Promise<LinkResult> => {
       if (!bothOn) return { outcome: { kind: "failed", failure: "disabled", detail: null } };
-      const [url, ...alternateUrls] = target.urls;
+      // The linking server sends the code over plain http only to a Tailscale name or loopback.
+      const [url, ...alternateUrls] = [
+        ...target.urls.filter(carriesCredentialsSafely),
+        ...target.urls.filter((candidate) => !carriesCredentialsSafely(candidate)),
+      ];
       if (url === undefined) {
         return { outcome: { kind: "failed", failure: "no_address", detail: null } };
       }

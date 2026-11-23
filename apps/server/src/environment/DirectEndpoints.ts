@@ -66,6 +66,8 @@ export function resolveBoundEndpoints(input: {
   /** A cloud VM's private network is its provider's, which no client shares. */
   readonly onCloudVm?: boolean;
   readonly isolatedBridges?: ReadonlySet<string>;
+  /** This machine's MagicDNS name, listed when the server listens on Tailscale. */
+  readonly tailnetName?: string;
 }): ReadonlyArray<ServerDirectEndpoint> {
   if (isLoopbackHost(input.host)) return [];
   const tailscaleAddresses = new Set(
@@ -92,12 +94,18 @@ export function resolveBoundEndpoints(input: {
         (address) =>
           isAdvertisableAddress(address) || (NodeNet.isIPv6(address) && isTailnetHost(address)),
       );
-  return [...new Set(addresses)]
+  const endpoints = [...new Set(addresses)]
     .filter((address) => !input.onCloudVm || tailscaleAddresses.has(address))
-    .map((address) => ({
+    .map((address): ServerDirectEndpoint => ({
       kind: tailscaleAddresses.has(address) ? "tailnet" : "lan",
       httpBaseUrl: `http://${formatHostForUrl(address)}:${input.port}/`,
     }));
+  // Linked environments accept plain http to a Tailscale name, never to a 100.x address.
+  return input.tailnetName !== undefined &&
+    isTailnetHost(input.tailnetName) &&
+    endpoints.some((endpoint) => endpoint.kind === "tailnet")
+    ? [...endpoints, { kind: "tailnet", httpBaseUrl: `http://${input.tailnetName}:${input.port}/` }]
+    : endpoints;
 }
 
 const SYSFS_NET = "/sys/class/net";
@@ -185,7 +193,8 @@ export const make = Effect.gen(function* () {
   yield* Effect.forkDetach(onCloudVm);
 
   const servedEndpoint = yield* Ref.make<Option.Option<string>>(Option.none());
-  const resolveAvailable = Effect.fn("DirectEndpoints.resolveAvailable")(function* () {
+  const tailnetName = yield* Ref.make<Option.Option<string>>(Option.none());
+  const boundEndpoints = Effect.fnUntraced(function* (magicDnsName: Option.Option<string>) {
     const interfaces = NodeOS.networkInterfaces();
     const isolatedBridges =
       platform === "linux" && isWildcardHost(config.host)
@@ -193,44 +202,54 @@ export const make = Effect.gen(function* () {
             Effect.provideService(FileSystem.FileSystem, fileSystem),
           )
         : undefined;
-    const endpoints = [
-      ...resolveBoundEndpoints({
-        platform,
-        host: config.host,
-        port: config.port,
-        interfaces,
-        onCloudVm: yield* onCloudVm,
-        ...(isolatedBridges === undefined ? {} : { isolatedBridges }),
-      }),
-    ];
+    return resolveBoundEndpoints({
+      platform,
+      host: config.host,
+      port: config.port,
+      interfaces,
+      onCloudVm: yield* onCloudVm,
+      ...(isolatedBridges === undefined ? {} : { isolatedBridges }),
+      ...(Option.isSome(magicDnsName) ? { tailnetName: magicDnsName.value } : {}),
+    });
+  });
+  const resolveAvailable = Effect.fn("DirectEndpoints.resolveAvailable")(function* () {
+    const endpoints = [...(yield* boundEndpoints(yield* Ref.get(tailnetName)))];
     const servedUrl = yield* Ref.get(servedEndpoint);
     if (Option.isSome(servedUrl)) endpoints.push({ kind: "tailnet", httpBaseUrl: servedUrl.value });
     return endpoints;
   });
 
   const resolve = Effect.gen(function* () {
-    // Serve setup can fail without stopping startup; advertise only after it answers as this server.
-    if (config.tailscaleServeEnabled) {
-      const servedUrl = yield* readTailscaleStatus.pipe(
-        Effect.map((status) => status.magicDnsName),
-        Effect.flatMap((magicDnsName) => {
-          if (magicDnsName === null) return Effect.succeed(null);
-          const httpBaseUrl = buildTailscaleHttpsBaseUrl({
-            magicDnsName,
-            servePort: config.tailscaleServePort,
-          });
-          return probeTailscaleHttpsEndpoint({ baseUrl: httpBaseUrl, environmentId }).pipe(
-            Effect.map((reachable) => (reachable ? httpBaseUrl : null)),
-          );
-        }),
-        Effect.timeoutOption(TAILSCALE_ENDPOINT_TIMEOUT),
-        Effect.map(Option.flatMap(Option.fromNullishOr)),
-        Effect.orElseSucceed(() => Option.none<string>()),
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Effect.provideService(HttpClient.HttpClient, httpClient),
-      );
-      yield* Ref.set(servedEndpoint, servedUrl);
+    const listensOnTailnet = (yield* boundEndpoints(Option.none())).some(
+      (endpoint) => endpoint.kind === "tailnet",
+    );
+    if (!config.tailscaleServeEnabled && !listensOnTailnet) {
+      yield* Ref.set(tailnetName, Option.none());
+      return yield* resolveAvailable();
     }
+    const readName = yield* Ref.make<Option.Option<string>>(Option.none());
+    // Serve setup can fail without stopping startup; advertise only after it answers as this server.
+    const servedUrl = yield* readTailscaleStatus.pipe(
+      Effect.map((status) => status.magicDnsName),
+      Effect.tap((magicDnsName) => Ref.set(readName, Option.fromNullishOr(magicDnsName))),
+      Effect.flatMap((magicDnsName) => {
+        if (magicDnsName === null || !config.tailscaleServeEnabled) return Effect.succeed(null);
+        const httpBaseUrl = buildTailscaleHttpsBaseUrl({
+          magicDnsName,
+          servePort: config.tailscaleServePort,
+        });
+        return probeTailscaleHttpsEndpoint({ baseUrl: httpBaseUrl, environmentId }).pipe(
+          Effect.map((reachable) => (reachable ? httpBaseUrl : null)),
+        );
+      }),
+      Effect.timeoutOption(TAILSCALE_ENDPOINT_TIMEOUT),
+      Effect.map(Option.flatMap(Option.fromNullishOr)),
+      Effect.orElseSucceed(() => Option.none<string>()),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+    );
+    yield* Ref.set(tailnetName, yield* Ref.get(readName));
+    if (config.tailscaleServeEnabled) yield* Ref.set(servedEndpoint, servedUrl);
     return yield* resolveAvailable();
   });
 
