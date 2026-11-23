@@ -43,8 +43,9 @@ const run = async <W, A, E>(
 const PEER_LINK_CODE_LABEL = "T3 Code link";
 
 /**
- * Each op runs with this client's own session on the environment it names. In a batch a link
- * leaves the lists alone, and the batch refreshes each once when it ends.
+ * Each op runs with this client's own session on the environment it names. Links go over HTTP,
+ * which keeps a link the environment has. In a batch a link leaves the lists alone, and the batch
+ * refreshes each once when it ends.
  */
 const bothWaysOps = (
   appCodeLabel: (environmentLabel: string) => string,
@@ -66,16 +67,27 @@ const bothWaysOps = (
       },
     });
     // A server that predates peer-link codes answers with a plain code, which must not be used.
-    return Result.isSuccess(minted) &&
+    if (
+      Result.isSuccess(minted) &&
       (minted.success.purpose !== "peer-link" || minted.success.access !== input.access)
-      ? Result.fail(new Error("The environment did not issue a peer-link code."))
-      : minted;
+    ) {
+      await run(authEnvironment.revokePairingLink, {
+        environmentId,
+        input: { id: minted.success.id },
+      });
+      return Result.fail(new Error("The environment did not issue a peer-link code."));
+    }
+    return minted;
   },
-  link: (environmentId, input) =>
-    run(batch ? peerLinkEnvironment.linkInBatch : peerLinkEnvironment.link, {
-      environmentId,
-      input,
-    }),
+  link: async (environmentId, input) => {
+    const linked = await run(authEnvironment.linkPeer, { environmentId, input });
+    if (Result.isFailure(linked)) return Result.fail(linked.failure);
+    if (!batch && !linked.success.alreadyLinked) refreshPeerLinkLists([environmentId]);
+    return Result.succeed({
+      alreadyLinked: linked.success.alreadyLinked,
+      access: linked.success.link.access,
+    });
+  },
   mintAppCode: (environmentId, input) =>
     run(authEnvironment.createPairingCredential, {
       environmentId,
@@ -97,7 +109,6 @@ export function bothWaysSide(input: {
   readonly environmentId: EnvironmentId;
   readonly other: EnvironmentId;
   readonly relays: Relays;
-  readonly linksToOther: boolean;
 }): BothWaysSide | null {
   const environment = readEnvironment(input.environmentId);
   if (environment === null) return null;
@@ -114,7 +125,6 @@ export function bothWaysSide(input: {
     urls,
     linkedEnvironmentsEnabled:
       environment.serverConfig?.settings.linkedEnvironmentsEnabled === true,
-    linksToOther: input.linksToOther,
   };
 }
 
@@ -124,7 +134,6 @@ export function linkEnvironmentsBothWays(input: {
   readonly access: AuthMcpClientAccess;
   readonly lifetime: AuthSessionLifetime | undefined;
   readonly invite: boolean;
-  readonly linkedEarlier: boolean;
   readonly batch: boolean;
   readonly appCodeLabel: (environmentLabel: string) => string;
 }): Promise<ReadonlyMap<BothWaysStep, BothWaysOutcome>> {
@@ -134,7 +143,6 @@ export function linkEnvironmentsBothWays(input: {
     access: input.access,
     ...(input.lifetime === undefined ? {} : { lifetime: input.lifetime }),
     invite: input.invite,
-    linkedEarlier: input.linkedEarlier,
     ops: bothWaysOps(input.appCodeLabel, input.batch),
   });
 }

@@ -254,7 +254,6 @@ export function AddEnvironmentDialog({
     const outcomes = await runBothWays({
       a: primaryEnvironmentId,
       b: environmentId,
-      aLinksToB: false,
       access,
       lifetime,
       ...(previous === undefined ? {} : { previous }),

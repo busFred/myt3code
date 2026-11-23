@@ -75,6 +75,10 @@ const PairResult = Schema.Struct({
   httpBaseUrl: Schema.String,
 });
 
+/** An older t3 refuses the flag by name ("Unrecognized flag: --desktop-service"); nothing else does. */
+const isUnknownDesktopServiceFlag = (error: DesktopServiceConnectionError) =>
+  String(error.cause).includes("--desktop-service");
+
 const isServiceConnectionError = Schema.is(DesktopServiceConnectionError);
 export const decodeServiceStatus = Schema.decodeUnknownEffect(Schema.fromJsonString(ServiceStatus));
 const decodePairResult = Schema.decodeUnknownEffect(Schema.fromJsonString(PairResult));
@@ -388,7 +392,7 @@ export const prepareLocalBackend = Effect.fn("DesktopServiceConnection.prepareLo
         const pairArgs = ["pair", "--json", "--label", "T3 Code Desktop"];
         // Marks the session as this app's, so it can take app invites; an older t3 lacks the flag.
         const result = yield* cli("pair", [...pairArgs, "--desktop-service"]).pipe(
-          Effect.catch(() => cli("pair", pairArgs)),
+          Effect.catchIf(isUnknownDesktopServiceFlag, () => cli("pair", pairArgs)),
           Effect.flatMap(decodePairResult),
         );
         if (

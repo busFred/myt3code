@@ -476,13 +476,13 @@ export class SessionStore extends Context.Service<
       SessionCredentialInternalError
     >;
     /**
-     * Sets a live session's expiry to `lifetime` from now, earlier or later; a renewable session
-     * also takes it as its window. None when the session is revoked, expired or missing, or its
-     * expiry or window is no longer `expected`.
+     * Sets a live session's expiry to `expiresAt`, earlier or later, and its window to `lifetime`.
+     * None when the session is revoked, expired or missing, or its expiry or window is no longer
+     * `expected`.
      */
     readonly setExpiry: (
       sessionId: AuthSessionId,
-      lifetime: AuthSessionLifetime,
+      next: { readonly lifetime: AuthSessionLifetime; readonly expiresAt: DateTime.Utc },
       expected: Pick<AuthSessions.AuthSessionRecord, "expiresAt" | "renewalWindow">,
     ) => Effect.Effect<Option.Option<DateTime.Utc>, SessionCredentialInternalError>;
     readonly issueWebSocketToken: (
@@ -1134,11 +1134,8 @@ const make = Effect.gen(function* () {
   );
 
   const setExpiry: SessionStore["Service"]["setExpiry"] = Effect.fn("SessionStore.setExpiry")(
-    function* (sessionId, lifetime, expected) {
+    function* (sessionId, { lifetime, expiresAt }, expected) {
       const now = yield* DateTime.now;
-      const expiresAt = DateTime.makeUnsafe(
-        sessionLifetimeExpiresAtMillis(lifetime, now.epochMilliseconds),
-      );
       const updated = yield* authSessions.setExpiry({
         sessionId,
         expiresAt,

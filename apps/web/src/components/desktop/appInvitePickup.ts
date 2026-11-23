@@ -12,13 +12,21 @@ export type TakeInvitesResult =
  */
 export type AppInviteSignal = "pending" | "none" | "unavailable" | "unknown";
 
-export function appInviteSignal(access: {
-  readonly snapshot: { readonly appInvites?: ReadonlyArray<unknown> } | null;
-  readonly failed: boolean;
-}): AppInviteSignal {
+/** The snapshot is not resent when an invite expires, so expired ones are left out here. */
+export function appInviteSignal(
+  access: {
+    readonly snapshot: {
+      readonly appInvites?: ReadonlyArray<{ readonly expiresAt: { epochMilliseconds: number } }>;
+    } | null;
+    readonly failed: boolean;
+  },
+  nowMillis: number,
+): AppInviteSignal {
   if (access.snapshot === null) return access.failed ? "unavailable" : "unknown";
   if (access.snapshot.appInvites === undefined) return "unavailable";
-  return access.snapshot.appInvites.length > 0 ? "pending" : "none";
+  return access.snapshot.appInvites.some((invite) => invite.expiresAt.epochMilliseconds > nowMillis)
+    ? "pending"
+    : "none";
 }
 
 /** Taking writes to the server, so it runs only when there is something to take. */

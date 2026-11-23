@@ -1,6 +1,11 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, NEVER_EXPIRES_AT_MILLIS } from "@t3tools/contracts";
+import {
+  type AuthSessionLifetime,
+  EnvironmentId,
+  NEVER_EXPIRES_AT_MILLIS,
+  sessionLifetimeExpiresAtMillis,
+} from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -22,6 +27,17 @@ import * as SessionStore from "./SessionStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import { base64UrlDecodeUtf8, base64UrlEncode } from "./utils.ts";
 import * as PayloadSigner from "./PayloadSigner.ts";
+
+/** A renewal to `lifetime` from now, as EnvironmentAuth computes it once and writes it. */
+const renewalTo = (lifetime: AuthSessionLifetime) =>
+  DateTime.now.pipe(
+    Effect.map((now) => ({
+      lifetime,
+      expiresAt: DateTime.makeUnsafe(
+        sessionLifetimeExpiresAtMillis(lifetime, now.epochMilliseconds),
+      ),
+    })),
+  );
 
 const layerServerConfig = (overrides?: Partial<ServerConfig.ServerConfig["Service"]>) =>
   Layer.effect(
@@ -234,10 +250,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.lay
         .awaitInvalidation(client.sessionId)
         .pipe(Effect.forkScoped({ startImmediately: true }));
       const before = Option.getOrThrow(yield* sessions.getLive(client.sessionId));
-      yield* sessions.setExpiry(client.sessionId, { _tag: "duration", millis: 60_000 }, before);
+      yield* sessions.setExpiry(
+        client.sessionId,
+        yield* renewalTo({ _tag: "duration", millis: 60_000 }),
+        before,
+      );
       // Writes based on the row as it was before cannot undo that renewal.
       expect(
-        Option.isNone(yield* sessions.setExpiry(client.sessionId, { _tag: "never" }, before)),
+        Option.isNone(
+          yield* sessions.setExpiry(client.sessionId, yield* renewalTo({ _tag: "never" }), before),
+        ),
       ).toBe(true);
       const extended = yield* sessions.extend(
         client.sessionId,
@@ -288,7 +310,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.lay
       // Renewing to never makes the window never, and the token stays short.
       yield* sessions.setExpiry(
         client.sessionId,
-        { _tag: "never" },
+        yield* renewalTo({ _tag: "never" }),
         Option.getOrThrow(yield* sessions.getLive(client.sessionId)),
       );
       yield* sessions.renew(renewed.token, {
@@ -300,7 +322,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.lay
       // A token never outlives its session's window, issued or renewed.
       yield* sessions.setExpiry(
         client.sessionId,
-        { _tag: "duration", millis: Duration.toMillis(Duration.minutes(10)) },
+        yield* renewalTo({ _tag: "duration", millis: Duration.toMillis(Duration.minutes(10)) }),
         Option.getOrThrow(yield* sessions.getLive(client.sessionId)),
       );
       const now = (yield* DateTime.now).epochMilliseconds;

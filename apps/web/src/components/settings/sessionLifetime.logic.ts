@@ -102,15 +102,6 @@ export function summarizeBothWays(
   };
 }
 
-/** Links that finished need no second run: a retry marks them so only the failed steps run. */
-export const linkDoneIn = (
-  outcomes: ReadonlyMap<BothWaysStep, BothWaysOutcome> | undefined,
-  step: "a_to_b" | "b_to_a",
-) => {
-  const kind = outcomes?.get(step)?.kind;
-  return kind === "done" || kind === "skipped";
-};
-
 /** A retry skips what an earlier run finished, which stays done for this request. */
 export function mergeBothWaysRetry(
   previous: ReadonlyMap<BothWaysStep, BothWaysOutcome> | undefined,

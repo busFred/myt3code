@@ -92,7 +92,13 @@ export function LinkSeveralEnvironmentsAction({
     reportFailure: false,
     reportDefect: false,
   });
-  const candidates = linkBatchCandidates(machines, writable, linksState);
+  // A machine linked one way with two-way steps left stays pickable, so a retry finishes them.
+  const unfinished = new Set(
+    bothWays
+      ? [...steps].flatMap(([id, outcomes]) => (summarizeBothWays(outcomes).complete ? [] : [id]))
+      : [],
+  );
+  const candidates = linkBatchCandidates(machines, writable, linksState, unfinished);
   const selectable = candidates.flatMap(({ machine, blocked }) =>
     blocked === null && outcomes.get(machine.environmentId)?.kind !== "linked" ? [machine] : [],
   );
@@ -135,7 +141,6 @@ export function LinkSeveralEnvironmentsAction({
         const stepOutcomes = await runBothWays({
           a: environmentId,
           b: id,
-          aLinksToB: false,
           access,
           lifetime,
           batch: true,
@@ -357,7 +362,11 @@ export function LinkSeveralEnvironmentsAction({
             />
             <BothWaysOption
               checked={bothWays}
-              onCheckedChange={setBothWays}
+              onCheckedChange={(next) => {
+                setBothWays(next);
+                setSteps(NO_STEPS);
+                setOutcomes(NO_OUTCOMES);
+              }}
               lifetime={lifetime}
               onLifetimeChange={(next) => {
                 setLifetime(next);

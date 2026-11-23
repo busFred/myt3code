@@ -137,7 +137,9 @@ its Sharing & access page stays open. If you leave or reload that page, create
 another link to share.
 
 To choose how long the device stays signed in, pass `--expire` with a duration
-such as `90d` or `1y`, or `never`:
+such as `90d` or `1y`, or `never`. A browser gets a fixed end: it signs in again
+after that long. Phones and apps that renew their own sign-in stay signed in
+while used within that long instead, at least 10 minutes:
 
 ```bash
 t3 pair --expire never
@@ -155,7 +157,9 @@ To change a device that is already paired, find its session id with
 t3 auth session renew <session-id> --expire never
 ```
 
-A duration counts from now and can also end a session sooner. Making a session
+A duration counts from now and can also end a session sooner; for a phone or app
+that renews its own sign-in it is again how long it may go unused, at least 10
+minutes. Making a session
 last longer from a device needs every permission that session has; a device
 with fewer can only shorten it. T3 Connect and desktop app sessions keep their
 own lifetimes. A browser renewed from another device picks up its new lifetime
@@ -514,10 +518,12 @@ t3 environment link <address> --pairing-code <code> --both-ways --expire never
 
 It links each machine to the other and turns on Linked environments on both.
 With `--access full-access` it also invites the other machine's desktop app to
-connect to this one, once it has made a link; the invite lasts a day, and
-`--no-invite-app` skips it.
+connect to this one, when the other machine's link here has full access, new or
+not; the invite lasts a day, and `--no-invite-app` skips it.
 Links with less access leave no invite, because the app would get more access
-than the link. The code must be able to manage access there, as a plain
+than the link. A machine that is already linked keeps its link. The invite needs
+a code that gives every standard permission, as a plain `t3 pair` code does;
+with a narrower one the command still links and says the invite was not left. The code must be able to manage access there, as a plain
 `t3 pair` code can; it is spent once for a session that ends when the command
 does. `--expire` sets how long both links and the invited app stay signed in.
 The other machine

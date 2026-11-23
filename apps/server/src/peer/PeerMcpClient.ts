@@ -143,7 +143,7 @@ const make = Effect.gen(function* () {
 
   // A peer that renews a used link says when it now ends; one that does not sends nothing.
   const recordLinkExpiry = (
-    link: PeerLinks.ResolvedPeerLink["link"],
+    { link, token }: Pick<PeerLinks.ResolvedPeerLink, "link" | "token">,
     headers: Readonly<Record<string, string>>,
   ) =>
     Option.match(
@@ -156,7 +156,7 @@ const make = Effect.gen(function* () {
       ),
       {
         onNone: () => Effect.void,
-        onSome: (expiresAt) => links.recordExpiry(link.environmentId, expiresAt),
+        onSome: (expiresAt) => links.recordExpiry(link.environmentId, expiresAt, token),
       },
     );
 
@@ -189,7 +189,7 @@ const make = Effect.gen(function* () {
           message: `The linked environment refused to start an MCP session (HTTP ${initialized.status}).`,
         });
       }
-      yield* recordLinkExpiry(link, initialized.headers);
+      yield* recordLinkExpiry({ link, token }, initialized.headers);
       yield* post(
         url,
         token,
@@ -262,7 +262,7 @@ const make = Effect.gen(function* () {
           message: `The linked environment answered HTTP ${response.status}.`,
         });
       }
-      yield* recordLinkExpiry(resolved.link, response.headers);
+      yield* recordLinkExpiry(resolved, response.headers);
       const body = yield* decodeToolCallResponse(
         responseJson(response.headers["content-type"], yield* response.text),
       ).pipe(

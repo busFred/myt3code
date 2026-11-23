@@ -2,12 +2,14 @@ import {
   AuthAccessTokenType,
   AuthAccessWriteScope,
   AuthEnvironmentBootstrapTokenType,
+  type AuthEnvironmentScope,
   type AuthMcpClientAccess,
   type AuthSessionLifetime,
   AuthSettingsWriteScope,
   AuthStandardClientScopes,
   AuthTokenExchangeGrantType,
   EnvironmentHttpApi,
+  isNeverExpiring,
   MAX_APP_INVITE_TTL_MILLIS,
   mcpClientScopes,
 } from "@t3tools/contracts";
@@ -129,6 +131,63 @@ interface StepOutcome {
   readonly text: string;
 }
 
+/** When a link ends, for printing. */
+export const describeExpiry = (expiresAt: DateTime.Utc) =>
+  isNeverExpiring(expiresAt) ? "never expires" : `until ${DateTime.formatIso(expiresAt)}`;
+
+const wantsInvite = (input: {
+  readonly access: AuthMcpClientAccess;
+  readonly inviteApp: boolean;
+}) => input.inviteApp && input.access === "full-access";
+
+/**
+ * The scopes the pairing code is spent for there: managing access and settings, the link's own,
+ * and, when an invite may follow, every standard scope, which leaving an invite requires.
+ */
+export const bothWaysScopes = (input: {
+  readonly access: AuthMcpClientAccess;
+  readonly inviteApp: boolean;
+}): ReadonlyArray<AuthEnvironmentScope> => [
+  ...new Set<AuthEnvironmentScope>([
+    AuthAccessWriteScope,
+    AuthSettingsWriteScope,
+    ...mcpClientScopes(input.access),
+    ...(wantsInvite(input) ? AuthStandardClientScopes : []),
+  ]),
+];
+
+/**
+ * Why no invite is left, or null to leave one: only with full access, when the other side links
+ * here at full access after this run, made now or before, and when the session there may leave
+ * one. A code that cannot is a failure, so a rerun with one that can retries it.
+ */
+export const inviteSkipReason = (input: {
+  readonly access: AuthMcpClientAccess;
+  readonly inviteApp: boolean;
+  readonly granted: ReadonlyArray<string>;
+  readonly peerLinkAccess: AuthMcpClientAccess | undefined;
+  readonly peerLabel: string;
+}): StepOutcome | null => {
+  const skipped = (why: string) => ({ ok: true, text: `skipped: ${why}` });
+  if (!input.inviteApp) return skipped("--no-invite-app");
+  if (input.access !== "full-access") {
+    return skipped("only a full-access link invites the desktop app");
+  }
+  if (input.peerLinkAccess === undefined) return skipped(`${input.peerLabel} has no link here`);
+  if (input.peerLinkAccess !== "full-access") {
+    return skipped(
+      `${input.peerLabel} keeps its ${input.peerLinkAccess} link here, and the invite would give its app more`,
+    );
+  }
+  if (AuthStandardClientScopes.some((scope) => !input.granted.includes(scope))) {
+    return {
+      ok: false,
+      text: `not possible with that pairing code, which cannot give every standard access on ${input.peerLabel}. Rerun with a code from \`t3 pair\` there to leave the invite`,
+    };
+  }
+  return null;
+};
+
 const describeFailure = (error: unknown): string =>
   typeof error === "object" && error !== null && "message" in error
     ? String(error.message)
@@ -190,14 +249,8 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
         subject_token: input.pairingCode,
         subject_token_type: AuthEnvironmentBootstrapTokenType,
         requested_token_type: AuthAccessTokenType,
-        // A code can delegate only scopes its minting session holds.
-        scope: encodeOAuthScope([
-          ...new Set([
-            AuthAccessWriteScope,
-            AuthSettingsWriteScope,
-            ...mcpClientScopes(input.access),
-          ]),
-        ]),
+        // A code can delegate only scopes its minting session holds; it grants those it has.
+        scope: encodeOAuthScope(bothWaysScopes(input)),
         client_label: `t3 environment link from ${self.label}`,
         client_device_type: "bot",
       },
@@ -210,7 +263,8 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
           }),
       ),
     );
-  if (!(parseOAuthScope(issued.scope) ?? []).includes(AuthAccessWriteScope)) {
+  const granted = parseOAuthScope(issued.scope) ?? [];
+  if (!granted.includes(AuthAccessWriteScope)) {
     return yield* new EnvironmentBothWaysError({
       detail: `That pairing code cannot manage access on ${peer.label}. Create one with \`t3 pair\` there, which can.`,
     });
@@ -237,8 +291,8 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
   );
 
   const outcomes: Array<StepOutcome> = [];
-  // The invite gives the other side's app full use here, so it follows only a link made now.
-  let linkedNow = false;
+  // The access of the other side's link here after this run, which decides the invite.
+  let peerLinkAccess: AuthMcpClientAccess | undefined;
   // Through a running server, which then takes the change at once; the link back needs it on.
   const turnOnHere = RunningServer.changeState({
     scopes: [AuthSettingsWriteScope],
@@ -290,16 +344,16 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
           },
         })
         .pipe(Effect.tapError(() => auth.revokePairingLink(code.id).pipe(Effect.ignore)));
+      peerLinkAccess = linked.link.access;
       if (linked.alreadyLinked) {
         yield* auth.revokePairingLink(code.id).pipe(Effect.ignore);
-        return "already linked, left as it is";
+        return `already linked with ${linked.link.access} access, left as it is`;
       }
-      linkedNow = true;
       const enabled = [
         ...(turnedOn ? [self.label] : []),
         ...(linked.enabledLinkedEnvironments ? [peer.label] : []),
       ];
-      return `linked with ${linked.link.access} access, until ${DateTime.formatIso(linked.link.expiresAt)}${enabled.length > 0 ? `; turned on Linked environments on ${enabled.join(" and ")}` : ""}`;
+      return `linked with ${linked.link.access} access, ${describeExpiry(linked.link.expiresAt)}${enabled.length > 0 ? `; turned on Linked environments on ${enabled.join(" and ")}` : ""}`;
     }),
   );
 
@@ -340,42 +394,48 @@ export const linkBothWays = Effect.fn("environment.linkBothWays")(function* (inp
         yield* revokeCode;
         return "already linked, left as it is";
       }
-      linkedNow = true;
-      return `linked with ${linked.link.access} access, until ${DateTime.formatIso(linked.link.expiresAt)}${lifetime && code.lifetime === undefined ? ` (${peer.label} ignored --expire)` : ""}`;
+      return `linked with ${linked.link.access} access, ${describeExpiry(linked.link.expiresAt)}${lifetime && code.lifetime === undefined ? ` (${peer.label} ignored --expire)` : ""}`;
     }),
   );
 
   // The invite's code gives that app full use of this environment, more than a narrower link.
-  yield* step(
-    `${peer.label} desktop app`,
-    Effect.gen(function* () {
-      if (!input.inviteApp) return "skipped (--no-invite-app)";
-      if (input.access !== "full-access") {
-        return "skipped: only a full-access link invites the desktop app";
-      }
-      if (!linkedNow) return "skipped: no link was made this time";
-      const app = yield* auth.createPairingLink({
-        scopes: AuthStandardClientScopes,
-        subject: "one-time-token",
-        label: `${peer.label} desktop app`,
-        ttl: Duration.millis(MAX_APP_INVITE_TTL_MILLIS),
-        ...(lifetime ? { lifetime } : {}),
-      });
-      const invite = yield* client.access
-        .createAppInvite({
-          headers: {},
-          payload: {
-            environmentId: self.environmentId,
-            label: self.label,
-            urls: [selfUrl, ...selfAlternates],
-            credential: app.credential,
-            credentialExpiresAt: app.expiresAt,
-          },
-        })
-        .pipe(Effect.tapError(() => auth.revokePairingLink(app.id).pipe(Effect.ignore)));
-      return `invited to connect to ${self.label}, until ${DateTime.formatIso(invite.expiresAt)}`;
-    }),
-  );
+  const inviteLabel = `${peer.label} desktop app`;
+  const skipInvite = inviteSkipReason({
+    access: input.access,
+    inviteApp: input.inviteApp,
+    granted,
+    peerLinkAccess,
+    peerLabel: peer.label,
+  });
+  if (skipInvite !== null) {
+    outcomes.push({ ...skipInvite, text: `${inviteLabel}: ${skipInvite.text}` });
+  } else {
+    yield* step(
+      inviteLabel,
+      Effect.gen(function* () {
+        const app = yield* auth.createPairingLink({
+          scopes: AuthStandardClientScopes,
+          subject: "one-time-token",
+          label: `${peer.label} desktop app`,
+          ttl: Duration.millis(MAX_APP_INVITE_TTL_MILLIS),
+          ...(lifetime ? { lifetime } : {}),
+        });
+        const invite = yield* client.access
+          .createAppInvite({
+            headers: {},
+            payload: {
+              environmentId: self.environmentId,
+              label: self.label,
+              urls: [selfUrl, ...selfAlternates],
+              credential: app.credential,
+              credentialExpiresAt: app.expiresAt,
+            },
+          })
+          .pipe(Effect.tapError(() => auth.revokePairingLink(app.id).pipe(Effect.ignore)));
+        return `invited to connect to ${self.label}, until ${DateTime.formatIso(invite.expiresAt)}`;
+      }),
+    );
+  }
 
   yield* endSession(1000).pipe(Effect.ignore);
   yield* Console.log(`${outcomes.map((outcome) => outcome.text).join("\n")}\n`);

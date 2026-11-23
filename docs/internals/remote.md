@@ -105,7 +105,9 @@ Unlinking on the linking side only forgets the token.
   there. An address alone never moves an unexpired link to another address.
 - **The receiving side owns a link's expiry.** It renews the session when the
   link is used and answers each call with `T3-Link-Expires-At`; the linking
-  side stores that and never extends a link on its own. The receiving side
+  side stores that, earlier or later, and never extends a link on its own. It
+  stores an answer only while the link still holds the token it was for, so a
+  late answer cannot touch a link made again. The receiving side
   decides: a call goes out even after the stored expiry passes, so a renewal
   there takes effect at once and the next answer corrects the stored copy, and
   `POST /api/peer-links/refresh-expiry` asks for it right after a renewal. A receiving side that
@@ -120,12 +122,15 @@ Unlinking on the linking side only forgets the token.
   minted on the side being linked to.
   [`runLinkBothWays`](../../packages/client-runtime/src/linkBothWays.ts) runs
   both for a client connected to each side, turns Linked environments on first
-  where it is off, and for a full-access link leaves an
-  [app invite](environment-auth.md#app-invites).
+  where it is off, and leaves an [app invite](environment-auth.md#app-invites)
+  when the other side's link back is full access. Both link through
+  `POST /api/peer-links/link`, which keeps a link a side already has rather
+  than replacing its working token.
   `t3 environment link --both-ways` first checks that the other side has
   renew, then spends one standard code for a session that must manage access
   there, shortened to minutes, and has the other side link back through
-  `POST /api/peer-links/link`, the HTTP form of `peerLinks.link`. It turns
+  `POST /api/peer-links/link`, the HTTP form of `peerLinks.link` that keeps an
+  existing link. It turns
   Linked environments on here through the running server
   (`POST /api/peer-links/enable`), which would otherwise see the setting only
   after its file watcher fires and could refuse the link back.

@@ -377,7 +377,6 @@ function LinkEnvironmentAction({
     const outcomes = await runBothWays({
       a: environmentId,
       b: target.environmentId,
-      aLinksToB: target.linked,
       access,
       lifetime,
       ...(bothWaysOutcomes === null ? {} : { previous: bothWaysOutcomes }),
@@ -565,7 +564,10 @@ function LinkEnvironmentAction({
             {canLinkBothWays ? (
               <BothWaysOption
                 checked={bothWays}
-                onCheckedChange={setBothWays}
+                onCheckedChange={(next) => {
+                  setBothWays(next);
+                  setBothWaysOutcomes(null);
+                }}
                 lifetime={lifetime}
                 onLifetimeChange={(next) => {
                   setLifetime(next);

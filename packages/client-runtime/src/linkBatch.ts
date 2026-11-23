@@ -41,19 +41,21 @@ export interface LinkBatchCandidate {
 /**
  * `writable` holds the machines where this client's session may create pairing codes.
  * Until `links` has loaded, no machine's `linked` is known, and linking one that is
- * already linked would replace its working token, so none is offered.
+ * already linked would replace its working token, so none is offered. `unfinished` holds
+ * linked machines whose two-way steps a retry should finish; that keeps the link.
  */
 export const linkBatchCandidates = (
   machines: ReadonlyArray<LinkableMachine>,
   writable: ReadonlySet<EnvironmentId>,
   links: LinkListState,
+  unfinished: ReadonlySet<EnvironmentId> = new Set(),
 ): ReadonlyArray<LinkBatchCandidate> =>
   machines.map((machine) => ({
     machine,
     blocked:
       links !== "loaded"
         ? "links_unknown"
-        : machine.linked
+        : machine.linked && !unfinished.has(machine.environmentId)
           ? "linked"
           : !machine.connected
             ? "not_connected"

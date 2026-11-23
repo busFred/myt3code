@@ -25,8 +25,6 @@ export interface BothWaysSide {
   readonly urls: ReadonlyArray<string>;
   /** Whether Linked environments is on here, as `offersLinkedEnvironments` reads it. */
   readonly linkedEnvironmentsEnabled: boolean;
-  /** Whether this side already has an unexpired link to the other. */
-  readonly linksToOther: boolean;
 }
 
 export type BothWaysStep = "enable_a" | "enable_b" | "a_to_b" | "b_to_a" | "invite";
@@ -50,7 +48,7 @@ export type BothWaysOutcome =
     }
   /**
    * `not_full_access`: the invite's code would give more than the link, so none is left.
-   * `not_linked`: no link was made, so neither was the invite.
+   * `not_linked`: the other side has no link here, so neither is the invite.
    */
   | { readonly kind: "skipped"; readonly reason?: "not_full_access" | "not_linked" }
   | { readonly kind: "failed"; readonly failure: BothWaysFailure; readonly detail: string | null };
@@ -75,11 +73,19 @@ export interface BothWaysOps {
       unknown
     >
   >;
-  /** Has `linkingEnvironmentId` link to the other side, as `peerLinks.link` does. */
+  /**
+   * Has `linkingEnvironmentId` link to the other side unless it already does, which it then keeps
+   * and reports with its access, its code unused (the HTTP `linkPeer`).
+   */
   readonly link: (
     linkingEnvironmentId: EnvironmentId,
     input: PeerLinkCreateInput,
-  ) => Promise<Result.Result<unknown, unknown>>;
+  ) => Promise<
+    Result.Result<
+      { readonly alreadyLinked: boolean; readonly access: AuthMcpClientAccess },
+      unknown
+    >
+  >;
   /** A standard one-use pairing code minted there for the desktop app of `appEnvironment`. */
   readonly mintAppCode: (
     environmentId: EnvironmentId,
@@ -109,8 +115,8 @@ export interface BothWaysOps {
 }
 
 /**
- * Only a peer link error passes its message through: anything else may carry the request,
- * and with it the pairing code.
+ * Only a peer link error, the socket's or the HTTP one, passes its message through: anything else
+ * may carry the request, and with it the pairing code.
  */
 const failureOf = (
   failure: unknown,
@@ -124,7 +130,7 @@ const failureOf = (
     typeof failure === "object" &&
     failure !== null &&
     "_tag" in failure &&
-    failure._tag === "PeerLinkError" &&
+    (failure._tag === "PeerLinkError" || failure._tag === "EnvironmentPeerLinkFailedError") &&
     "reason" in failure &&
     "message" in failure &&
     typeof failure.message === "string"
@@ -139,10 +145,9 @@ const settle = async (run: () => Promise<BothWaysOutcome>): Promise<BothWaysOutc
   run().catch((): BothWaysOutcome => ({ kind: "failed", failure: "other", detail: null }));
 
 /**
- * Links two environments both ways, each link with a code minted on the side it links to, after
- * turning Linked environments on where it is off. Linked sides are left alone and a failure stops
- * only its step, so a rerun retries what failed. `invite` leaves `b`'s desktop app an invite to `a`
- * once a link is made at full access: the invite's code gives that app full use of `a`.
+ * Links two environments both ways with codes minted on the side linked to, after turning Linked
+ * environments on where off. Existing links are kept and a failure stops only its step, so a rerun
+ * retries it. `invite` invites `b`'s desktop app to `a` once `b` links to `a` at full access.
  */
 export async function runLinkBothWays(input: {
   readonly a: BothWaysSide;
@@ -151,8 +156,6 @@ export async function runLinkBothWays(input: {
   /** For both links and the invite's app session. Absent keeps each server's default. */
   readonly lifetime?: AuthSessionLifetime;
   readonly invite: boolean;
-  /** A link was made by an earlier run of this request, so a retried invite may follow it. */
-  readonly linkedEarlier?: boolean;
   readonly ops: BothWaysOps;
 }): Promise<ReadonlyMap<BothWaysStep, BothWaysOutcome>> {
   const { a, b, ops } = input;
@@ -166,17 +169,28 @@ export async function runLinkBothWays(input: {
   const [enableA, enableB] = await Promise.all([enable(a), enable(b)]);
   const bothOn = enableA.kind !== "failed" && enableB.kind !== "failed";
 
-  const link = (linking: BothWaysSide, target: BothWaysSide) =>
-    settle(async (): Promise<BothWaysOutcome> => {
-      if (linking.linksToOther) return { kind: "skipped" };
-      if (!bothOn) return { kind: "failed", failure: "disabled", detail: null };
+  /** The step's outcome and the access of the link `linking` has after it, if any. */
+  type LinkResult = {
+    readonly outcome: BothWaysOutcome;
+    readonly access?: AuthMcpClientAccess;
+  };
+  const link = (linking: BothWaysSide, target: BothWaysSide): Promise<LinkResult> =>
+    (async (): Promise<LinkResult> => {
+      if (!bothOn) return { outcome: { kind: "failed", failure: "disabled", detail: null } };
       const [url, ...alternateUrls] = target.urls;
-      if (url === undefined) return { kind: "failed", failure: "no_address", detail: null };
+      if (url === undefined) {
+        return { outcome: { kind: "failed", failure: "no_address", detail: null } };
+      }
       const minted = await ops.mintLinkCode(target.environmentId, {
         access: input.access,
         ...lifetime,
       });
-      if (Result.isFailure(minted)) return failureOf(minted.failure, ops, "no_code");
+      if (Result.isFailure(minted)) return { outcome: failureOf(minted.failure, ops, "no_code") };
+      // Best effort: an unused code would otherwise stay valid there until it expires.
+      const revokeCode = () =>
+        Promise.resolve(ops.revokeCode(target.environmentId, minted.success.id)).catch(
+          () => undefined,
+        );
       const linked = await ops.link(linking.environmentId, {
         url,
         ...(alternateUrls.length > 0 ? { alternateUrls } : {}),
@@ -186,27 +200,27 @@ export async function runLinkBothWays(input: {
         access: input.access,
       });
       if (Result.isFailure(linked)) {
-        // Best effort: an unused code would otherwise stay valid there until it expires.
-        await Promise.resolve(ops.revokeCode(target.environmentId, minted.success.id)).catch(
-          () => undefined,
-        );
-        return failureOf(linked.failure, ops);
+        await revokeCode();
+        return { outcome: failureOf(linked.failure, ops) };
       }
-      return lifetimeOutcome(minted.success);
-    });
+      if (linked.success.alreadyLinked) {
+        await revokeCode();
+        return { outcome: { kind: "skipped" }, access: linked.success.access };
+      }
+      return { outcome: lifetimeOutcome(minted.success), access: linked.success.access };
+    })().catch((): LinkResult => ({ outcome: { kind: "failed", failure: "other", detail: null } }));
 
   const lifetimeOutcome = (minted: { readonly lifetime?: AuthSessionLifetime }): BothWaysOutcome =>
     input.lifetime !== undefined && minted.lifetime === undefined
       ? { kind: "done", lifetimeIgnored: true }
       : { kind: "done" };
 
-  const invite = (linkedNow: boolean) =>
+  const invite = (bLinkAccess: AuthMcpClientAccess | undefined) =>
     settle(async (): Promise<BothWaysOutcome> => {
       if (!input.invite) return { kind: "skipped" };
       if (input.access !== "full-access") return { kind: "skipped", reason: "not_full_access" };
-      if (!linkedNow && input.linkedEarlier !== true) {
-        return { kind: "skipped", reason: "not_linked" };
-      }
+      if (bLinkAccess === undefined) return { kind: "skipped", reason: "not_linked" };
+      if (bLinkAccess !== "full-access") return { kind: "skipped", reason: "not_full_access" };
       const [firstUrl, ...otherUrls] = a.urls;
       if (firstUrl === undefined) return { kind: "failed", failure: "no_address", detail: null };
       const minted = await ops.mintAppCode(a.environmentId, {
@@ -231,12 +245,12 @@ export async function runLinkBothWays(input: {
     });
 
   const [aToB, bToA] = await Promise.all([link(a, b), link(b, a)]);
-  const invited = await invite(aToB.kind === "done" || bToA.kind === "done");
+  const invited = await invite(bToA.access);
   return new Map<BothWaysStep, BothWaysOutcome>([
     ["enable_a", enableA],
     ["enable_b", enableB],
-    ["a_to_b", aToB],
-    ["b_to_a", bToA],
+    ["a_to_b", aToB.outcome],
+    ["b_to_a", bToA.outcome],
     ["invite", invited],
   ]);
 }

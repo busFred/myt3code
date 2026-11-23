@@ -35,7 +35,7 @@ import {
   expireFlag,
   resolveCliAuthConfig,
 } from "./config.ts";
-import { linkBothWays } from "./environmentBothWays.ts";
+import { describeExpiry, linkBothWays } from "./environmentBothWays.ts";
 
 const layerPeerLinks = PeerLinks.layer.pipe(
   Layer.provide(
@@ -318,7 +318,7 @@ const environmentLinkCommand = Command.make("link", {
             access: flags.access,
           });
           yield* Console.log(
-            `Linked ${linked.label} (${linked.environmentId}) with ${linked.access} access, until ${DateTime.formatIso(linked.expiresAt)}.\n`,
+            `Linked ${linked.label} (${linked.environmentId}) with ${linked.access} access, ${describeExpiry(linked.expiresAt)}.\n`,
           );
         }),
       );

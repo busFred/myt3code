@@ -43,6 +43,16 @@ describe("linkBatchCandidates", () => {
     ]);
   });
 
+  it("keeps a machine linked one way pickable while its two-way steps are unfinished", () => {
+    const machines = [machine("half", { linked: true }), machine("whole", { linked: true })];
+    const writable = new Set(machines.map((entry) => entry.environmentId));
+    expect(
+      linkBatchCandidates(machines, writable, "loaded", new Set([id("half")])).map(
+        ({ blocked }) => blocked,
+      ),
+    ).toEqual([null, "linked"]);
+  });
+
   it("offers no machine until the linking environment's links have loaded", () => {
     // With no list, a linked machine reads as unlinked.
     const machines = [machine("ready"), machine("linked-but-unlisted")];

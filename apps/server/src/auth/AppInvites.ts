@@ -96,8 +96,13 @@ const make = Effect.gen(function* () {
         OR expires_at <= ${DateTime.formatIso(now)}
       RETURNING secret_name
     `.pipe(
+      // The rows are gone either way; a code left behind is unused.
       Effect.flatMap((rows) =>
-        Effect.forEach(rows, (row) => secrets.remove(row.secret_name), { discard: true }),
+        Effect.forEach(
+          rows,
+          (row) => secrets.remove(row.secret_name).pipe(Effect.ignore({ log: true })),
+          { discard: true },
+        ),
       ),
     );
 
@@ -183,15 +188,14 @@ const make = Effect.gen(function* () {
 
   const takePending: AppInvites["Service"]["takePending"] = Effect.gen(function* () {
     const now = yield* DateTime.now;
-    // The update claims each invite once, so two apps asking at once never both get one.
-    const taken = yield* sql<AppInviteRow>`
-      UPDATE auth_app_invites SET consumed_at = ${DateTime.formatIso(now)}
+    const pending = yield* sql<AppInviteRow>`
+      SELECT * FROM auth_app_invites
       WHERE consumed_at IS NULL
         AND revoked_at IS NULL
         AND expires_at > ${DateTime.formatIso(now)}
-      RETURNING *
     `;
-    const invites = yield* Effect.forEach(taken, (row) =>
+    // Only an invite whose code can be read is claimed, so none is spent without its code.
+    const readable = (yield* Effect.forEach(pending, (row) =>
       secrets.get(row.secret_name).pipe(
         Effect.map(
           Option.map((credential): AuthPendingAppInvite => ({
@@ -199,13 +203,30 @@ const make = Effect.gen(function* () {
             credential: new TextDecoder().decode(credential),
           })),
         ),
+        Effect.tapError((cause) =>
+          Effect.logWarning("App invite code could not be read", { id: row.id, cause }),
+        ),
+        Effect.orElseSucceed(Option.none<AuthPendingAppInvite>),
       ),
+    )).flatMap((invite) => (Option.isSome(invite) ? [invite.value] : []));
+    if (readable.length === 0) return [];
+    // The update claims each invite once, so two apps asking at once never both get one.
+    const claimed = new Set(
+      (yield* sql<{ readonly id: string }>`
+        UPDATE auth_app_invites SET consumed_at = ${DateTime.formatIso(now)}
+        WHERE id IN ${sql.in(readable.map((invite) => invite.id))}
+          AND consumed_at IS NULL
+          AND revoked_at IS NULL
+        RETURNING id
+      `).map((row) => row.id),
     );
-    if (taken.length > 0) {
-      yield* sweep(now);
+    const invites = readable.filter((invite) => claimed.has(invite.id));
+    // The claim is committed, so the invites go out even if tidying up after it fails.
+    if (invites.length > 0) {
+      yield* sweep(now).pipe(Effect.ignore({ log: true }));
       yield* publish;
     }
-    return invites.flatMap((invite) => (Option.isSome(invite) ? [invite.value] : []));
+    return invites;
   }).pipe(
     exclusive,
     Effect.mapError((cause) => new AppInviteError({ operation: "take", cause })),
