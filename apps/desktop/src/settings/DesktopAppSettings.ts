@@ -34,6 +34,7 @@ export interface DesktopSettings {
   readonly serviceConnectionRemembered: boolean;
   readonly localEnvironmentEnabled: boolean;
   readonly closeToTray: boolean;
+  readonly closeToTrayNoticeShown: boolean;
   readonly linuxPasswordStore: LinuxPasswordStorePreference;
   readonly mainWindowBounds: DesktopWindowBounds | null;
   readonly mainWindowMaximized: boolean;
@@ -78,6 +79,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   serviceConnectionRemembered: false,
   localEnvironmentEnabled: true,
   closeToTray: false,
+  closeToTrayNoticeShown: false,
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   mainWindowBounds: null,
   mainWindowMaximized: false,
@@ -108,6 +110,7 @@ const DesktopSettingsDocument = Schema.Struct({
   serviceConnectionRemembered: optionalReadableKey(Schema.Boolean),
   localEnvironmentEnabled: optionalReadableKey(Schema.Boolean),
   closeToTray: optionalReadableKey(Schema.Boolean),
+  closeToTrayNoticeShown: optionalReadableKey(Schema.Boolean),
   linuxPasswordStore: optionalReadableKey(Schema.Unknown),
   mainWindowBounds: optionalReadableKey(Schema.NullOr(DesktopWindowBoundsDocument)),
   mainWindowMaximized: optionalReadableKey(Schema.Boolean),
@@ -177,6 +180,11 @@ export class DesktopAppSettings extends Context.Service<
     readonly setCloseToTray: (
       enabled: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    /** `changed` is true only for the first call, so it doubles as "show the notice once". */
+    readonly markCloseToTrayNoticeShown: Effect.Effect<
+      DesktopSettingsChange,
+      DesktopSettingsWriteError
+    >;
     readonly setMainWindowBounds: (
       bounds: DesktopWindowBounds,
       isMaximized: boolean,
@@ -251,6 +259,7 @@ function normalizeDesktopSettingsDocument(
       parsed.serviceConnectionRemembered ?? defaultSettings.serviceConnectionRemembered,
     localEnvironmentEnabled: parsed.localEnvironmentEnabled !== false,
     closeToTray: parsed.closeToTray === true,
+    closeToTrayNoticeShown: parsed.closeToTrayNoticeShown === true,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
@@ -283,6 +292,9 @@ function toDesktopSettingsDocument(
   }
   if (settings.closeToTray !== defaults.closeToTray) {
     document.closeToTray = settings.closeToTray;
+  }
+  if (settings.closeToTrayNoticeShown !== defaults.closeToTrayNoticeShown) {
+    document.closeToTrayNoticeShown = settings.closeToTrayNoticeShown;
   }
 
   if (settings.linuxPasswordStore !== defaults.linuxPasswordStore) {
@@ -416,6 +428,10 @@ function setLocalEnvironmentEnabled(settings: DesktopSettings, enabled: boolean)
 
 function setCloseToTray(settings: DesktopSettings, enabled: boolean): DesktopSettings {
   return settings.closeToTray === enabled ? settings : { ...settings, closeToTray: enabled };
+}
+
+function markCloseToTrayNoticeShown(settings: DesktopSettings): DesktopSettings {
+  return settings.closeToTrayNoticeShown ? settings : { ...settings, closeToTrayNoticeShown: true };
 }
 
 function applyWslWindowsFallback(settings: DesktopSettings): DesktopSettings {
@@ -649,6 +665,9 @@ export const make = Effect.gen(function* () {
 
       return yield* persist((settings) => setCloseToTray(settings, enabled));
     }),
+    markCloseToTrayNoticeShown: persist(markCloseToTrayNoticeShown).pipe(
+      Effect.withSpan("desktop.settings.markCloseToTrayNoticeShown"),
+    ),
     applyWslWindowsFallback: persist(applyWslWindowsFallback).pipe(
       Effect.withSpan("desktop.settings.applyWslWindowsFallback"),
     ),
@@ -724,6 +743,7 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setCloseToTray: Effect.fn("DesktopAppSettings.setCloseToTray")(function (enabled) {
           return update((settings) => setCloseToTray(settings, enabled));
         }),
+        markCloseToTrayNoticeShown: update(markCloseToTrayNoticeShown),
         applyWslWindowsFallback: update(applyWslWindowsFallback),
         applyWslWindowsFallbackInMemory: update(applyWslWindowsFallback),
       });

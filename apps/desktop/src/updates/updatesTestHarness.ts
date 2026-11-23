@@ -299,6 +299,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
           setWslDistro: () => Effect.die("unexpected WSL distro change"),
           setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
           setCloseToTray: () => Effect.die("unexpected close-to-tray toggle"),
+          markCloseToTrayNoticeShown: Effect.die("unexpected close-to-tray notice"),
           setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
           applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
           applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),

@@ -255,6 +255,9 @@ function layerTest(input: {
     readonly titleBarOverlay: boolean;
   }>;
   readonly primaryPasteEnabled?: boolean;
+  readonly notifications?: Array<{ readonly title: string; readonly body: string }>;
+  readonly onNotificationShown?: Effect.Effect<void>;
+  readonly onNoticeChecked?: Effect.Effect<void>;
   readonly previewPasskeyBridgeEnabled?: boolean;
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
@@ -291,6 +294,11 @@ function layerTest(input: {
     setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
     setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
     setCloseToTray: () => Effect.die("unexpected close-to-tray toggle"),
+    markCloseToTrayNoticeShown: Effect.sync(() => {
+      const changed = !desktopSettings.closeToTrayNoticeShown;
+      desktopSettings = { ...desktopSettings, closeToTrayNoticeShown: true };
+      return { settings: desktopSettings, changed };
+    }).pipe(Effect.tap(() => input.onNoticeChecked ?? Effect.void)),
     applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
     applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
   } satisfies DesktopAppSettings.DesktopAppSettings["Service"]);
@@ -358,6 +366,10 @@ function layerTest(input: {
             }),
           openSystemSettings: () => Effect.succeed(true),
           copyText: input.onCopyText ?? (() => Effect.void),
+          showNotification: (notification) =>
+            Effect.sync(() => void input.notifications?.push(notification)).pipe(
+              Effect.andThen(input.onNotificationShown ?? Effect.void),
+            ),
         } satisfies ElectronShell.ElectronShell["Service"]),
         layerElectronTheme,
         layerElectronWindow,
@@ -472,6 +484,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
             openExternal: () => Effect.succeed(true),
             openSystemSettings: () => Effect.succeed(true),
             copyText: () => Effect.void,
+            showNotification: () => Effect.void,
           } satisfies ElectronShell.ElectronShell["Service"]),
           layerElectronTheme,
           Layer.succeed(ElectronWindow.ElectronWindow, electronWindowShape),
@@ -1085,6 +1098,51 @@ describe("DesktopWindow", () => {
         assert.deepEqual(mainWindowMaximizedUpdates, [true]);
         assert.equal(fakeWindow.getNormalBounds.mock.calls.length, 1);
       }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("shows the close-to-tray notice only the first time the window is hidden", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const notifications: Array<{ title: string; body: string }> = [];
+      const shown = yield* Deferred.make<void>();
+      const checkedTwice = yield* Deferred.make<void>();
+      let checks = 0;
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const state = yield* DesktopState.DesktopState;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        yield* Ref.set(state.trayActive, true);
+
+        for (let i = 0; i < 2; i++) {
+          fakeWindow.windowListeners.get("close")?.({ preventDefault: vi.fn() });
+        }
+        yield* Deferred.await(shown);
+        yield* Deferred.await(checkedTwice);
+
+        assert.equal(fakeWindow.hide.mock.calls.length, 2);
+        assert.deepEqual(notifications, [
+          {
+            title: "T3 Code is still running",
+            body: "Open it from the tray icon, or launch T3 Code again.",
+          },
+        ]);
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            window: fakeWindow.window,
+            createCount,
+            mainWindow,
+            notifications,
+            onNotificationShown: Deferred.succeed(shown, undefined).pipe(Effect.asVoid),
+            onNoticeChecked: Effect.suspend(() =>
+              ++checks === 2 ? Deferred.succeed(checkedTwice, undefined) : Effect.void,
+            ).pipe(Effect.asVoid),
+          }),
+        ),
+      );
     }),
   );
 
