@@ -386,6 +386,123 @@ it.effect("waitForThread follows a restart continuation instead of the cut run",
   }),
 );
 
+it.effect("waitForThread on a queued run batched into another answers with that run", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:wait-batched");
+    const threadId = ThreadId.make("thread:thread-management:wait-batched");
+    const runId = RunId.make("run:thread-management:wait-batched");
+    const headId = RunId.make("run:thread-management:wait-batched:head");
+    const subscribed = yield* Deferred.make<void>();
+    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+    let runs: Array<Pick<OrchestrationV2Run, "id" | "status" | "batchedIntoRunId">> = [
+      { id: headId, status: "queued" },
+      { id: runId, status: "queued" },
+    ];
+    const stored = (sequence: number, payload: (typeof runs)[number]) =>
+      ({
+        sequence,
+        event: { threadId, type: "run.updated", payload },
+      }) as unknown as OrchestrationV2StoredEvent;
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadEventSequence: () => Effect.succeed(0),
+          restartContinuationPending: () => Effect.succeed(false),
+          streamStoredEventsFrom: (input) =>
+            input?.eventType === "run.updated"
+              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                  Stream.drain,
+                  Stream.concat(Stream.fromQueue(events)),
+                )
+              : Stream.never,
+          getThreadRecords: () =>
+            Effect.sync(
+              () =>
+                ({
+                  thread: { id: threadId, projectId, deletedAt: null },
+                  runs,
+                }) as unknown as OrchestrationV2ThreadProjection,
+            ),
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+    );
+    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(layerTest),
+    );
+    const fiber = yield* service
+      .waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 })
+      .pipe(Effect.forkChild);
+    yield* Effect.raceFirst(Deferred.await(subscribed), Fiber.await(fiber));
+    // The head starts with this run's message; this run ends without running.
+    const merged = { id: runId, status: "cancelled" as const, batchedIntoRunId: headId };
+    runs = [{ id: headId, status: "running" }, merged];
+    yield* Queue.offer(events, stored(1, merged));
+    runs = [{ id: headId, status: "failed" }, merged];
+    yield* Queue.offer(events, stored(2, runs[0]!));
+
+    expect(yield* Fiber.join(fiber)).toMatchObject({
+      timedOut: false,
+      run: { id: headId, status: "failed" },
+    });
+  }),
+);
+
+it.effect("sendToThread reports a message batched into another run as delivered", () => {
+  const projectId = ProjectId.make("project:thread-management:send-batched");
+  const threadId = ThreadId.make("thread:thread-management:send-batched");
+  const messageId = MessageId.make("message:thread-management:send-batched");
+  const runId = RunId.make("run:thread-management:send-batched");
+  const layerTest = ThreadManagementService.layer.pipe(
+    Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+    Layer.provide(
+      Layer.mock(Orchestrator.OrchestratorV2)({
+        getThreadRecords: () =>
+          Effect.succeed({
+            thread: {
+              id: threadId,
+              projectId,
+              deletedAt: null,
+              archivedAt: null,
+              worktreePath: null,
+              modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+            },
+            // A retry, or another start, finds the queued run already merged into the next turn.
+            runs: [
+              {
+                id: runId,
+                status: "cancelled",
+                batchedIntoRunId: RunId.make("run:thread-management:send-batched:head"),
+              },
+            ],
+            providerTurns: [],
+            messages: [{ id: messageId, runId }],
+            turnItems: [],
+          } as unknown as OrchestrationV2ThreadProjection),
+        dispatch: () => Effect.succeed({ sequence: 1, storedEvents: [] } as never),
+      }),
+    ),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provideMerge(layerReceiptsTest),
+  );
+  return Effect.gen(function* () {
+    const sent = yield* (yield* ThreadManagementService.ThreadManagementService).sendToThread({
+      projectId,
+      threadId,
+      commandId: CommandId.make("command:thread-management:send-batched"),
+      messageId,
+      text: "Status",
+      attachments: [],
+      mode: "queue",
+      createdBy: "agent",
+      creationSource: "mcp",
+    });
+    expect(sent).toMatchObject({ delivery: "queued", run: { id: runId } });
+  }).pipe(Effect.provide(layerTest));
+});
+
 it.effect("waitForThread can wait past an ended run for the thread's delegated work", () =>
   Effect.gen(function* () {
     const projectId = ProjectId.make("project:thread-management:wait-delegated");

@@ -515,6 +515,8 @@ export const OrchestratorMcpThreadRun = Schema.Struct({
   requestedAt: IsoDateTime,
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
+  /** Never ran: its message was sent with other queued messages in this run, whose result it shares. */
+  batchedIntoRunId: Schema.optional(RunId),
 });
 export type OrchestratorMcpThreadRun = typeof OrchestratorMcpThreadRun.Type;
 

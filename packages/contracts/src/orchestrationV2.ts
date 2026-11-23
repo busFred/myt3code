@@ -657,9 +657,12 @@ export function withMessageSenderNote(
     readonly scheduledTaskId?: ScheduledTaskId | undefined;
     readonly senderThreadId?: ThreadId | undefined;
     readonly linkedSender?: OrchestrationV2LinkedSender | undefined;
+    readonly batchedMessageCount?: number | undefined;
   },
   text: string,
 ): string {
+  // A batch names every sender in its own header.
+  if (message.batchedMessageCount !== undefined) return text;
   const agent = message.createdBy === "agent";
   const note =
     agent && message.linkedSender !== undefined
@@ -863,6 +866,10 @@ export const OrchestrationV2Run = Schema.Struct({
    * the turn started, and their updates must not put an unanswered run back.
    */
   output: Schema.optional(OrchestrationV2RunOutput),
+  /** Put ahead of its queue by a restart, a skipped compaction or a reorder, so it runs alone. */
+  queueStandalone: Schema.optional(Schema.Boolean),
+  /** Never ran: its message started with others as one turn in this run. */
+  batchedIntoRunId: Schema.optional(RunId),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
@@ -1539,6 +1546,8 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
    * the workflow's opening instead and keep the script behind a disclosure.
    */
   workflowScript: Schema.optional(Schema.Boolean),
+  /** The text frames this many queued messages from other threads' agents, each with its sender. */
+  batchedMessageCount: Schema.optional(PositiveInt),
   id: MessageId,
   threadId: ThreadId,
   runId: Schema.NullOr(RunId),
@@ -1923,6 +1932,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     linkedSender: Schema.optional(OrchestrationV2LinkedSender),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
+    batchedMessageCount: OrchestrationV2ConversationMessage.fields.batchedMessageCount,
     freshContext: OrchestrationV2Run.fields.freshContext,
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
@@ -2827,6 +2837,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     linkedSender: Schema.optional(OrchestrationV2LinkedSender),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
+    batchedMessageCount: OrchestrationV2ConversationMessage.fields.batchedMessageCount,
     freshContext: OrchestrationV2Run.fields.freshContext,
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,

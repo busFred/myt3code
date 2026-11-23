@@ -16,6 +16,7 @@ import {
   OrchestratorMcpFailure,
   OrchestrationV2DispatchCommandResult,
   OrchestrationV2Actor,
+  EnvironmentId,
   ThreadId,
   RunId,
   NonNegativeInt,
@@ -81,6 +82,10 @@ const queueEntry = Schema.Struct({
   createdBy: OrchestrationV2Actor,
   /** The local thread whose agent sent it. */
   senderThreadId: Schema.optional(ThreadId),
+  /** The thread on a linked environment whose agent sent it. */
+  linkedSender: Schema.optional(
+    Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId }),
+  ),
   text: Schema.String,
   truncated: Schema.Boolean,
 });
