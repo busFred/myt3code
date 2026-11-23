@@ -74,6 +74,9 @@ describe("both ways outcomes", () => {
       lifetimeIgnored: true,
       complete: false,
       changed: true,
+      invited: false,
+      inviteBlocked: false,
+      closable: false,
     });
     // Links both sides already had are kept: nothing failed, and nothing changed either.
     expect(
@@ -85,7 +88,36 @@ describe("both ways outcomes", () => {
           ["invite", { kind: "skipped", reason: "not_full_access" }],
         ]),
       ),
-    ).toEqual({ failedSteps: [], lifetimeIgnored: false, complete: true, changed: false });
+    ).toEqual({
+      failedSteps: [],
+      lifetimeIgnored: false,
+      complete: true,
+      changed: false,
+      invited: false,
+      inviteBlocked: false,
+      closable: false,
+    });
+    // A skipped invite for want of a safe address keeps the results up; a lower access does not.
+    const linked = (invite: BothWaysOutcome) =>
+      summarizeBothWays(
+        outcomes([
+          ["a_to_b", { kind: "done" }],
+          ["b_to_a", { kind: "done" }],
+          ["invite", invite],
+        ]),
+      );
+    expect(linked({ kind: "done" })).toMatchObject({ invited: true, closable: true });
+    expect(linked({ kind: "skipped", reason: "not_full_access" })).toMatchObject({
+      invited: false,
+      closable: true,
+    });
+    expect(linked({ kind: "skipped", reason: "no_safe_address" })).toMatchObject({
+      inviteBlocked: true,
+      closable: false,
+    });
+    expect(linked({ kind: "failed", failure: "other", detail: null })).toMatchObject({
+      closable: false,
+    });
   });
 
   it("keeps what an earlier run finished, so the next retry still knows a link was made", () => {
