@@ -31,6 +31,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { accessConfig } from "../auth/ConnectAgentSurface";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   Dialog,
   DialogClose,
@@ -267,15 +268,24 @@ function LinkedEnvironmentRow({
         </div>
         {canUnlink ? (
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-            {canNeverExpire && health.kind !== "expired" ? (
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={busy || renewing}
-                onClick={() => void neverExpire()}
-              >
-                {renewing ? gt("Updating…") : gt("Never expire (bi-directional)")}
-              </Button>
+            {canNeverExpire && health.kind !== "expired" && !isNeverExpiring(link.expiresAt) ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={busy || renewing}
+                      onClick={() => void neverExpire()}
+                    >
+                      {renewing ? gt("Updating…") : gt("Never expire")}
+                    </Button>
+                  }
+                />
+                <TooltipPopup side="top">
+                  {gt("Also makes {label}'s link back here never expire.", { label: link.label })}
+                </TooltipPopup>
+              </Tooltip>
             ) : null}
             <Button
               size="xs"
@@ -510,7 +520,7 @@ function LinkEnvironmentAction({
                 {linkingBothWays ? (
                   <T>
                     Already linked. Bi-directional link keeps existing links as they are. To change
-                    how long they last, use Never expire (bi-directional), or Renew under Authorized
+                    how long they last, use Never expire on the link, or Renew under Authorized
                     clients on the other machine. To change the access, forget the link first or
                     untick Bi-directional link.
                   </T>
