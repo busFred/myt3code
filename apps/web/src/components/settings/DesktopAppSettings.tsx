@@ -1,37 +1,51 @@
+import {
+  DesktopCloseWindowBehaviorSchema,
+  type DesktopCloseWindowBehavior,
+} from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { useGT } from "gt-react";
 import { useState } from "react";
 
-import { isWindowsPlatform } from "../../lib/utils";
-import { Switch } from "../ui/switch";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
 
-// Only Windows and Linux get the bridge methods, since the Dock keeps a macOS app alive.
+const isCloseWindowBehavior = Schema.is(DesktopCloseWindowBehaviorSchema);
+
 export function DesktopAppSection() {
   const gt = useGT();
-  if (!window.desktopBridge?.setCloseToTray) return null;
+  if (!window.desktopBridge?.setCloseWindowBehavior) return null;
   return (
     <SettingsSection id="desktop-app" title={gt("Desktop app")}>
-      <CloseToTraySetting />
+      <CloseWindowBehaviorSetting />
     </SettingsSection>
   );
 }
 
-function CloseToTraySetting() {
+function CloseWindowBehaviorSetting() {
   const gt = useGT();
   const searchableSetting = useSearchableSetting();
   const bridge = window.desktopBridge;
-  const [enabled, setEnabled] = useState(() => bridge?.getCloseToTray?.() ?? false);
+  const labels = {
+    ask: gt("Always ask"),
+    tray: gt("Hide to system tray"),
+    "app-only": gt("Quit app only"),
+    "app-and-service": gt("Quit app and service"),
+  } satisfies Record<DesktopCloseWindowBehavior, string>;
+  const [behavior, setBehavior] = useState(() => bridge?.getCloseWindowBehavior?.() ?? "ask");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const setCloseToTray = bridge?.setCloseToTray;
-  if (!setCloseToTray) return null;
-  const save = async (value: boolean) => {
+  if (!bridge?.setCloseWindowBehavior) return null;
+  const options = Object.entries(labels).filter(
+    ([value]) => value !== "tray" || bridge.supportsTray === true,
+  );
+  const save = async (value: unknown) => {
+    if (!isCloseWindowBehavior(value)) return;
     setSaving(true);
     setError(null);
     try {
-      await setCloseToTray(value);
-      setEnabled(value);
+      await bridge.setCloseWindowBehavior(value);
+      setBehavior(value);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : gt("Couldn't change this setting."));
     }
@@ -39,24 +53,21 @@ function CloseToTraySetting() {
   };
   return (
     <SettingsRow
-      {...searchableSetting("close-to-tray")}
-      description={
-        error ??
-        (isWindowsPlatform(navigator.platform)
-          ? gt(
-              "Closing the window keeps T3 Code running in the system tray. Use the tray icon to show it again or quit. The icon may be under the ^ arrow on the taskbar.",
-            )
-          : gt(
-              "Closing the window keeps T3 Code running in the system tray. Use the tray icon to show it again or quit. On GNOME, tray icons need the AppIndicator extension; launching T3 Code again also brings the window back.",
-            ))
-      }
+      {...searchableSetting("close-window-behavior")}
+      description={error ?? gt("What happens when you close the T3 Code window.")}
       control={
-        <Switch
-          checked={enabled}
-          disabled={saving}
-          onCheckedChange={(checked) => void save(checked)}
-          aria-label={gt("Close to system tray")}
-        />
+        <Select value={behavior} onValueChange={(value) => void save(value)}>
+          <SelectTrigger size="sm" disabled={saving} aria-label={gt("Close window behavior")}>
+            <SelectValue>{labels[behavior]}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end">
+            {options.map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
       }
     />
   );

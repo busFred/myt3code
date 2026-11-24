@@ -42,6 +42,7 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
@@ -262,7 +263,7 @@ function layerTest(input: {
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
   const layerDesktopAppSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
-    setServiceQuitBehavior: () => Effect.die("unexpected service quit behavior change"),
+    setCloseWindowBehavior: () => Effect.die("unexpected close window behavior change"),
     rememberServiceConnection: Effect.die("unexpected service connection change"),
     get: Effect.sync(() => desktopSettings),
     load: Effect.sync(() => desktopSettings),
@@ -293,7 +294,6 @@ function layerTest(input: {
     setWslDistro: () => Effect.die("unexpected WSL distro change"),
     setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
     setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
-    setCloseToTray: () => Effect.die("unexpected close-to-tray toggle"),
     setLastNotifiedUpstreamVersion: () => Effect.die("unexpected upstream notice update"),
     markCloseToTrayNoticeShown: Effect.sync(() => {
       const changed = !desktopSettings.closeToTrayNoticeShown;
@@ -354,6 +354,7 @@ function layerTest(input: {
         layerDesktopServerExposure,
         DesktopState.layer,
         layerElectronApp,
+        Layer.mock(ElectronDialog.ElectronDialog)({}),
         Layer.succeed(ElectronMenu.ElectronMenu, {
           setApplicationMenu: () => Effect.void,
           showContextMenu: () => Effect.succeedNone,
@@ -480,6 +481,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
           layerDesktopServerExposure,
           DesktopState.layer,
           layerElectronApp,
+          Layer.mock(ElectronDialog.ElectronDialog)({}),
           layerElectronMenu,
           Layer.succeed(ElectronShell.ElectronShell, {
             openExternal: () => Effect.succeed(true),
@@ -1137,6 +1139,11 @@ describe("DesktopWindow", () => {
             createCount,
             mainWindow,
             notifications,
+            platform: "linux",
+            desktopSettings: {
+              ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+              closeWindowBehavior: "tray",
+            },
             onNotificationShown: Deferred.succeed(shown, undefined).pipe(Effect.asVoid),
             onNoticeChecked: Effect.suspend(() =>
               ++checks === 2 ? Deferred.succeed(checkedTwice, undefined) : Effect.void,
@@ -1148,12 +1155,13 @@ describe("DesktopWindow", () => {
   );
 
   it.effect.each([
-    { trayActive: true, quitting: false, hidden: true },
-    { trayActive: true, quitting: true, hidden: false },
-    { trayActive: false, quitting: false, hidden: false },
+    { trayActive: true, quitting: false, hidden: true, prevented: true },
+    { trayActive: true, quitting: true, hidden: false, prevented: false },
+    // Without a tray the "tray" behavior quits through the app quit path instead of hiding.
+    { trayActive: false, quitting: false, hidden: false, prevented: true },
   ])(
     "hides instead of closing only while the tray is active and the app is not quitting ($trayActive, $quitting)",
-    ({ trayActive, quitting, hidden }) =>
+    ({ trayActive, quitting, hidden, prevented }) =>
       Effect.gen(function* () {
         const fakeWindow = makeFakeBrowserWindow();
         const createCount = yield* Ref.make(0);
@@ -1168,9 +1176,22 @@ describe("DesktopWindow", () => {
           const preventDefault = vi.fn();
           fakeWindow.windowListeners.get("close")?.({ preventDefault });
 
-          assert.equal(preventDefault.mock.calls.length, hidden ? 1 : 0);
+          assert.equal(preventDefault.mock.calls.length, prevented ? 1 : 0);
           assert.equal(fakeWindow.hide.mock.calls.length, hidden ? 1 : 0);
-        }).pipe(Effect.provide(layerTest({ window: fakeWindow.window, createCount, mainWindow })));
+        }).pipe(
+          Effect.provide(
+            layerTest({
+              window: fakeWindow.window,
+              createCount,
+              mainWindow,
+              platform: "linux",
+              desktopSettings: {
+                ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+                closeWindowBehavior: "tray",
+              },
+            }),
+          ),
+        );
       }),
   );
 

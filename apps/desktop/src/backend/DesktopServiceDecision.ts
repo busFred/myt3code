@@ -1,4 +1,4 @@
-import type { DesktopServiceQuitBehavior } from "@t3tools/contracts";
+import type { DesktopCloseWindowBehavior } from "@t3tools/contracts";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 
 export const launchDecision = (input: {
@@ -9,7 +9,7 @@ export const launchDecision = (input: {
   readonly otherBaseDir?: string | undefined;
   readonly owner: "none" | "service" | "other" | "unknown";
   readonly remembered: boolean;
-  readonly quitBehavior: DesktopServiceQuitBehavior;
+  readonly closeWindowBehavior: DesktopCloseWindowBehavior;
 }) => {
   if (!input.enabled || input.wslOnly) return "own";
   if (input.owner === "unknown") return "unavailable";
@@ -17,17 +17,44 @@ export const launchDecision = (input: {
   if (input.owner === "service" && input.otherBaseDir === undefined)
     return input.remembered ? "attach" : "ask-connect";
   if (!input.installed || input.otherBaseDir !== undefined) return "own";
-  return input.quitBehavior === "app-and-service" ? "start-attach" : "ask-start";
+  return input.closeWindowBehavior === "app-and-service" ? "start-attach" : "ask-start";
 };
 
+/** Only a service stop chosen while closing the window stops it; every other quit leaves it running. */
 export const quitDecision = (
   attachedToService: boolean,
-  behavior: DesktopServiceQuitBehavior,
+  choice: "app-only" | "app-and-service" | undefined,
   reason: "user" | "update" | "shutdown",
-) => {
-  if (!attachedToService || reason !== "user" || behavior === "app-only") return "quit";
-  return behavior === "ask" ? "ask" : "stop-quit";
+) =>
+  attachedToService && reason === "user" && choice === "app-and-service" ? "stop-quit" : "quit";
+
+/** What closing the main window does; "ask" means show the close dialog. */
+export const closeDecision = (input: {
+  readonly behavior: DesktopCloseWindowBehavior;
+  readonly attachedToService: boolean;
+  readonly trayActive: boolean;
+}) => {
+  if (input.behavior === "app-only") return "quit";
+  if (input.behavior === "app-and-service") return input.attachedToService ? "stop-quit" : "quit";
+  // A tray that failed to start cannot bring the window back, so "tray" falls back to asking.
+  if (input.behavior === "tray" && input.trayActive) return "hide";
+  return input.attachedToService || input.trayActive ? "ask" : "quit";
 };
+
+export type CloseDialogChoice = "hide" | "app-only" | "app-and-service" | "quit";
+
+/** Dialog options in button order; without a service the two quit choices collapse into one. */
+export const closeDialogChoices = (input: {
+  readonly attachedToService: boolean;
+  readonly trayActive: boolean;
+}): ReadonlyArray<CloseDialogChoice> => [
+  ...(input.trayActive ? (["hide"] as const) : []),
+  ...(input.attachedToService ? (["app-only", "app-and-service"] as const) : (["quit"] as const)),
+];
+
+/** The setting a remembered dialog choice saves. */
+export const closeChoiceBehavior = (choice: CloseDialogChoice): DesktopCloseWindowBehavior =>
+  choice === "hide" ? "tray" : choice === "quit" ? "app-only" : choice;
 
 export type ServiceUpdateTrigger = "install" | "attach" | "required";
 

@@ -1,3 +1,4 @@
+import type { DesktopCloseWindowBehavior } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -43,7 +44,7 @@ interface Recorded {
 
 const harness = (
   platform: "linux" | "win32" | "darwin",
-  closeToTray: boolean,
+  closeWindowBehavior: DesktopCloseWindowBehavior,
   show?: () => Effect.Effect<void>,
 ) => {
   const recorded: Recorded = {
@@ -94,7 +95,10 @@ const harness = (
     ),
     Layer.provideMerge(DesktopState.layer),
     Layer.provideMerge(
-      DesktopAppSettings.layerTest({ ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS, closeToTray }),
+      DesktopAppSettings.layerTest({
+        ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+        closeWindowBehavior,
+      }),
     ),
     Layer.provideMerge(
       DesktopEnvironment.layer({ ...environmentInput, platform }).pipe(
@@ -110,7 +114,7 @@ describe("DesktopTray", () => {
     { platform: "linux", icon: "/icons/icon.png" },
     { platform: "win32", icon: "/icons/icon.ico" },
   ] as const)("shows a tray with Show and Quit on $platform", ({ platform, icon }) => {
-    const { recorded, layer } = harness(platform, true);
+    const { recorded, layer } = harness(platform, "tray");
     return Effect.gen(function* () {
       const tray = yield* DesktopTray.DesktopTray;
       const state = yield* DesktopState.DesktopState;
@@ -123,7 +127,7 @@ describe("DesktopTray", () => {
       const items = (shown?.menu ?? []).filter((item) => item.type !== "separator");
       assert.deepEqual(
         items.map((item) => item.label),
-        ["Show T3 Code", "Quit"],
+        ["Show T3 Code", "Quit app"],
       );
 
       items[0]?.click?.({} as never, undefined, {} as never);
@@ -136,12 +140,13 @@ describe("DesktopTray", () => {
   });
 
   it.effect.each([
-    { platform: "linux", closeToTray: false },
-    { platform: "darwin", closeToTray: true },
+    { platform: "linux", closeWindowBehavior: "app-only" },
+    { platform: "linux", closeWindowBehavior: "app-and-service" },
+    { platform: "darwin", closeWindowBehavior: "tray" },
   ] as const)(
-    "creates no tray on $platform when closeToTray=$closeToTray",
-    ({ platform, closeToTray }) => {
-      const { recorded, layer } = harness(platform, closeToTray);
+    "creates no tray on $platform when closeWindowBehavior=$closeWindowBehavior",
+    ({ platform, closeWindowBehavior }) => {
+      const { recorded, layer } = harness(platform, closeWindowBehavior);
       return Effect.gen(function* () {
         const tray = yield* DesktopTray.DesktopTray;
         const state = yield* DesktopState.DesktopState;
@@ -155,20 +160,20 @@ describe("DesktopTray", () => {
   );
 
   it.effect("removes the tray and shows the window when turned off at runtime", () => {
-    const { recorded, layer } = harness("linux", true);
+    const { recorded, layer } = harness("linux", "tray");
     return Effect.gen(function* () {
       const tray = yield* DesktopTray.DesktopTray;
       const settings = yield* DesktopAppSettings.DesktopAppSettings;
       const state = yield* DesktopState.DesktopState;
       yield* tray.sync;
-      yield* settings.setCloseToTray(false);
+      yield* settings.setCloseWindowBehavior("app-only");
       yield* tray.sync;
 
       assert.isFalse(yield* Ref.get(state.trayActive));
       assert.equal(recorded.hides, 1);
       assert.equal(recorded.activations, 1);
 
-      yield* settings.setCloseToTray(true);
+      yield* settings.setCloseWindowBehavior("ask");
       yield* tray.sync;
       assert.isTrue(yield* Ref.get(state.trayActive));
       assert.equal(recorded.shown.length, 2);
@@ -176,7 +181,7 @@ describe("DesktopTray", () => {
   });
 
   it.effect("keeps closing the window quitting when the native tray fails", () => {
-    const { recorded, layer } = harness("linux", true, () => Effect.die(new Error("no tray")));
+    const { recorded, layer } = harness("linux", "tray", () => Effect.die(new Error("no tray")));
     return Effect.gen(function* () {
       const tray = yield* DesktopTray.DesktopTray;
       const state = yield* DesktopState.DesktopState;

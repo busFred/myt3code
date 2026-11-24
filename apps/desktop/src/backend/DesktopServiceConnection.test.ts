@@ -64,39 +64,11 @@ it.layer(NodeServices.layer)("desktop service connection", (it) => {
   );
 
   it.effect.each([
-    {
-      response: 0,
-      remember: true,
-      expected: "app-only",
-      stopped: false,
-      accepted: true,
-      stopFails: false,
-    },
-    {
-      response: 1,
-      remember: true,
-      expected: "app-and-service",
-      stopped: true,
-      accepted: true,
-      stopFails: false,
-    },
-    {
-      response: 2,
-      remember: true,
-      expected: "ask",
-      stopped: false,
-      accepted: false,
-      stopFails: false,
-    },
-    {
-      response: 1,
-      remember: false,
-      expected: "ask",
-      stopped: true,
-      accepted: true,
-      stopFails: true,
-    },
-  ])("quit choice $response, remember=$remember, stop failure=$stopFails", (input) =>
+    { choice: undefined, stopped: false, stopFails: false },
+    { choice: "app-only", stopped: false, stopFails: false },
+    { choice: "app-and-service", stopped: true, stopFails: false },
+    { choice: "app-and-service", stopped: true, stopFails: true },
+  ] as const)("quit choice $choice, stop failure=$stopFails", (input) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -185,8 +157,6 @@ it.layer(NodeServices.layer)("desktop service connection", (it) => {
         } as DesktopEnvironment.DesktopEnvironment["Service"]),
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.mock(ElectronDialog.ElectronDialog, {
-          showMessageBox: () =>
-            Effect.succeed({ response: input.response, checkboxChecked: input.remember }),
           showErrorBox: (title) =>
             Effect.sync(() => {
               errors.push(title);
@@ -239,11 +209,10 @@ it.layer(NodeServices.layer)("desktop service connection", (it) => {
         assert.equal(yield* attachment.getBearerToken, "bearer-2");
         assert.equal(yield* attachment.getBearerToken, "bearer-2");
         assert.equal(calls.filter((args) => args.includes("pair")).length, 2);
-        assert.equal(yield* attachment.confirmQuit(() => true), input.accepted);
-        assert.equal(
-          (yield* (yield* DesktopAppSettings.DesktopAppSettings).get).serviceQuitBehavior,
-          input.expected,
-        );
+        if (input.choice !== undefined) {
+          yield* Ref.set(state.pendingQuitChoice, Option.some(input.choice));
+        }
+        assert.isTrue(yield* attachment.confirmQuit(() => true));
         assert.equal(
           calls.some((args) => args.includes("stop")),
           input.stopped,
@@ -365,7 +334,7 @@ it.layer(NodeServices.layer)("service version on attach", (it) => {
         assert.equal(dialogs, input.responses.length);
         assert.equal(splashes, input.updates > 0 ? 1 : 0);
         assert.equal(
-          (yield* (yield* DesktopAppSettings.DesktopAppSettings).get).serviceQuitBehavior,
+          (yield* (yield* DesktopAppSettings.DesktopAppSettings).get).closeWindowBehavior,
           "ask",
         );
       }).pipe(

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  closeChoiceBehavior,
+  closeDecision,
+  closeDialogChoices,
   launchDecision,
   quitDecision,
   serviceUpdateDecision,
@@ -23,7 +26,7 @@ describe("local backend launch", () => {
     { label: "broken service", running: true, expected: "ask-start" },
     {
       label: "stopped service with app-and-service",
-      quitBehavior: "app-and-service",
+      closeWindowBehavior: "app-and-service",
       expected: "start-attach",
     },
     { label: "non-service owner", owner: "other", expected: "ask-connect" },
@@ -56,7 +59,7 @@ describe("local backend launch", () => {
         installed: true,
         running: false,
         remembered: false,
-        quitBehavior: "ask",
+        closeWindowBehavior: "ask",
         owner: "none",
         ...input,
       } as Parameters<typeof launchDecision>[0]),
@@ -66,16 +69,14 @@ describe("local backend launch", () => {
 
 describe("attached quit", () => {
   it.each([
-    [false, "ask", "user", "quit"],
-    [true, "ask", "user", "ask"],
+    [false, "app-and-service", "user", "quit"],
+    [true, undefined, "user", "quit"],
     [true, "app-only", "user", "quit"],
     [true, "app-and-service", "user", "stop-quit"],
-    [true, "ask", "update", "quit"],
     [true, "app-and-service", "update", "quit"],
-    [true, "ask", "shutdown", "quit"],
     [true, "app-and-service", "shutdown", "quit"],
-  ] as const)("service=%s, %s, %s => %s", (service, behavior, reason, expected) => {
-    expect(quitDecision(service, behavior, reason)).toBe(expected);
+  ] as const)("service=%s, choice=%s, %s => %s", (service, choice, reason, expected) => {
+    expect(quitDecision(service, choice, reason)).toBe(expected);
   });
 });
 
@@ -124,5 +125,44 @@ describe("background service update", () => {
     ["required", "failure", 1, "cancel"],
   ] as const)("%s %s response=%s -> %s", (trigger, phase, response, expected) => {
     expect(serviceUpdateResponse(trigger, phase, response)).toBe(expected);
+  });
+});
+
+describe("closing the window", () => {
+  it.each([
+    ["ask", true, true, "ask"],
+    ["ask", true, false, "ask"],
+    ["ask", false, true, "ask"],
+    ["ask", false, false, "quit"],
+    ["tray", true, true, "hide"],
+    ["tray", false, true, "hide"],
+    ["tray", true, false, "ask"],
+    ["tray", false, false, "quit"],
+    ["app-only", true, true, "quit"],
+    ["app-and-service", true, true, "stop-quit"],
+    ["app-and-service", false, true, "quit"],
+  ] as const)(
+    "%s, service=%s, tray=%s => %s",
+    (behavior, attachedToService, trayActive, expected) => {
+      expect(closeDecision({ behavior, attachedToService, trayActive })).toBe(expected);
+    },
+  );
+
+  it.each([
+    [true, true, ["hide", "app-only", "app-and-service"]],
+    [true, false, ["app-only", "app-and-service"]],
+    [false, true, ["hide", "quit"]],
+    [false, false, ["quit"]],
+  ] as const)("dialog choices: service=%s, tray=%s", (attachedToService, trayActive, expected) => {
+    expect(closeDialogChoices({ attachedToService, trayActive })).toEqual(expected);
+  });
+
+  it.each([
+    ["hide", "tray"],
+    ["app-only", "app-only"],
+    ["app-and-service", "app-and-service"],
+    ["quit", "app-only"],
+  ] as const)("remembering %s saves %s", (choice, expected) => {
+    expect(closeChoiceBehavior(choice)).toBe(expected);
   });
 });

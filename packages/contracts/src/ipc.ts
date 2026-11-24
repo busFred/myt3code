@@ -1098,12 +1098,13 @@ export type DesktopMediaRead = typeof DesktopMediaReadSchema.Type;
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
-export const DesktopServiceQuitBehaviorSchema = Schema.Literals([
+export const DesktopCloseWindowBehaviorSchema = Schema.Literals([
   "ask",
+  "tray",
   "app-only",
   "app-and-service",
 ]);
-export type DesktopServiceQuitBehavior = typeof DesktopServiceQuitBehaviorSchema.Type;
+export type DesktopCloseWindowBehavior = typeof DesktopCloseWindowBehaviorSchema.Type;
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
@@ -1133,13 +1134,11 @@ export interface DesktopBridge {
   /** False when the OS turned off middle-click PRIMARY paste (`gtk-enable-primary-paste`). */
   getPrimaryPasteEnabled?: () => boolean;
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
-  /** Windows and Linux only; absent or false elsewhere. */
-  getCloseToTray?: () => boolean;
-  /** Keeps T3 Code running in the system tray after its window is closed. */
-  setCloseToTray?: (enabled: boolean) => Promise<void>;
+  /** True where closing the window can hide it to a system tray icon (Windows and Linux). */
+  supportsTray?: boolean;
+  getCloseWindowBehavior: () => DesktopCloseWindowBehavior;
+  setCloseWindowBehavior: (behavior: DesktopCloseWindowBehavior) => Promise<void>;
   getLocalEnvironmentEnabled: () => boolean;
-  getServiceQuitBehavior: () => DesktopServiceQuitBehavior;
-  setServiceQuitBehavior: (behavior: DesktopServiceQuitBehavior) => Promise<void>;
   setLocalEnvironmentEnabled: (enabled: boolean) => Promise<void>;
   /** The environment ID recorded in this app's T3 home, such as its own machine's background service. */
   getHostEnvironmentId?: () => Promise<string | null>;

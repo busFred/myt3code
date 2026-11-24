@@ -1,6 +1,6 @@
 import {
-  DesktopServiceQuitBehaviorSchema,
-  type DesktopServiceQuitBehavior,
+  DesktopCloseWindowBehaviorSchema,
+  type DesktopCloseWindowBehavior,
   DesktopServerExposureModeSchema,
   DesktopUpdateChannelSchema,
   type DesktopServerExposureMode,
@@ -30,10 +30,9 @@ import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
 import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 
 export interface DesktopSettings {
-  readonly serviceQuitBehavior: DesktopServiceQuitBehavior;
+  readonly closeWindowBehavior: DesktopCloseWindowBehavior;
   readonly serviceConnectionRemembered: boolean;
   readonly localEnvironmentEnabled: boolean;
-  readonly closeToTray: boolean;
   readonly closeToTrayNoticeShown: boolean;
   /** The newest upstream release already announced, so each one notifies once. */
   readonly lastNotifiedUpstreamVersion: string | null;
@@ -77,10 +76,9 @@ export const DEFAULT_MAIN_WINDOW_SIZE = {
 } as const;
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
-  serviceQuitBehavior: "ask",
+  closeWindowBehavior: "ask",
   serviceConnectionRemembered: false,
   localEnvironmentEnabled: true,
-  closeToTray: false,
   closeToTrayNoticeShown: false,
   lastNotifiedUpstreamVersion: null,
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
@@ -109,9 +107,11 @@ const optionalReadableKey = <S extends Schema.Top>(schema: S) =>
   Schema.optionalKey(schema.pipe(Schema.catchDecoding(() => Effect.succeedNone)));
 
 const DesktopSettingsDocument = Schema.Struct({
-  serviceQuitBehavior: optionalReadableKey(DesktopServiceQuitBehaviorSchema),
+  closeWindowBehavior: optionalReadableKey(DesktopCloseWindowBehaviorSchema),
+  serviceQuitBehavior: optionalReadableKey(Schema.Literals(["ask", "app-only", "app-and-service"])),
   serviceConnectionRemembered: optionalReadableKey(Schema.Boolean),
   localEnvironmentEnabled: optionalReadableKey(Schema.Boolean),
+  // Read only to migrate into closeWindowBehavior; never written back.
   closeToTray: optionalReadableKey(Schema.Boolean),
   closeToTrayNoticeShown: optionalReadableKey(Schema.Boolean),
   lastNotifiedUpstreamVersion: optionalReadableKey(Schema.NullOr(Schema.String)),
@@ -169,8 +169,8 @@ export class DesktopSettingsWriteError extends Schema.TaggedError<DesktopSetting
 export class DesktopAppSettings extends Context.Service<
   DesktopAppSettings,
   {
-    readonly setServiceQuitBehavior: (
-      behavior: DesktopServiceQuitBehavior,
+    readonly setCloseWindowBehavior: (
+      behavior: DesktopCloseWindowBehavior,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly rememberServiceConnection: Effect.Effect<
       DesktopSettingsChange,
@@ -179,9 +179,6 @@ export class DesktopAppSettings extends Context.Service<
     readonly load: Effect.Effect<DesktopSettings>;
     readonly get: Effect.Effect<DesktopSettings>;
     readonly setLocalEnvironmentEnabled: (
-      enabled: boolean,
-    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
-    readonly setCloseToTray: (
       enabled: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     /** `changed` is true only for the first call, so it doubles as "show the notice once". */
@@ -261,11 +258,14 @@ function normalizeDesktopSettingsDocument(
     (parsed.wslBackendEnabled === undefined && parsed.wslMode === "wsl");
 
   return {
-    serviceQuitBehavior: parsed.serviceQuitBehavior ?? defaultSettings.serviceQuitBehavior,
+    closeWindowBehavior:
+      parsed.closeWindowBehavior ??
+      (parsed.closeToTray === true
+        ? "tray"
+        : (parsed.serviceQuitBehavior ?? defaultSettings.closeWindowBehavior)),
     serviceConnectionRemembered:
       parsed.serviceConnectionRemembered ?? defaultSettings.serviceConnectionRemembered,
     localEnvironmentEnabled: parsed.localEnvironmentEnabled !== false,
-    closeToTray: parsed.closeToTray === true,
     closeToTrayNoticeShown: parsed.closeToTrayNoticeShown === true,
     lastNotifiedUpstreamVersion: parsed.lastNotifiedUpstreamVersion ?? null,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
@@ -291,15 +291,12 @@ function toDesktopSettingsDocument(
 ): DesktopSettingsDocument {
   const document: Mutable<DesktopSettingsDocument> = {};
 
-  if (settings.serviceQuitBehavior !== defaults.serviceQuitBehavior)
-    document.serviceQuitBehavior = settings.serviceQuitBehavior;
+  if (settings.closeWindowBehavior !== defaults.closeWindowBehavior)
+    document.closeWindowBehavior = settings.closeWindowBehavior;
   if (settings.serviceConnectionRemembered !== defaults.serviceConnectionRemembered)
     document.serviceConnectionRemembered = settings.serviceConnectionRemembered;
   if (settings.localEnvironmentEnabled !== defaults.localEnvironmentEnabled) {
     document.localEnvironmentEnabled = settings.localEnvironmentEnabled;
-  }
-  if (settings.closeToTray !== defaults.closeToTray) {
-    document.closeToTray = settings.closeToTray;
   }
   if (settings.closeToTrayNoticeShown !== defaults.closeToTrayNoticeShown) {
     document.closeToTrayNoticeShown = settings.closeToTrayNoticeShown;
@@ -435,10 +432,6 @@ function setLocalEnvironmentEnabled(settings: DesktopSettings, enabled: boolean)
   return settings.localEnvironmentEnabled === enabled
     ? settings
     : { ...settings, localEnvironmentEnabled: enabled };
-}
-
-function setCloseToTray(settings: DesktopSettings, enabled: boolean): DesktopSettings {
-  return settings.closeToTray === enabled ? settings : { ...settings, closeToTray: enabled };
 }
 
 function markCloseToTrayNoticeShown(settings: DesktopSettings): DesktopSettings {
@@ -664,9 +657,9 @@ export const make = Effect.gen(function* () {
 
       return yield* persist((settings) => setWslOnly(settings, enabled));
     }),
-    setServiceQuitBehavior: Effect.fn("desktop.settings.setServiceQuitBehavior")(
-      function (serviceQuitBehavior) {
-        return persist((settings) => ({ ...settings, serviceQuitBehavior }));
+    setCloseWindowBehavior: Effect.fn("desktop.settings.setCloseWindowBehavior")(
+      function (closeWindowBehavior) {
+        return persist((settings) => ({ ...settings, closeWindowBehavior }));
       },
     ),
     rememberServiceConnection: persist((settings) => ({
@@ -680,11 +673,6 @@ export const make = Effect.gen(function* () {
         return yield* persist((settings) => setLocalEnvironmentEnabled(settings, enabled));
       },
     ),
-    setCloseToTray: Effect.fn("desktop.settings.setCloseToTray")(function* (enabled) {
-      yield* Effect.annotateCurrentSpan({ enabled });
-
-      return yield* persist((settings) => setCloseToTray(settings, enabled));
-    }),
     setLastNotifiedUpstreamVersion: Effect.fn("desktop.settings.setLastNotifiedUpstreamVersion")(
       function* (version) {
         yield* Effect.annotateCurrentSpan({ version });
@@ -753,9 +741,9 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setWslOnly: Effect.fn("DesktopAppSettings.setWslOnly")(function (enabled) {
           return update((settings) => setWslOnly(settings, enabled));
         }),
-        setServiceQuitBehavior: Effect.fn("DesktopAppSettings.setServiceQuitBehavior")(
-          function (serviceQuitBehavior) {
-            return update((settings) => ({ ...settings, serviceQuitBehavior }));
+        setCloseWindowBehavior: Effect.fn("DesktopAppSettings.setCloseWindowBehavior")(
+          function (closeWindowBehavior) {
+            return update((settings) => ({ ...settings, closeWindowBehavior }));
           },
         ),
         rememberServiceConnection: update((settings) => ({
@@ -767,9 +755,6 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
             return update((settings) => setLocalEnvironmentEnabled(settings, enabled));
           },
         ),
-        setCloseToTray: Effect.fn("DesktopAppSettings.setCloseToTray")(function (enabled) {
-          return update((settings) => setCloseToTray(settings, enabled));
-        }),
         setLastNotifiedUpstreamVersion: Effect.fn(
           "DesktopAppSettings.setLastNotifiedUpstreamVersion",
         )(function (version) {
