@@ -237,6 +237,8 @@ export function useBothWaysRunner() {
     readonly lifetime: LifetimeChoice;
     readonly previous?: ReadonlyMap<BothWaysStep, BothWaysOutcome>;
     readonly batch?: boolean;
+    /** Leave the invite out; omitted keeps it. */
+    readonly invite?: boolean;
   }) => {
     const a = bothWaysSide({ environmentId: input.a, other: input.b, relays });
     const b = bothWaysSide({ environmentId: input.b, other: input.a, relays });
@@ -246,7 +248,7 @@ export function useBothWaysRunner() {
       b,
       access: input.access,
       lifetime: lifetimeFromChoice(input.lifetime),
-      invite: input.previous?.get("invite")?.kind !== "done",
+      invite: input.invite !== false && input.previous?.get("invite")?.kind !== "done",
       batch: input.batch === true,
       appCodeLabel: (label) => gt("App for {label}", { label }),
     });

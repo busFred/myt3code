@@ -4,6 +4,7 @@ import {
   isNeverExpiring,
   AuthAccessWriteScope,
   type AuthMcpClientAccess,
+  type AuthSessionLifetime,
   type EnvironmentId,
   type PeerLinkSummary,
 } from "@t3tools/contracts";
@@ -21,7 +22,7 @@ import { T, useGT, useMessages, Var } from "gt-react";
 import { useId, useRef, useState } from "react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
-import { readPeerLinks, refreshLinkExpiries, renewLinksBothWays } from "~/state/bothWays";
+import { refreshLinkExpiries, renewLinksBothWays } from "~/state/bothWays";
 import { mintPairingCodeOn } from "~/state/peerPairingCode";
 import { peerLinkEnvironment, useLinkableMachines } from "~/state/peerLinks";
 import { useEnvironment, useEnvironments } from "~/state/environments";
@@ -31,6 +32,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { accessConfig } from "../auth/ConnectAgentSurface";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   Dialog,
@@ -51,11 +53,15 @@ import { BothWaysOption, BothWaysResults, useBothWaysRunner } from "./BothWays";
 import { LinkAddressWarning, LinkMachineSelect } from "./LinkMachineSelect";
 import {
   DEFAULT_LIFETIME_CHOICE,
+  describeLifetime,
   type LifetimeChoice,
+  RENEW_LIFETIMES,
+  type RenewLifetimeId,
   isLifetimeChoiceValid,
   renewFailedSteps,
   summarizeBothWays,
 } from "./sessionLifetime.logic";
+import { hasLinkBack } from "./linkedEnvironments.logic";
 import { LinkSeveralEnvironmentsAction } from "./LinkSeveralEnvironments";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useLiveRefresh } from "../../hooks/useLiveRefresh";
@@ -162,35 +168,46 @@ function LinkedEnvironmentRow({
   const canUnlink = useAtomValue(peerLinkEnvironment.unlink.permissionAtom(environmentId));
   const [busy, setBusy] = useState(false);
   const [renewing, setRenewing] = useState(false);
+  const [linkingBack, setLinkingBack] = useState(false);
   // The link's session lives on the machine it links to, and renewing it needs access
   // management there, so only machines this app is signed in to offer it.
   const savedPeer = useEnvironment(link.environmentId);
   const mayManagePeer = useEnvironmentScope(link.environmentId, AuthAccessWriteScope);
-  const canNeverExpire = link.peerSessionId !== undefined && savedPeer !== null && mayManagePeer;
-  const neverExpire = async () => {
+  const mayManageHere = useEnvironmentScope(environmentId, AuthAccessWriteScope);
+  const canSetExpiry = link.peerSessionId !== undefined && savedPeer !== null && mayManagePeer;
+  const canLinkBack = savedPeer !== null && mayManagePeer && mayManageHere;
+  const peerLinks = useEnvironmentQuery(
+    canLinkBack ? peerLinkEnvironment.list({ environmentId: link.environmentId, input: {} }) : null,
+    m,
+  );
+  const showLinkBack =
+    canLinkBack &&
+    peerLinks.data !== null &&
+    !hasLinkBack(peerLinks.data.links, environmentId, DateTime.makeUnsafe(nowMinute));
+  const runBothWays = useBothWaysRunner();
+  const setExpiry = async (lifetime: AuthSessionLifetime) => {
     setRenewing(true);
-    const theirLinks = await readPeerLinks(link.environmentId);
-    // Null when their links could not be read, which is not the same as no link back.
-    const theirLink =
-      theirLinks === null
-        ? null
-        : theirLinks.find((candidate) => candidate.environmentId === environmentId);
+    // Only this link: with no link back named, that step is skipped.
     const outcomes = await renewLinksBothWays({
       a: { environmentId, linkToOther: link },
-      b: {
-        environmentId: link.environmentId,
-        ...(theirLink === undefined ? {} : { linkToOther: theirLink }),
-      },
-      lifetime: { _tag: "never" },
+      b: { environmentId: link.environmentId },
+      lifetime,
     });
     // Each side keeps the expiry its peer last named; have both ask again, so this shows.
     await refreshLinkExpiries(environmentId, link.environmentId);
     setRenewing(false);
     const failed = renewFailedSteps(outcomes);
     if (failed.length === 0) {
+      const described = describeLifetime(lifetime);
       toastManager.add({
         type: "success",
-        title: gt("{label} never expires", { label: link.label }),
+        title:
+          described.kind === "never"
+            ? gt("{label} never expires", { label: link.label })
+            : gt(
+                "{days, plural, one {{label} now expires in {days} day} other {{label} now expires in {days} days}}",
+                { label: link.label, days: described.days },
+              ),
       });
       return;
     }
@@ -198,16 +215,47 @@ function LinkedEnvironmentRow({
       outcome.kind === "failed" ? [outcome.failure] : [],
     );
     failureToast(
-      gt("Could not renew every link"),
+      gt("Could not change the expiry"),
       failures.includes("unsupported")
         ? gt("That machine runs an older T3 Code")
         : failures.includes("unknown_session")
           ? gt("A machine does not report its link's session. Link it again to renew.")
-          : failures.includes("unreadable")
-            ? gt("Could not read {label}'s links, so its link back here was not renewed.", {
-                label: link.label,
-              })
-            : gt("Check that this app is signed in there with access management."),
+          : gt("Check that this app is signed in there with access management."),
+    );
+  };
+  const linkBack = async () => {
+    setLinkingBack(true);
+    const outcomes = await runBothWays({
+      a: environmentId,
+      b: link.environmentId,
+      access: link.access,
+      lifetime: isNeverExpiring(link.expiresAt)
+        ? { mode: "never", days: "90" }
+        : DEFAULT_LIFETIME_CHOICE,
+      invite: false,
+    });
+    setLinkingBack(false);
+    if (outcomes === null) {
+      failureToast(gt("Could not link back"), gt("Both machines must be saved in this app."));
+      return;
+    }
+    const step = outcomes.get("b_to_a");
+    if (step?.kind === "done" || step?.kind === "kept") {
+      toastManager.add({
+        type: "success",
+        title: gt("{label} now links back here", { label: link.label }),
+      });
+      peerLinks.refresh();
+      return;
+    }
+    failureToast(
+      gt("Could not link back"),
+      step?.kind === "failed"
+        ? (step.detail ??
+            (step.failure === "unsupported"
+              ? gt("That machine runs an older T3 Code")
+              : gt("Check that this app is signed in there with access management.")))
+        : gt("Check that this app is signed in there with access management."),
     );
   };
   const forget = async () => {
@@ -225,6 +273,11 @@ function LinkedEnvironmentRow({
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       failureToast(gt("Could not forget the link"), String(squashAtomCommandFailure(result)));
     }
+  };
+  const expiryLabels: Record<RenewLifetimeId, string> = {
+    "30-days": gt("30 days"),
+    "1-year": gt("1 year"),
+    never: gt("Never"),
   };
   const status =
     health.kind === "expired"
@@ -268,24 +321,49 @@ function LinkedEnvironmentRow({
         </div>
         {canUnlink ? (
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-            {canNeverExpire && health.kind !== "expired" && !isNeverExpiring(link.expiresAt) ? (
+            {showLinkBack ? (
               <Tooltip>
                 <TooltipTrigger
                   render={
                     <Button
                       size="xs"
                       variant="outline"
-                      disabled={busy || renewing}
-                      onClick={() => void neverExpire()}
+                      disabled={busy || renewing || linkingBack}
+                      onClick={() => void linkBack()}
                     >
-                      {renewing ? gt("Updating…") : gt("Never expire")}
+                      {linkingBack ? gt("Linking…") : gt("Link back")}
                     </Button>
                   }
                 />
                 <TooltipPopup side="top">
-                  {gt("Also makes {label}'s link back here never expire.", { label: link.label })}
+                  {gt(
+                    "Makes {label} link to this machine too. To undo, forget this machine in {label}''s Linked environments.",
+                    { label: link.label },
+                  )}
                 </TooltipPopup>
               </Tooltip>
+            ) : null}
+            {canSetExpiry && health.kind !== "expired" ? (
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={busy || renewing || linkingBack}
+                    />
+                  }
+                >
+                  {renewing ? gt("Updating…") : gt("Expiry")}
+                </MenuTrigger>
+                <MenuPopup align="end">
+                  {RENEW_LIFETIMES.map(({ id, lifetime }) => (
+                    <MenuItem key={id} onClick={() => void setExpiry(lifetime)}>
+                      {expiryLabels[id]}
+                    </MenuItem>
+                  ))}
+                </MenuPopup>
+              </Menu>
             ) : null}
             <Button
               size="xs"
@@ -520,9 +598,9 @@ function LinkEnvironmentAction({
                 {linkingBothWays ? (
                   <T>
                     Already linked. Bi-directional link keeps existing links as they are. To change
-                    how long they last, use Never expire on the link, or Renew under Authorized
-                    clients on the other machine. To change the access, forget the link first or
-                    untick Bi-directional link.
+                    how long they last, use Expiry on the link, or Renew under Authorized clients on
+                    the other machine. To change the access, forget the link first or untick
+                    Bi-directional link.
                   </T>
                 ) : (
                   <T>Already linked. Linking again renews it with the access you pick.</T>

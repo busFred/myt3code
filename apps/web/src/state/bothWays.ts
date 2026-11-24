@@ -169,12 +169,6 @@ export async function refreshLinkExpiries(a: EnvironmentId, b: EnvironmentId) {
   refreshPeerLinkLists([a, b]);
 }
 
-/** Lists the links `environmentId` holds, for finding the session its link to another has there. */
-export async function readPeerLinks(environmentId: EnvironmentId) {
-  const result = await run(peerLinkEnvironment.listNow, { environmentId, input: {} });
-  return Result.isSuccess(result) ? result.success.links : null;
-}
-
 export function renewLinksBothWays(input: {
   readonly a: Parameters<typeof runRenewBothWays>[0]["a"];
   readonly b: Parameters<typeof runRenewBothWays>[0]["b"];
