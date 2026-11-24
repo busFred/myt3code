@@ -1387,19 +1387,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     desktopOnly: true,
   },
   {
-    id: "service-quit-behavior",
-    title: msg("When quitting while connected to the background service"),
-    to: "/settings/connections",
-    searchTerms: ["quit stop background service app ask remember"],
-    desktopOnly: true,
-  },
-  {
-    id: "close-to-tray",
-    title: msg("Close to system tray"),
+    id: "close-window-behavior",
+    title: msg("Close window behavior"),
     to: "/settings/general",
-    searchTerms: [msg("close window hide background keep running tray notification area quit")],
+    searchTerms: [
+      msg(
+        "close window hide system tray quit app background service ask remember notification area",
+      ),
+    ],
     desktopOnly: true,
-    hiddenOnMac: true,
   },
   {
     id: "network-access",

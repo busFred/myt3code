@@ -272,7 +272,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const layerSettings =
     setUpdateChannelError || options.beforeSetUpdateChannel || options.savedChannel
       ? Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
-          setServiceQuitBehavior: () => Effect.die("unexpected service quit behavior change"),
+          setCloseWindowBehavior: () => Effect.die("unexpected close window behavior change"),
           rememberServiceConnection: Effect.die("unexpected service connection change"),
           get: Effect.sync(() => testSettings),
           load: Effect.sync(() => testSettings),
@@ -298,7 +298,6 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
           setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
           setWslDistro: () => Effect.die("unexpected WSL distro change"),
           setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
-          setCloseToTray: () => Effect.die("unexpected close-to-tray toggle"),
           markCloseToTrayNoticeShown: Effect.die("unexpected close-to-tray notice"),
           setLastNotifiedUpstreamVersion: () => Effect.die("unexpected upstream notice update"),
           setWslOnly: () => Effect.die("unexpected WSL-only toggle"),

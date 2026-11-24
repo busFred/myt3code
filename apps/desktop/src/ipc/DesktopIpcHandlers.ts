@@ -13,10 +13,8 @@ import { getClientSettings, setClientSettings } from "./methods/clientSettings.t
 import { getConnectionCatalog, setConnectionCatalog } from "./methods/connectionCatalog.ts";
 import {
   getHostEnvironmentId,
-  getCloseToTray,
-  setCloseToTray,
-  getServiceQuitBehavior,
-  setServiceQuitBehavior,
+  getCloseWindowBehavior,
+  setCloseWindowBehavior,
   getLocalEnvironmentEnabled,
   setLocalEnvironmentEnabled,
 } from "./methods/localEnvironment.ts";
@@ -119,10 +117,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getPrimaryPasteEnabled);
   yield* ipc.handleSync(getWindowFullscreenState);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
-  yield* ipc.handleSync(getServiceQuitBehavior);
-  yield* ipc.handle(setServiceQuitBehavior);
-  yield* ipc.handleSync(getCloseToTray);
-  yield* ipc.handle(setCloseToTray);
+  yield* ipc.handleSync(getCloseWindowBehavior);
+  yield* ipc.handle(setCloseWindowBehavior);
   yield* ipc.handleSync(getLocalEnvironmentEnabled);
   yield* ipc.handle(setLocalEnvironmentEnabled);
   yield* ipc.handle(getHostEnvironmentId);

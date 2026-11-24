@@ -159,17 +159,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   getLocalEnvironmentBearerToken: () =>
     ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
-  getServiceQuitBehavior: () => ipcRenderer.sendSync(IpcChannels.GET_SERVICE_QUIT_BEHAVIOR_CHANNEL),
-  setServiceQuitBehavior: (behavior) =>
-    ipcRenderer.invoke(IpcChannels.SET_SERVICE_QUIT_BEHAVIOR_CHANNEL, behavior),
-  // The Dock keeps a macOS app alive after its window closes, so only Windows and Linux get a tray.
-  ...(!supportsTray(clientPlatform)
-    ? {}
-    : {
-        getCloseToTray: () => ipcRenderer.sendSync(IpcChannels.GET_CLOSE_TO_TRAY_CHANNEL) === true,
-        setCloseToTray: (enabled: boolean) =>
-          ipcRenderer.invoke(IpcChannels.SET_CLOSE_TO_TRAY_CHANNEL, enabled),
-      }),
+  supportsTray: supportsTray(clientPlatform),
+  getCloseWindowBehavior: () => ipcRenderer.sendSync(IpcChannels.GET_CLOSE_WINDOW_BEHAVIOR_CHANNEL),
+  setCloseWindowBehavior: (behavior) =>
+    ipcRenderer.invoke(IpcChannels.SET_CLOSE_WINDOW_BEHAVIOR_CHANNEL, behavior),
   getLocalEnvironmentEnabled: () =>
     ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL) !== false,
   setLocalEnvironmentEnabled: (enabled) =>

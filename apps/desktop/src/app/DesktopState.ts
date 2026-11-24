@@ -23,6 +23,8 @@ export class DesktopState extends Context.Service<
     readonly quitting: Ref.Ref<boolean>;
     // True while the tray icon exists, so closing the main window can hide it instead.
     readonly trayActive: Ref.Ref<boolean>;
+    // A choice made in the close dialog, consumed by the quit that follows so it does not ask again.
+    readonly pendingQuitChoice: Ref.Ref<Option.Option<"app-only" | "app-and-service">>;
     readonly quitReason: Ref.Ref<"user" | "update">;
     // Set by DesktopUpdates.configure, which runs before the first backend start.
     readonly canInstallUpdates: Ref.Ref<boolean>;
@@ -36,6 +38,7 @@ const make = Effect.all({
   backendReady: Ref.make(false),
   quitting: Ref.make(false),
   trayActive: Ref.make(false),
+  pendingQuitChoice: Ref.make(Option.none<"app-only" | "app-and-service">()),
   quitReason: Ref.make<"user" | "update">("user"),
   canInstallUpdates: Ref.make(false),
   primaryBackendStartup: SubscriptionRef.make<PrimaryBackendStartup>({ _tag: "Starting" }),

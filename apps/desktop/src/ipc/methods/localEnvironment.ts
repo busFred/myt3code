@@ -1,4 +1,4 @@
-import { DesktopServiceQuitBehaviorSchema } from "@t3tools/contracts";
+import { DesktopCloseWindowBehaviorSchema } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -33,37 +33,20 @@ export const setLocalEnvironmentEnabled = makeIpcMethod({
   }),
 });
 
-export const getServiceQuitBehavior = makeSyncIpcMethod({
-  channel: IpcChannels.GET_SERVICE_QUIT_BEHAVIOR_CHANNEL,
-  result: DesktopServiceQuitBehaviorSchema,
-  handler: Effect.fn("desktop.ipc.localEnvironment.getServiceQuitBehavior")(function* () {
-    return (yield* (yield* DesktopAppSettings.DesktopAppSettings).get).serviceQuitBehavior;
+export const getCloseWindowBehavior = makeSyncIpcMethod({
+  channel: IpcChannels.GET_CLOSE_WINDOW_BEHAVIOR_CHANNEL,
+  result: DesktopCloseWindowBehaviorSchema,
+  handler: Effect.fn("desktop.ipc.localEnvironment.getCloseWindowBehavior")(function* () {
+    return (yield* (yield* DesktopAppSettings.DesktopAppSettings).get).closeWindowBehavior;
   }),
 });
 
-export const setServiceQuitBehavior = makeIpcMethod({
-  channel: IpcChannels.SET_SERVICE_QUIT_BEHAVIOR_CHANNEL,
-  payload: DesktopServiceQuitBehaviorSchema,
+export const setCloseWindowBehavior = makeIpcMethod({
+  channel: IpcChannels.SET_CLOSE_WINDOW_BEHAVIOR_CHANNEL,
+  payload: DesktopCloseWindowBehaviorSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.localEnvironment.setServiceQuitBehavior")(function* (behavior) {
-    yield* (yield* DesktopAppSettings.DesktopAppSettings).setServiceQuitBehavior(behavior);
-  }),
-});
-
-export const getCloseToTray = makeSyncIpcMethod({
-  channel: IpcChannels.GET_CLOSE_TO_TRAY_CHANNEL,
-  result: Schema.Boolean,
-  handler: Effect.fn("desktop.ipc.localEnvironment.getCloseToTray")(function* () {
-    return (yield* (yield* DesktopAppSettings.DesktopAppSettings).get).closeToTray;
-  }),
-});
-
-export const setCloseToTray = makeIpcMethod({
-  channel: IpcChannels.SET_CLOSE_TO_TRAY_CHANNEL,
-  payload: Schema.Boolean,
-  result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.localEnvironment.setCloseToTray")(function* (enabled) {
-    yield* (yield* DesktopAppSettings.DesktopAppSettings).setCloseToTray(enabled);
+  handler: Effect.fn("desktop.ipc.localEnvironment.setCloseWindowBehavior")(function* (behavior) {
+    yield* (yield* DesktopAppSettings.DesktopAppSettings).setCloseWindowBehavior(behavior);
     yield* (yield* DesktopTray.DesktopTray).sync;
   }),
 });

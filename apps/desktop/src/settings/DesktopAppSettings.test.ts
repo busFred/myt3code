@@ -30,6 +30,11 @@ const DesktopSettingsPatch = Schema.Struct({
   serverExposureMode: Schema.optionalKey(Schema.Literals(["local-only", "network-accessible"])),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
+  closeToTray: Schema.optionalKey(Schema.Boolean),
+  serviceQuitBehavior: Schema.optionalKey(Schema.Literals(["ask", "app-only", "app-and-service"])),
+  closeWindowBehavior: Schema.optionalKey(
+    Schema.Literals(["ask", "tray", "app-only", "app-and-service"]),
+  ),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   wslBackendEnabled: Schema.optionalKey(Schema.Boolean),
@@ -137,7 +142,7 @@ describe("DesktopSettings", () => {
           yield* settings.setWslBackendEnabled(true);
           yield* settings.setWslDistro("Ubuntu");
           yield* settings.setServerExposureMode("network-accessible");
-          yield* settings.setServiceQuitBehavior("app-and-service");
+          yield* settings.setCloseWindowBehavior("app-and-service");
           yield* settings.rememberServiceConnection;
           const before = yield* settings.get;
           assert.isTrue((yield* settings.setLocalEnvironmentEnabled(false)).changed);
@@ -145,7 +150,7 @@ describe("DesktopSettings", () => {
           assert.isFalse((yield* settings.setLocalEnvironmentEnabled(false)).changed);
           yield* settings.setLocalEnvironmentEnabled(true);
           assert.deepEqual(yield* settings.load, before);
-          assert.equal((yield* settings.get).serviceQuitBehavior, "app-and-service");
+          assert.equal((yield* settings.get).closeWindowBehavior, "app-and-service");
           assert.isTrue((yield* settings.get).serviceConnectionRemembered);
         }),
       ),
@@ -208,6 +213,46 @@ describe("DesktopSettings", () => {
     ),
   );
 
+  it.effect.each([
+    {
+      label: "closeToTray wins over a quit behavior",
+      patch: { closeToTray: true, serviceQuitBehavior: "app-only" },
+      expected: "tray",
+    },
+    {
+      label: "closeToTray false falls through",
+      patch: { closeToTray: false, serviceQuitBehavior: "app-only" },
+      expected: "app-only",
+    },
+    {
+      label: "service quit behavior maps 1:1",
+      patch: { serviceQuitBehavior: "app-and-service" },
+      expected: "app-and-service",
+    },
+    { label: "service quit ask", patch: { serviceQuitBehavior: "ask" }, expected: "ask" },
+    { label: "neither key", patch: {}, expected: "ask" },
+    {
+      label: "new key wins over old keys",
+      patch: { closeWindowBehavior: "app-only", closeToTray: true },
+      expected: "app-only",
+    },
+  ] as const)("migrates close settings: $label", ({ patch, expected }) =>
+    withSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* writeSettingsPatch(patch);
+
+        assert.equal((yield* settings.load).closeWindowBehavior, expected);
+        yield* settings.setLocalEnvironmentEnabled(false);
+        const written = yield* fileSystem.readFileString(environment.desktopSettingsPath);
+        assert.notInclude(written, 'closeToTray"');
+        assert.notInclude(written, "serviceQuitBehavior");
+      }),
+    ),
+  );
+
   it.effect("reports the close-to-tray notice as new only once and persists it", () =>
     withSettings(
       Effect.gen(function* () {
@@ -264,10 +309,9 @@ describe("DesktopSettings", () => {
 
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
-          serviceQuitBehavior: "ask",
+          closeWindowBehavior: "tray",
           serviceConnectionRemembered: false,
           localEnvironmentEnabled: true,
-          closeToTray: true,
           closeToTrayNoticeShown: true,
           lastNotifiedUpstreamVersion: null,
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
@@ -422,10 +466,9 @@ describe("DesktopSettings", () => {
 
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
-          serviceQuitBehavior: "ask",
+          closeWindowBehavior: "ask",
           serviceConnectionRemembered: false,
           localEnvironmentEnabled: true,
-          closeToTray: false,
           closeToTrayNoticeShown: false,
           lastNotifiedUpstreamVersion: null,
           mainWindowBounds: null,
@@ -456,10 +499,9 @@ describe("DesktopSettings", () => {
 
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
-          serviceQuitBehavior: "ask",
+          closeWindowBehavior: "ask",
           serviceConnectionRemembered: false,
           localEnvironmentEnabled: true,
-          closeToTray: false,
           closeToTrayNoticeShown: false,
           lastNotifiedUpstreamVersion: null,
           mainWindowBounds: null,

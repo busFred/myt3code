@@ -19,7 +19,7 @@ import * as DesktopWindow from "./DesktopWindow.ts";
 export class DesktopTray extends Context.Service<
   DesktopTray,
   {
-    /** Creates or removes the tray icon to match the close-to-tray setting. */
+    /** Creates or removes the tray icon to match the close window and tray quit settings. */
     readonly sync: Effect.Effect<void>;
     /** Syncs now and again after each UI language change. */
     readonly configure: Effect.Effect<void>;
@@ -46,7 +46,12 @@ export const make = Effect.gen(function* () {
 
   const sync = Effect.gen(function* () {
     const wasActive = yield* Ref.get(desktopState.trayActive);
-    const enabled = supportsTray(environment.platform) && (yield* desktopSettings.get).closeToTray;
+    const settings = yield* desktopSettings.get;
+    // Only the "ask" and "tray" close behaviors can hide the window, so only they need a tray.
+    const enabled =
+      supportsTray(environment.platform) &&
+      (settings.closeWindowBehavior === "ask" || settings.closeWindowBehavior === "tray");
+
     const icons = yield* assets.iconPaths;
     // Windows scales an .ico to the tray size; Linux needs the png.
     const iconPath = Option.orElse(environment.platform === "win32" ? icons.ico : icons.png, () =>
@@ -62,7 +67,8 @@ export const make = Effect.gen(function* () {
             { label: m(msg("Show T3 Code")), click: () => runFork(showWindow) },
             { type: "separator" },
             {
-              label: m(msg("Quit", { $context: "tray menu item, quits the app" })),
+              // A service stop only happens from the close window dialog or setting.
+              label: m(msg("Quit app", { $context: "tray menu item, quits the app only" })),
               click: () => runFork(electronApp.quit),
             },
           ],

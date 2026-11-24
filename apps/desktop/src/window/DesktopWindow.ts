@@ -24,6 +24,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopPrimaryPaste from "../app/DesktopPrimaryPaste.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import { getDesktopOrigin, getDesktopUrl } from "../electron/ElectronProtocol.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
@@ -43,12 +44,17 @@ import {
 } from "../preview/GuestProtocol.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
+import {
+  closeChoiceBehavior,
+  closeDecision,
+  closeDialogChoices,
+  type CloseDialogChoice,
+} from "../backend/DesktopServiceDecision.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import { m } from "../i18n/messages.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
-import { shouldHideMainWindowOnClose } from "./CloseToTray.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
 import { installMainWindowRemoteRequestHeaderPolicy } from "./RemoteRequestHeaders.ts";
@@ -115,6 +121,7 @@ type DesktopWindowRuntimeServices =
   | DesktopAppSettings.DesktopAppSettings
   | DesktopClientSettings.DesktopClientSettings
   | ElectronApp.ElectronApp
+  | ElectronDialog.ElectronDialog
   | ElectronMenu.ElectronMenu
   | ElectronShell.ElectronShell
   | ElectronTheme.ElectronTheme
@@ -416,6 +423,7 @@ export const make = Effect.gen(function* () {
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
   const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
   const electronApp = yield* ElectronApp.ElectronApp;
+  const electronDialog = yield* ElectronDialog.ElectronDialog;
   const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
   const backendReadyRef = yield* Ref.make(false);
   let backendHasStarted = false;
@@ -438,6 +446,63 @@ export const make = Effect.gen(function* () {
       logWindowWarning("failed to show the close-to-tray notice", { cause }),
     ),
   );
+  const isAttachedToService = Effect.map(
+    Ref.get(desktopState.localBackendAttachment),
+    (attachment) => Option.isSome(attachment) && attachment.value.owner.serviceManaged === true,
+  );
+  const hideToTray = (window: Electron.BrowserWindow) =>
+    Effect.sync(() => {
+      if (!window.isDestroyed()) window.hide();
+    }).pipe(Effect.andThen(noticeHiddenToTray));
+  const closeChoiceLabels = (attachedToService: boolean): Record<CloseDialogChoice, string> => ({
+    hide: m(msg("Hide to system tray")),
+    "app-only": m(msg("Quit app only")),
+    "app-and-service": m(msg("Quit app and service")),
+    quit: attachedToService ? m(msg("Quit app only")) : m(msg("Quit")),
+  });
+  const handleWindowClose = Effect.fn("desktop.window.handleClose")(function* (
+    window: Electron.BrowserWindow,
+    decision: "hide" | "quit" | "stop-quit" | "ask",
+  ) {
+    yield* Ref.set(desktopState.pendingQuitChoice, Option.none());
+    if (decision === "hide") return yield* hideToTray(window);
+    if (decision === "stop-quit") {
+      yield* Ref.set(desktopState.pendingQuitChoice, Option.some("app-and-service"));
+    }
+    if (decision !== "ask") return yield* electronApp.quit;
+    const attachedToService = yield* isAttachedToService;
+    const choices = closeDialogChoices({
+      attachedToService,
+      trayActive: yield* Ref.get(desktopState.trayActive),
+    });
+    const labels = closeChoiceLabels(attachedToService);
+    const result = yield* electronDialog.showMessageBox(
+      {
+        type: "question",
+        title: m(msg("Close T3 Code")),
+        message: m(msg("What should happen when you close the T3 Code window?")),
+        buttons: [...choices.map((choice) => labels[choice]), m(msg("Cancel"))],
+        defaultId: 0,
+        cancelId: choices.length,
+        checkboxLabel: m(msg("Remember my choice")),
+        checkboxChecked: false,
+      },
+      window,
+    );
+    const choice = choices[result.response];
+    if (choice === undefined || (yield* Ref.get(desktopState.quitting))) return;
+    if (result.checkboxChecked) {
+      yield* desktopSettings.setCloseWindowBehavior(closeChoiceBehavior(choice));
+    }
+    if (choice === "hide") return yield* hideToTray(window);
+    if (attachedToService) {
+      yield* Ref.set(
+        desktopState.pendingQuitChoice,
+        Option.some(choice === "app-and-service" ? "app-and-service" : "app-only"),
+      );
+    }
+    yield* electronApp.quit;
+  });
   const mainWindowMutex = yield* Semaphore.make(1);
   const pendingMainReveals = new WeakMap<Electron.BrowserWindow, Effect.Effect<void>>();
   const revealMain = Effect.fn("desktop.window.revealMain")((window: Electron.BrowserWindow) =>
@@ -903,19 +968,34 @@ export const make = Effect.gen(function* () {
     window.on("unmaximize", scheduleBoundsPersist);
     window.on("close", (event) => {
       runFork(flushBoundsPersist);
-      // Reading two Refs completes synchronously, which the cancelable close event needs.
-      const hide = Effect.runSyncWith(context)(
+      // Reading Refs and settings completes synchronously, which the cancelable close event needs.
+      const decision = Effect.runSyncWith(context)(
         Effect.gen(function* () {
-          return shouldHideMainWindowOnClose({
+          // macOS keeps the app alive after its window closes, so it closes normally.
+          if (environment.platform === "darwin" || (yield* Ref.get(desktopState.quitting))) {
+            return "close" as const;
+          }
+          return closeDecision({
+            behavior: (yield* desktopSettings.get).closeWindowBehavior,
+            attachedToService: yield* isAttachedToService,
             trayActive: yield* Ref.get(desktopState.trayActive),
-            quitting: yield* Ref.get(desktopState.quitting),
           });
         }),
       );
-      if (!hide) return;
+      if (decision === "close") return;
       event.preventDefault();
-      window.hide();
-      runFork(noticeHiddenToTray);
+      if (decision === "hide") {
+        window.hide();
+        runFork(noticeHiddenToTray);
+        return;
+      }
+      runFork(
+        handleWindowClose(window, decision).pipe(
+          Effect.catchCause((cause) =>
+            logWindowWarning("failed to handle closing the window", { cause }),
+          ),
+        ),
+      );
     });
 
     if (environment.platform === "darwin") {

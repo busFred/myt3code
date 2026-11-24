@@ -294,7 +294,7 @@ export const prepareLocalBackend = Effect.fn("DesktopServiceConnection.prepareLo
       wslOnly: settings.wslOnly && settings.wslBackendEnabled,
       ...status,
       remembered: settings.serviceConnectionRemembered,
-      quitBehavior: settings.serviceQuitBehavior,
+      closeWindowBehavior: settings.closeWindowBehavior,
       owner: Option.isSome(owner)
         ? owner.value.serviceManaged
           ? "service"
@@ -413,72 +413,47 @@ export const prepareLocalBackend = Effect.fn("DesktopServiceConnection.prepareLo
       Effect.retry({ times: 1, while: (error) => error._tag === "EnvironmentAuthInvalidError" }),
       Effect.mapError((cause) => new DesktopServiceConnectionError({ operation: "pair", cause })),
     );
-    const confirmQuit = Effect.fn("DesktopServiceConnection.confirmQuit")(
-      function* (isUserQuit: () => boolean) {
-        const behavior = (yield* settingsService.get).serviceQuitBehavior;
-        let decision = quitDecision(initialOwner.serviceManaged === true, behavior, "user");
-        if (decision === "ask") {
-          const result = yield* dialog.showMessageBox({
-            type: "question",
-            title: "Quit T3 Code",
-            message: "Quit the app only, or also stop the background service?",
-            buttons: ["Quit app only", "Quit app and stop service", "Cancel"],
-            defaultId: 0,
-            cancelId: 2,
-            checkboxLabel: "Remember my decision",
-            checkboxChecked: false,
-          });
-          if (!isUserQuit() || result.response === 2) return false;
-          decision = result.response === 1 ? "stop-quit" : "quit";
-          if (result.checkboxChecked)
-            yield* settingsService.setServiceQuitBehavior(
-              result.response === 1 ? "app-and-service" : "app-only",
-            );
-        }
-        if (!isUserQuit()) return false;
-        if (decision === "stop-quit") {
-          yield* desktopWindow.activate.pipe(Effect.ignore);
-          yield* Ref.set(state.quitting, true);
-          const window = yield* electronWindow.currentMainOrFirst;
-          yield* Effect.sync(() => {
-            if (Option.isSome(window) && !window.value.isDestroyed()) {
-              window.value.setTitle("Stopping T3 Code background service…");
-              window.value.setProgressBar(2);
-            }
-          });
-          yield* Effect.gen(function* () {
-            const latest = yield* cli("status", ["service", "status", "--json"]).pipe(
-              Effect.flatMap(decodeServiceStatus),
-            );
-            if (!latest.installed || latest.otherBaseDir !== undefined)
-              return yield* new DesktopServiceConnectionError({
-                operation: "stop",
-                cause: "The installed service no longer serves this data folder",
-              });
-            yield* cli("stop", ["service", "stop"]);
-          }).pipe(
-            Effect.catch(() =>
-              dialog.showErrorBox(
-                "Couldn't stop the background service",
-                "The app will quit. The background service may still be running. You can stop it from a terminal with t3 service stop.",
-              ),
-            ),
+    const confirmQuit = Effect.fn("DesktopServiceConnection.confirmQuit")(function* (
+      isUserQuit: () => boolean,
+    ) {
+      const chosen = yield* Ref.getAndSet(state.pendingQuitChoice, Option.none());
+      const decision = quitDecision(
+        initialOwner.serviceManaged === true,
+        Option.getOrUndefined(chosen),
+        "user",
+      );
+      if (!isUserQuit()) return false;
+      if (decision === "stop-quit") {
+        yield* desktopWindow.activate.pipe(Effect.ignore);
+        yield* Ref.set(state.quitting, true);
+        const window = yield* electronWindow.currentMainOrFirst;
+        yield* Effect.sync(() => {
+          if (Option.isSome(window) && !window.value.isDestroyed()) {
+            window.value.setTitle("Stopping T3 Code background service…");
+            window.value.setProgressBar(2);
+          }
+        });
+        yield* Effect.gen(function* () {
+          const latest = yield* cli("status", ["service", "status", "--json"]).pipe(
+            Effect.flatMap(decodeServiceStatus),
           );
-        }
-        return true;
-      },
-      Effect.catch(() =>
-        Ref.set(state.quitting, false).pipe(
-          Effect.andThen(
+          if (!latest.installed || latest.otherBaseDir !== undefined)
+            return yield* new DesktopServiceConnectionError({
+              operation: "stop",
+              cause: "The installed service no longer serves this data folder",
+            });
+          yield* cli("stop", ["service", "stop"]);
+        }).pipe(
+          Effect.catch(() =>
             dialog.showErrorBox(
-              "Couldn't complete quit",
-              "The app is still open. Try quitting again.",
+              "Couldn't stop the background service",
+              "The app will quit. The background service may still be running. You can stop it from a terminal with t3 service stop.",
             ),
           ),
-          Effect.as(false),
-        ),
-      ),
-    );
+        );
+      }
+      return true;
+    });
     // A newer app's CLI may need a database upgrade the older service refuses, so sign-in can fail.
     if (
       serviceUpdateDecision({
