@@ -7,6 +7,14 @@ const CLI_RELEASE_REPOSITORY = "busFred/myt3code";
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
+/** One line naming the commit a release was built from; also at the root of each t3 archive. */
+export const CLI_RELEASE_BUILD_FILE = "BUILD";
+
+/** The commit a `BUILD` file names, or undefined for anything that is not one. */
+export function parseReleaseBuild(text: string): string | undefined {
+  const build = text.trim().toLowerCase();
+  return /^[0-9a-f]{7,40}$/.test(build) ? build : undefined;
+}
 
 // Keep archive keys aligned with the Linux matrix, Windows ARM64 build, and cli_archive rows in release.yml,
 // and with the SSH runner's host check in packages/ssh/src/tunnel.ts.
@@ -65,6 +73,24 @@ export function cliReleaseAssetUrl(
   baseUrl: string | undefined = CLI_RELEASE_DEFAULT_BASE_URL,
 ): string {
   return releaseAssetUrl(baseUrl?.trim() || CLI_RELEASE_DEFAULT_BASE_URL, `v${version}`, fileName);
+}
+
+export type DesktopAppInstallKind = "nsis" | "deb" | "appimage";
+
+/** The release file that installs the desktop app this way; release.yml lists them in SHA256SUMS. */
+export function desktopAppAssetFileName(
+  version: string,
+  kind: DesktopAppInstallKind,
+  arch: string,
+): string | undefined {
+  if (arch !== "x64" && arch !== "arm64") return undefined;
+  if (kind === "nsis") return `T3-Code-${version}-${arch}.exe`;
+  if (kind === "deb") return `T3-Code-${version}-${arch === "x64" ? "amd64" : "arm64"}.deb`;
+  const appImageArch = arch === "x64" ? "x86_64" : "arm64";
+  // Without an update feed, electron-builder keeps the version in the AppImage's name.
+  const channel = cliReleaseChannelOf(version);
+  if (channel === "preview") return `T3-Code-${version}-${appImageArch}.AppImage`;
+  return `T3-Code-${channel === "nightly" ? "Nightly-" : ""}${appImageArch}.AppImage`;
 }
 
 export function parseChecksums(text: string): ReadonlyMap<string, string> {

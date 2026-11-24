@@ -879,11 +879,14 @@ jobs:
           path: release-assets
 
       # Installers verify archives against this file, so it is written from the
-      # signed bytes that get uploaded, never from an earlier stage.
+      # signed bytes that get uploaded, never from an earlier stage. `t3 update`
+      # also verifies the desktop app installers it downloads against it, and
+      # compares BUILD with the installed builds to pick up same-version rebuilds.
       - name: Write CLI archive checksums
         shell: bash
         run: |
           set -euo pipefail
+          git rev-parse --short=12 HEAD > release-assets/BUILD
           cd release-assets
           shopt -s nullglob
           archives=(t3-*.tar.gz t3-*.zip)
@@ -891,8 +894,9 @@ jobs:
             echo "No CLI archives were produced." >&2
             exit 1
           fi
-          sha256sum "${archives[@]}" > SHA256SUMS
-          cat SHA256SUMS
+          apps=(T3-Code-*.exe T3-Code-*.deb T3-Code-*.AppImage)
+          sha256sum "${archives[@]}" "${apps[@]}" > SHA256SUMS
+          cat BUILD SHA256SUMS
 
       # Always runs, even after a failed step, and keeps that failure.
       - name: Wait for nightly Android APK
@@ -951,6 +955,7 @@ jobs:
               done
             fi
             echo 'release-assets/SHA256SUMS'
+            echo 'release-assets/BUILD'
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 

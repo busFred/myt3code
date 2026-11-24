@@ -447,6 +447,10 @@
       "types": "./src/usageLimits.ts",
       "import": "./src/usageLimits.ts"
     },
+    "./desktopCliShim": {
+      "types": "./src/desktopCliShim.ts",
+      "import": "./src/desktopCliShim.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"

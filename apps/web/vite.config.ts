@@ -16,7 +16,10 @@ import pdfjsPkg from "pdfjs-dist/package.json" with { type: "json" };
 import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
-import { resolveTaggedSourceVersion } from "../../scripts/lib/tagged-source-version";
+import {
+  resolveSourceCommit,
+  resolveTaggedSourceVersion,
+} from "../../scripts/lib/tagged-source-version";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
 import { warmBundledDevPlugin } from "./vite/warmBundledDev";
@@ -311,6 +314,9 @@ export default defineConfig(({ command }) => {
     (command === "build" && !builtDev
       ? resolveTaggedSourceVersion(`${import.meta.dirname}/../..`, pkg.version)
       : pkg.version);
+  // Only a production build is paired with a packed server, which reports its own commit.
+  const configuredAppBuild =
+    command === "build" && !builtDev ? resolveSourceCommit(`${import.meta.dirname}/../..`) : "";
   return {
     run: {
       tasks: {
@@ -378,6 +384,7 @@ export default defineConfig(({ command }) => {
       ),
       "import.meta.env.VITE_RELEASE_CHANNEL": JSON.stringify(configuredReleaseChannel),
       "import.meta.env.APP_VERSION": JSON.stringify(configuredAppVersion),
+      "import.meta.env.APP_BUILD": JSON.stringify(configuredAppBuild),
     },
     resolve: {
       tsconfigPaths: true,
