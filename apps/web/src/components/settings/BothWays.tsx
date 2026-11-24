@@ -183,13 +183,13 @@ export function BothWaysResults({
           return [];
         }
         return [
-          <li key={step} className="flex items-baseline justify-between gap-3">
-            <span className="min-w-0 text-foreground">{stepLabel(step)}</span>
+          <li key={step} className="flex flex-wrap items-baseline justify-between gap-x-3">
+            <span className="max-w-full wrap-anywhere text-foreground">{stepLabel(step)}</span>
             <span
               className={
                 outcome.kind === "failed"
-                  ? "shrink-0 text-right text-destructive"
-                  : "shrink-0 text-right text-muted-foreground"
+                  ? "basis-full wrap-anywhere text-destructive"
+                  : "ml-auto text-right text-muted-foreground"
               }
             >
               {outcome.kind === "done"
