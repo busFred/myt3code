@@ -841,8 +841,9 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
       readonly service?: BootService.BootServiceStatus;
       /** The release's BUILD asset; absent like on releases from before it. */
       readonly build?: string;
-      /** The release's AppImage for this machine. */
-      readonly appImage?: Uint8Array;
+      /** The release's app installer for this machine. */
+      readonly appAsset?: { readonly name: string; readonly bytes: Uint8Array };
+      readonly assumeYes?: boolean;
     },
     requests: string[] = [],
   ) => {
@@ -865,16 +866,16 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
       vi.spyOn(BootService, "layer").mockReturnValue(service);
       const archiveName = `t3-${version}-linux-x64.tar.gz`;
       const archive = new TextEncoder().encode("archive");
-      const appImageName = "T3-Code-x86_64.AppImage";
+      const { appAsset } = options;
       const sums = [
         `${yield* sha256Hex(archive)}  ${archiveName}`,
-        ...(options.appImage ? [`${yield* sha256Hex(options.appImage)}  ${appImageName}`] : []),
+        ...(appAsset ? [`${yield* sha256Hex(appAsset.bytes)}  ${appAsset.name}`] : []),
       ].join("\n");
       const assets = new Map<string, string | Uint8Array>([
         ["SHA256SUMS", `${sums}\n`],
         [archiveName, archive],
         ...(options.build === undefined ? [] : [["BUILD", `${options.build}\n`] as const]),
-        ...(options.appImage === undefined ? [] : [[appImageName, options.appImage] as const]),
+        ...(appAsset === undefined ? [] : [[appAsset.name, appAsset.bytes] as const]),
       ]);
       const runner = ProcessRunner.ProcessRunner.of({
         run: (input) => {
@@ -919,7 +920,7 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
         channel: undefined,
         requestedVersion: version,
         allowDowngrade: false,
-        assumeYes: true,
+        assumeYes: options.assumeYes ?? true,
         reinstall: options.reinstall ?? false,
       }).pipe(
         Effect.andThen(TestConsole.logLines),
@@ -1034,17 +1035,99 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
   it.effect("replaces an AppImage on another build with the verified release file", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const { baseDir } = yield* fixture({ launcherVersion: version });
+      // A launcher on a newer runtime stays there: only the app had anything to do.
+      const { baseDir, launcher } = yield* fixture({ launcherVersion: "99.0.0" });
+      const launcherTarget = yield* fs.readLink(launcher);
       yield* fs.writeFileString(`${baseDir}/runtime/versions/${version}/BUILD`, "bbbbbbbbbbbb\n");
       const appImage = `${baseDir}/Apps/T3-Code-x86_64.AppImage`;
       yield* fs.makeDirectory(`${baseDir}/Apps`, { recursive: true });
       yield* fs.writeFileString(appImage, "old build");
       yield* desktopAppFixture(baseDir, { kind: "appimage", appImage, executableName: "t3code" });
       const published = new TextEncoder().encode("new build");
-      const output = yield* update(baseDir, { build: "bbbbbbbbbbbb", appImage: published });
+      const output = yield* update(baseDir, {
+        build: "bbbbbbbbbbbb",
+        appAsset: { name: "T3-Code-x86_64.AppImage", bytes: published },
+      });
       assert.equal(yield* fs.readFileString(appImage), "new build");
       assert.include(output, `Desktop app: ${version} (build bbbbbbbbbbbb)`);
+      assert.equal(yield* fs.readLink(launcher), launcherTarget);
     }),
+  );
+
+  // Windows keeps the runtime's old build in both cases; the app must not move ahead of it.
+  it.effect.each([
+    {
+      name: "a service the user did not agree to restart",
+      runningFromRuntime: false,
+      note: "replacing the runtime stops the background service, so both were left as is",
+    },
+    {
+      name: "a t3 running from that runtime",
+      runningFromRuntime: true,
+      note: "this t3 runs from the runtime it would replace",
+    },
+  ])(
+    "on Windows, leaves the runtime and app on the older build for $name",
+    ({ runningFromRuntime, note }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { baseDir, currentEntry } = yield* fixture({ launcherVersion: version });
+        yield* fs.writeFileString(`${baseDir}/runtime/versions/${version}/BUILD`, "aaaaaaaaaaaa\n");
+        const executable = `${baseDir}/app/T3 Code (Beta).exe`;
+        yield* fs.makeDirectory(`${baseDir}/app/resources`, { recursive: true });
+        yield* fs.writeFileString(executable, "");
+        yield* fs.writeFile(
+          `${baseDir}/app/resources/app.asar`,
+          encodeAsar({
+            "package.json": JSON.stringify({ version, t3codeCommitHash: "aaaaaaaaaaaa" }),
+          }),
+        );
+        const shim = `${baseDir}/bin/t3.cmd`;
+        yield* fs.makeDirectory(`${baseDir}/bin`, { recursive: true });
+        yield* fs.writeFileString(
+          shim,
+          renderCliShim({
+            target: { kind: "windows", executable, entry: "bin.mjs" },
+            shimPath: shim,
+            t3Home: baseDir,
+          }),
+        );
+        const unitPath = `${baseDir}/t3code-task.xml`;
+        const requests: string[] = [];
+        const output = yield* update(
+          baseDir,
+          {
+            platform: "win32",
+            build: "bbbbbbbbbbbb",
+            assumeYes: false,
+            appAsset: {
+              name: `T3-Code-${version}-x64.exe`,
+              bytes: new TextEncoder().encode("setup"),
+            },
+            ...(runningFromRuntime
+              ? { executablePath: `${baseDir}/runtime/versions/${version}/t3.exe` }
+              : {
+                  service: {
+                    supported: true,
+                    installed: true,
+                    current: true,
+                    installedVersion: version,
+                    installedBaseDir: baseDir,
+                    unitPath,
+                    logPath: unitPath,
+                  },
+                }),
+          },
+          requests,
+        );
+        assert.include(output, note);
+        assert.include(
+          output,
+          "The desktop app was left as is so it stays on the runtime's build.",
+        );
+        assert.isFalse(requests.some((url) => url.endsWith(".zip") || url.endsWith(".exe")));
+        assert.equal(yield* fs.readFileString(currentEntry), "old\n");
+      }),
   );
 
   it.effect("leaves a recorded launcher on a newer version alone", () =>

@@ -208,6 +208,11 @@ const locateDesktopApp = Effect.fn("cli.desktop_app.locate")(function* (baseDir:
       installDir !== undefined &&
       (yield* exists(path.join(installDir, "resources", "app.asar")))
     ) {
+      // The executable is named after the product name each channel builds with.
+      for (const productName of ["T3 Code (Beta)", "T3 Code (Nightly)", "T3 Code (Alpha)"]) {
+        const executable = path.join(installDir, `${productName}.exe`);
+        if (yield* exists(executable)) return found({ kind: "nsis", installDir, executable });
+      }
       return found({ kind: "nsis", installDir });
     }
   }
@@ -347,6 +352,24 @@ export const isWindowsAppRunning = Effect.fn("cli.desktop_app.is_running")(funct
 ) {
   const runner = yield* ProcessRunner.ProcessRunner;
   const path = yield* Path.Path;
+  const byPath = yield* runner
+    .run({
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "if (Get-Process | Where-Object { $_.Path -eq $env:T3CODE_APP_EXECUTABLE }) { 'running' }",
+      ],
+      // Passed by environment so the path needs no PowerShell quoting.
+      env: { T3CODE_APP_EXECUTABLE: executable },
+      timeout: Duration.seconds(15),
+    })
+    .pipe(
+      Effect.map((result) => (result.code === 0 ? result.stdout.includes("running") : undefined)),
+      Effect.orElseSucceed(() => undefined),
+    );
+  if (byPath !== undefined) return byPath;
   const name = path.basename(executable);
   return yield* runner
     .run({
@@ -387,14 +410,22 @@ export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* 
     );
     return undefined;
   }
-  const directory = path.join(input.baseDir, "runtime", "desktop");
-  const file = path.join(directory, input.fileName);
-  yield* fs
-    .makeDirectory(directory, { recursive: true })
+  // Its own folder per run, so concurrent updates never run each other's installer.
+  const parent = path.join(input.baseDir, "runtime", "desktop");
+  const directory = yield* fs
+    .makeDirectory(parent, { recursive: true })
     .pipe(
-      Effect.andThen(fs.writeFile(file, input.installer)),
-      Effect.mapError(failed(`Could not save ${file}.`)),
+      Effect.andThen(fs.makeTempDirectory({ directory: parent, prefix: "install-" })),
+      Effect.mapError(failed(`Could not prepare ${parent}.`)),
     );
+  const removeDirectory = fs
+    .remove(directory, { recursive: true, force: true })
+    .pipe(Effect.ignore);
+  const file = path.join(directory, input.fileName);
+  yield* fs.writeFile(file, input.installer).pipe(
+    Effect.mapError(failed(`Could not save ${file}.`)),
+    Effect.tapError(() => removeDirectory),
+  );
   const run = (command: string, args: ReadonlyArray<string>) =>
     runner.run({ command, args, timeout: Duration.minutes(10) }).pipe(
       Effect.mapError(failed(`Could not run ${command}.`)),
@@ -415,6 +446,7 @@ export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* 
         Effect.orElseSucceed(() => false),
       ));
   if (install.kind === "deb" && !passwordless && !(process.stdin.isTTY && process.stdout.isTTY)) {
+    // Kept for the command printed below.
     return `sudo dpkg -i '${file.replaceAll("'", `'"'"'`)}'`;
   }
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -440,6 +472,6 @@ export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* 
         reason: `sudo dpkg -i exited with code ${exitCode}.`,
       });
     }
-  }).pipe(Effect.ensuring(fs.remove(file, { force: true }).pipe(Effect.ignore)));
+  }).pipe(Effect.ensuring(removeDirectory));
   return undefined;
 });
