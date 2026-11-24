@@ -13017,7 +13017,6 @@
   "9cde2ab0345b89aa": "Modifier l'accès réseau redémarre le service en arrière-plan et interrompt ses tours d'agent et connexions en cours. L'app se reconnecte automatiquement.",
   "2a56c9df0b9c9467": "Modifier Tailscale HTTPS redémarre le service en arrière-plan et interrompt ses tours d'agent et connexions en cours. L'app se reconnecte automatiquement.",
   "b7ff604b0117a7f3": "{label} n'expire jamais",
-  "c5f7f0ec3acd416f": "Impossible de renouveler toutes les associations",
   "1a099eba3c8687b9": "Une machine ne signale pas la session de son association. Associez-la de nouveau pour renouveler.",
   "86938fc827b974e9": "Vérifiez que cette app y est connectée avec la gestion de l'accès.",
   "417a94d0f381aaf6": "Les deux machines doivent être enregistrées dans cette app.",
@@ -13037,7 +13036,6 @@
   "6839d3292ffa5b03": "Uniquement après la création d'une liaison",
   "d041d0a04805b562": "Déjà associé, conservé tel quel ({access})",
   "09994d5cd3ca333a": "Nécessite une adresse https ou Tailscale",
-  "eb1f9774d484c1d2": "Impossible de lire les associations de {label} : son association vers ici n'a donc pas été renouvelée.",
   "b83989521b0985a8": "Déjà lié",
   "f38fe37557b20463": "{kept, plural, one {# machine était déjà liée et reste telle quelle.} other {# machines étaient déjà liées et restent telles quelles.}}",
   "a0064c808166da11": "Lié, application invitée",
@@ -13058,7 +13056,12 @@
   "1e72fbdeebcbe104": "View release",
   "a25ef497af7e6835": "Reinstall",
   "1da28b29abbb76cb": "repair download reinstall this version fix broken install",
-  "d25b2febc143b79b": "Never expire",
-  "cf96e8b0d769de48": "Also makes {label}'s link back here never expire.",
-  "0e230a1ef8c2fb2c": "Already linked. Bi-directional link keeps existing links as they are. To change how long they last, use Never expire on the link, or Renew under Authorized clients on the other machine. To change the access, forget the link first or untick Bi-directional link."
+  "6a04fb5a690e540d": "{days, plural, one {{label} now expires in {days} day} other {{label} now expires in {days} days}}",
+  "5dc444fea0b711b6": "Could not change the expiry",
+  "20e40da65b55dd4f": "Could not link back",
+  "e2f7def73b3533ac": "{label} now links back here",
+  "48d2d064b4daa40c": "Link back",
+  "1f11069b3815c668": "Makes {label} link to this machine too. To undo, forget this machine in {label}''s Linked environments.",
+  "d7799b675a6e553e": "Expiry",
+  "06bbfbc495b97e44": "Already linked. Bi-directional link keeps existing links as they are. To change how long they last, use Expiry on the link, or Renew under Authorized clients on the other machine. To change the access, forget the link first or untick Bi-directional link."
 }

@@ -12950,7 +12950,6 @@
   "9cde2ab0345b89aa": "네트워크 액세스를 변경하면 백그라운드 서비스가 다시 시작되어 실행 중인 에이전트 턴과 연결이 중단됩니다. 앱은 자동으로 다시 연결됩니다.",
   "2a56c9df0b9c9467": "Tailscale HTTPS를 변경하면 백그라운드 서비스가 다시 시작되어 실행 중인 에이전트 턴과 연결이 중단됩니다. 앱은 자동으로 다시 연결됩니다.",
   "b7ff604b0117a7f3": "{label}은(는) 만료되지 않음",
-  "c5f7f0ec3acd416f": "일부 링크를 갱신하지 못했습니다",
   "1a099eba3c8687b9": "머신이 링크의 세션을 보고하지 않습니다. 갱신하려면 다시 연결하세요.",
   "86938fc827b974e9": "이 앱이 액세스 관리 권한으로 그쪽에 로그인되어 있는지 확인하세요.",
   "417a94d0f381aaf6": "두 머신 모두 이 앱에 저장되어 있어야 합니다.",
@@ -12970,7 +12969,6 @@
   "6839d3292ffa5b03": "연결이 만들어진 후에만",
   "d041d0a04805b562": "이미 연결됨, 그대로 유지({access})",
   "09994d5cd3ca333a": "https 또는 Tailscale 주소가 필요합니다",
-  "eb1f9774d484c1d2": "{label}의 연결 목록을 읽을 수 없어 이쪽으로의 연결은 갱신되지 않았습니다.",
   "b83989521b0985a8": "이미 연결됨",
   "f38fe37557b20463": "{kept, plural, other {컴퓨터 #대는 이미 연결되어 있어 그대로 두었습니다.}}",
   "a0064c808166da11": "연결됨, 앱 초대함",
@@ -12991,7 +12989,12 @@
   "1e72fbdeebcbe104": "View release",
   "a25ef497af7e6835": "Reinstall",
   "1da28b29abbb76cb": "repair download reinstall this version fix broken install",
-  "d25b2febc143b79b": "Never expire",
-  "cf96e8b0d769de48": "Also makes {label}'s link back here never expire.",
-  "0e230a1ef8c2fb2c": "Already linked. Bi-directional link keeps existing links as they are. To change how long they last, use Never expire on the link, or Renew under Authorized clients on the other machine. To change the access, forget the link first or untick Bi-directional link."
+  "6a04fb5a690e540d": "{days, plural, one {{label} now expires in {days} day} other {{label} now expires in {days} days}}",
+  "5dc444fea0b711b6": "Could not change the expiry",
+  "20e40da65b55dd4f": "Could not link back",
+  "e2f7def73b3533ac": "{label} now links back here",
+  "48d2d064b4daa40c": "Link back",
+  "1f11069b3815c668": "Makes {label} link to this machine too. To undo, forget this machine in {label}''s Linked environments.",
+  "d7799b675a6e553e": "Expiry",
+  "06bbfbc495b97e44": "Already linked. Bi-directional link keeps existing links as they are. To change how long they last, use Expiry on the link, or Renew under Authorized clients on the other machine. To change the access, forget the link first or untick Bi-directional link."
 }
