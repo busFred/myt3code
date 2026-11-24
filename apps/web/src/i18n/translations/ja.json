@@ -9785,6 +9785,7 @@
   "943047215ad556d5": "更新を確認",
   "a474bef3f2ff5815": "更新があります。",
   "8bf01d9bb1aee8ad": "アプリケーションの現在のバージョン。",
+  "4643c5a016809958": "Background service is build {serviceBuild}; this app is build {appBuild}. Reinstall brings both to the published build.",
   "4d5b0abd905bad02": "Download and reinstall this version of T3 Code",
   "04252d1e180b2731": "{policy} Nightly ビルドは利用できません。更新を受け取り続けるには安定版に切り替えてください。",
   "7636fc45b55353dd": "{policy} Nightly ビルドは利用できません。",

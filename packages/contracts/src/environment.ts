@@ -222,6 +222,8 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
+  /** The commit this server was built from; the fork republishes a version with new commits. */
+  serverBuild: Schema.optionalKey(TrimmedNonEmptyString),
   orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
   /** Highest migration this server's database holds; absent on older servers. */
   databaseMigration: Schema.optionalKey(Schema.Int),

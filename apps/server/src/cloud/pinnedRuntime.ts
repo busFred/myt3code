@@ -282,24 +282,15 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
   const httpClient = input.httpClient;
   input.onProgress?.({ stage: "download", received: 0, total: undefined });
   const { fileName, expected } = yield* publishedArchive(input, platformKey);
-  const archive = yield* fetchReleaseAsset(
+  const archive = yield* downloadVerifiedReleaseAsset({
     httpClient,
-    cliReleaseAssetUrl(input.version, fileName, input.releaseBaseUrl),
-    "downloading the t3 release archive",
-    true,
-    input.onProgress,
-  );
-  input.onProgress?.({ stage: "verify" });
-  const digest = yield* Effect.tryPromise({
-    try: () => crypto.subtle.digest("SHA-256", archive),
-    catch: (cause) =>
-      new PinnedRuntimeInstallError({ step: "verifying the t3 release archive", cause }),
+    version: input.version,
+    fileName,
+    expected,
+    releaseBaseUrl: input.releaseBaseUrl,
+    label: "t3 release archive",
+    onProgress: input.onProgress,
   });
-  if (Hex.encode(new Uint8Array(digest)) !== expected) {
-    return yield* new PinnedRuntimeInstallError({
-      step: "verifying the t3 release archive checksum",
-    });
-  }
 
   const archivePath = path.join(stagingDir, PINNED_RUNTIME_ARCHIVE_FILE);
   yield* fs
@@ -334,21 +325,59 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
   yield* fs.remove(archivePath, { force: true }).pipe(Effect.ignore);
 });
 
+/** A release file, checked against `expected`, the digest its SHA256SUMS lists. */
+export const downloadVerifiedReleaseAsset = Effect.fn(
+  "cloud.pinned_runtime.download_verified_release_asset",
+)(function* (input: {
+  readonly httpClient: HttpClient.HttpClient;
+  readonly version: string;
+  readonly fileName: string;
+  readonly expected: string;
+  readonly releaseBaseUrl: string | undefined;
+  readonly label: string;
+  readonly onProgress?: ((progress: PinnedRuntimeProgress) => void) | undefined;
+}) {
+  const bytes = yield* fetchReleaseAsset(
+    input.httpClient,
+    cliReleaseAssetUrl(input.version, input.fileName, input.releaseBaseUrl),
+    `downloading the ${input.label}`,
+    true,
+    input.onProgress,
+  );
+  input.onProgress?.({ stage: "verify" });
+  const digest = yield* Effect.tryPromise({
+    try: () => crypto.subtle.digest("SHA-256", bytes),
+    catch: (cause) =>
+      new PinnedRuntimeInstallError({ step: `verifying the ${input.label}`, cause }),
+  });
+  if (Hex.encode(new Uint8Array(digest)) !== input.expected) {
+    return yield* new PinnedRuntimeInstallError({ step: `verifying the ${input.label} checksum` });
+  }
+  return bytes;
+});
+
+export const fetchReleaseChecksums = (
+  httpClient: HttpClient.HttpClient,
+  version: string,
+  releaseBaseUrl: string | undefined,
+) =>
+  fetchReleaseAsset(
+    httpClient,
+    cliReleaseAssetUrl(version, CLI_RELEASE_CHECKSUMS_FILE, releaseBaseUrl),
+    "downloading the t3 release checksums",
+    false,
+  ).pipe(Effect.map((bytes) => parseChecksums(new TextDecoder().decode(bytes))));
+
 /** The release's archive for this machine and its checksum; fails when the release lists none. */
 const publishedArchive = Effect.fn("cloud.pinned_runtime.published_archive")(function* (
   input: PinnedRuntimeInstallInput,
   platformKey: CliArchivePlatformKey,
 ) {
   const fileName = cliArchiveFileName(input.version, platformKey);
-  const checksums = parseChecksums(
-    new TextDecoder().decode(
-      yield* fetchReleaseAsset(
-        input.httpClient,
-        cliReleaseAssetUrl(input.version, CLI_RELEASE_CHECKSUMS_FILE, input.releaseBaseUrl),
-        "downloading the t3 release checksums",
-        false,
-      ),
-    ),
+  const checksums = yield* fetchReleaseChecksums(
+    input.httpClient,
+    input.version,
+    input.releaseBaseUrl,
   );
   const expected = checksums.get(fileName);
   if (expected === undefined) {

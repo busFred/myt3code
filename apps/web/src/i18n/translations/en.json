@@ -9843,6 +9843,7 @@
   "943047215ad556d5": "Check for Updates",
   "a474bef3f2ff5815": "Update available.",
   "8bf01d9bb1aee8ad": "Current version of the application.",
+  "4643c5a016809958": "Background service is build {serviceBuild}; this app is build {appBuild}. Reinstall brings both to the published build.",
   "4d5b0abd905bad02": "Download and reinstall this version of T3 Code",
   "04252d1e180b2731": "{policy} Nightly builds are not available; switch to Stable to keep getting updates.",
   "7636fc45b55353dd": "{policy} Nightly builds are not available.",

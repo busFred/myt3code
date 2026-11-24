@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { ManagedUpdatesPolicy } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { type CliShimTarget, renderCliShim } from "@t3tools/shared/desktopCliShim";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -19,6 +20,7 @@ import { afterEach, vi } from "vite-plus/test";
 import packageJson from "../../package.json" with { type: "json" };
 import * as BootService from "../cloud/bootService.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "../cloud/serviceProtocol.ts";
+import { encodeAsar } from "../testUtils/asar.ts";
 import {
   pinnedRuntimePaths,
   posixLauncherScript,
@@ -52,6 +54,13 @@ const unrelatedLsof = ProcessRunner.ProcessRunner.of({
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+// A release from before BUILD files answers 404 for it; nothing else may be fetched.
+const noReleaseLookups = HttpClient.make((request) =>
+  request.url.endsWith("/BUILD")
+    ? Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 404 })))
+    : Effect.die("unexpected release lookup"),
+);
 
 it.effect("authenticates each release page until the requested channel is found", () =>
   Effect.gen(function* () {
@@ -564,6 +573,21 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
 });
 
 // Without terminals, update skips its restart prompt whatever runs the test.
+// The desktop app runs `t3 update` itself through its bundled CLI, on Electron.
+const insideDesktopApp = Effect.acquireRelease(
+  Effect.sync(() =>
+    Object.defineProperty(process.versions, "electron", { configurable: true, value: "40.0.0" }),
+  ),
+  () => Effect.sync(() => Reflect.deleteProperty(process.versions, "electron")),
+);
+
+const sha256Hex = (bytes: Uint8Array) =>
+  Effect.promise(() => crypto.subtle.digest("SHA-256", bytes)).pipe(
+    Effect.map((digest) =>
+      Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
+    ),
+  );
+
 const withoutTerminals = Effect.acquireRelease(
   Effect.sync(() =>
     [process.stdin, process.stdout].map((stream) => {
@@ -643,10 +667,7 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
             service,
             Layer.succeed(ProcessRunner.ProcessRunner, runner),
             ManagedPolicy.layerTest(),
-            Layer.succeed(
-              HttpClient.HttpClient,
-              HttpClient.make(() => Effect.die("unexpected release lookup")),
-            ),
+            Layer.succeed(HttpClient.HttpClient, noReleaseLookups),
             Layer.fresh(TestConsole.layer),
           ),
         ),
@@ -766,10 +787,7 @@ it.layer(NodeServices.layer)("t3 update checks the database before switching", (
             service,
             Layer.succeed(ProcessRunner.ProcessRunner, runner),
             ManagedPolicy.layerTest(),
-            Layer.succeed(
-              HttpClient.HttpClient,
-              HttpClient.make(() => Effect.die("unexpected release lookup")),
-            ),
+            Layer.succeed(HttpClient.HttpClient, noReleaseLookups),
             Layer.fresh(TestConsole.layer),
           ),
         ),
@@ -821,6 +839,10 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
       readonly platform?: NodeJS.Platform;
       readonly executablePath?: string;
       readonly service?: BootService.BootServiceStatus;
+      /** The release's BUILD asset; absent like on releases from before it. */
+      readonly build?: string;
+      /** The release's AppImage for this machine. */
+      readonly appImage?: Uint8Array;
     },
     requests: string[] = [],
   ) => {
@@ -843,17 +865,37 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
       vi.spyOn(BootService, "layer").mockReturnValue(service);
       const archiveName = `t3-${version}-linux-x64.tar.gz`;
       const archive = new TextEncoder().encode("archive");
-      const digest = yield* Effect.promise(() => crypto.subtle.digest("SHA-256", archive));
-      const hex = Array.from(new Uint8Array(digest), (byte) =>
-        byte.toString(16).padStart(2, "0"),
-      ).join("");
+      const appImageName = "T3-Code-x86_64.AppImage";
+      const sums = [
+        `${yield* sha256Hex(archive)}  ${archiveName}`,
+        ...(options.appImage ? [`${yield* sha256Hex(options.appImage)}  ${appImageName}`] : []),
+      ].join("\n");
+      const assets = new Map<string, string | Uint8Array>([
+        ["SHA256SUMS", `${sums}\n`],
+        [archiveName, archive],
+        ...(options.build === undefined ? [] : [["BUILD", `${options.build}\n`] as const]),
+        ...(options.appImage === undefined ? [] : [[appImageName, options.appImage] as const]),
+      ]);
       const runner = ProcessRunner.ProcessRunner.of({
         run: (input) => {
           if (input.command === "tar") {
             const staging = input.args[input.args.indexOf("-C") + 1]!;
             return fs
               .writeFileString(`${staging}/t3`, "new\n")
-              .pipe(Effect.orDie, Effect.andThen(unrelatedLsof.run(input)));
+              .pipe(
+                Effect.andThen(
+                  options.build === undefined
+                    ? Effect.void
+                    : fs.writeFileString(`${staging}/BUILD`, `${options.build}\n`),
+                ),
+                Effect.orDie,
+                Effect.andThen(unrelatedLsof.run(input)),
+              );
+          }
+          if (input.args[0] === "--version") {
+            return unrelatedLsof
+              .run(input)
+              .pipe(Effect.map((result) => ({ ...result, stdout: `${version}\n` })));
           }
           return input.args?.includes("__service-preflight") === true
             ? unrelatedLsof.run(input).pipe(
@@ -891,10 +933,13 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
               HttpClient.HttpClient,
               HttpClient.make((request) => {
                 requests.push(request.url);
-                const body = request.url.endsWith("/SHA256SUMS")
-                  ? `${hex}  ${archiveName}\n`
-                  : archive;
-                return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(body)));
+                const body = assets.get(decodeURIComponent(request.url.split("/").pop()!));
+                return Effect.succeed(
+                  HttpClientResponse.fromWeb(
+                    request,
+                    new Response(body ?? "", { status: body === undefined ? 404 : 200 }),
+                  ),
+                );
               }),
             ),
             Layer.fresh(TestConsole.layer),
@@ -920,15 +965,85 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
     }),
   );
 
-  it.effect("exits early when the recorded launcher already points at this version", () =>
+  it.effect.each([
+    { name: "no BUILD", build: undefined },
+    { name: "the runtime's BUILD", build: "aaaaaaaaaaaa" },
+  ])(
+    "exits early when the recorded launcher already points at this version and the release has $name",
+    ({ build }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { baseDir, launcher, currentEntry } = yield* fixture({ launcherVersion: version });
+        yield* fs.writeFileString(`${baseDir}/runtime/versions/${version}/BUILD`, "aaaaaaaaaaaa\n");
+        const requests: string[] = [];
+        const output = yield* update(baseDir, build === undefined ? {} : { build }, requests);
+        assert.include(output, "already on");
+        assert.isFalse(requests.some((url) => url.endsWith(".tar.gz")));
+        assert.equal(yield* fs.readLink(launcher), currentEntry);
+      }),
+  );
+
+  it.effect("replaces a runtime on an older build of the same version", () =>
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
       const { baseDir, launcher, currentEntry } = yield* fixture({ launcherVersion: version });
-      const output = yield* update(baseDir, {});
-      assert.include(output, "already on");
-      assert.equal(
-        yield* FileSystem.FileSystem.pipe(Effect.flatMap((fs) => fs.readLink(launcher))),
-        currentEntry,
+      yield* fs.writeFileString(`${baseDir}/runtime/versions/${version}/BUILD`, "aaaaaaaaaaaa\n");
+      const output = yield* update(baseDir, { build: "bbbbbbbbbbbb" });
+      assert.equal(yield* fs.readFileString(currentEntry), "new\n");
+      assert.equal(yield* readPosixLauncherTarget(launcher), currentEntry);
+      assert.include(output, `t3 runtime: ${version} (build bbbbbbbbbbbb)`);
+    }),
+  );
+
+  const desktopAppFixture = Effect.fnUntraced(function* (baseDir: string, target: CliShimTarget) {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(`${baseDir}/bin`, { recursive: true });
+    yield* fs.writeFileString(
+      `${baseDir}/bin/t3`,
+      renderCliShim({ target, shimPath: `${baseDir}/bin/t3`, t3Home: baseDir }),
+    );
+  });
+
+  it.effect.each([
+    { name: "reports", inside: false },
+    { name: "leaves out, inside the app,", inside: true },
+  ])("$name a desktop app on another build that t3 cannot replace", ({ inside }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { baseDir } = yield* fixture({ launcherVersion: version });
+      yield* fs.writeFileString(`${baseDir}/runtime/versions/${version}/BUILD`, "bbbbbbbbbbbb\n");
+      const executable = `${baseDir}/app/t3code`;
+      yield* fs.makeDirectory(`${baseDir}/app/resources`, { recursive: true });
+      yield* fs.writeFileString(executable, "");
+      yield* fs.writeFile(
+        `${baseDir}/app/resources/app.asar`,
+        encodeAsar({
+          "package.json": JSON.stringify({ version, t3codeCommitHash: "cccccccccccc" }),
+        }),
       );
+      yield* desktopAppFixture(baseDir, { kind: "direct", executable, entry: "bin.mjs" });
+      if (inside) yield* insideDesktopApp;
+      const output = yield* update(baseDir, { build: "bbbbbbbbbbbb" });
+      assert.include(output, "already on");
+      const note = `Install T3 Code ${version} (build bbbbbbbbbbbb) to bring the desktop app to the same build.`;
+      if (inside) assert.notInclude(output, note);
+      else assert.include(output, note);
+    }),
+  );
+
+  it.effect("replaces an AppImage on another build with the verified release file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { baseDir } = yield* fixture({ launcherVersion: version });
+      yield* fs.writeFileString(`${baseDir}/runtime/versions/${version}/BUILD`, "bbbbbbbbbbbb\n");
+      const appImage = `${baseDir}/Apps/T3-Code-x86_64.AppImage`;
+      yield* fs.makeDirectory(`${baseDir}/Apps`, { recursive: true });
+      yield* fs.writeFileString(appImage, "old build");
+      yield* desktopAppFixture(baseDir, { kind: "appimage", appImage, executableName: "t3code" });
+      const published = new TextEncoder().encode("new build");
+      const output = yield* update(baseDir, { build: "bbbbbbbbbbbb", appImage: published });
+      assert.equal(yield* fs.readFileString(appImage), "new build");
+      assert.include(output, `Desktop app: ${version} (build bbbbbbbbbbbb)`);
     }),
   );
 

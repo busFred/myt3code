@@ -1,10 +1,13 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   CLI_RELEASE_BASE_URL_ENV,
+  CLI_RELEASE_BUILD_FILE,
   CLI_RELEASE_CHANNELS,
+  cliReleaseAssetUrl,
   cliReleaseIndexPageUrl,
   cliReleaseChannelOf,
   newestCliReleaseVersion,
+  parseReleaseBuild,
   releaseAssetUrl,
   updateFeedFileName,
   type CliReleaseChannel,
@@ -21,14 +24,17 @@ import { Argument, Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { BUILD_COMMIT } from "../buildCommit.ts";
 import * as BootService from "../cloud/bootService.ts";
 import {
+  downloadVerifiedReleaseAsset,
   ensurePinnedRuntimeInstalled,
   findPosixLauncher,
   launcherOwnsVersionsDir,
   isUnpublishedRelease,
   pinnedRuntimePaths,
   PinnedRuntimeInstallError,
+  type PinnedRuntimeProgress,
   PinnedRuntimePreflightBlockedError,
   pinnedRuntimeVersionsDir,
   prunePinnedRuntimes,
@@ -43,6 +49,7 @@ import {
   decodeServiceUnit,
   isExactServiceVersion,
   SERVICE_LAUNCHER_PROTOCOL,
+  SERVICE_UNIT_ENV,
 } from "../cloud/serviceProtocol.ts";
 import { runStagedServicePreflight } from "../cloud/servicePreflight.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
@@ -50,6 +57,13 @@ import { managedUpdateMirror, managedUpdateRefusal } from "../policy/managedUpda
 import * as ProcessRunner from "../processRunner.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import {
+  type DesktopAppPlan,
+  installDesktopApp,
+  isWindowsAppRunning,
+  planDesktopAppUpdate,
+  readDesktopAppBuild,
+} from "./desktopApp.ts";
 import { createUpdateProgress } from "./updateProgress.ts";
 import * as CliService from "./service.ts";
 
@@ -148,6 +162,28 @@ export const resolveMirrorVersion = Effect.fn("cli.update.resolve_mirror")(funct
   }
   return version;
 });
+
+/** The commit release `version` was built from, from its BUILD asset; undefined for older releases. */
+const fetchReleaseBuild = Effect.fn("cli.update.fetch_release_build")(function* (
+  version: string,
+  releaseBaseUrl: string | undefined,
+) {
+  const httpClient = yield* HttpClient.HttpClient;
+  return yield* httpClient
+    .get(cliReleaseAssetUrl(version, CLI_RELEASE_BUILD_FILE, releaseBaseUrl))
+    .pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((response) => response.text),
+      Effect.map(parseReleaseBuild),
+      Effect.timeout(RELEASE_INDEX_TIMEOUT),
+      Effect.orElseSucceed(() => undefined),
+    );
+});
+
+const describeBuild = (build: {
+  readonly version?: string | undefined;
+  readonly build?: string | undefined;
+}) => `${build.version ?? "an unknown version"} (build ${build.build ?? "unknown"})`;
 
 /**
  * Only a launcher that already points into this home's `runtime/versions` tree is touched; a
@@ -348,7 +384,7 @@ const updateFlags = {
   yes: Flag.Boolean("yes").pipe(
     Flag.withAlias("y"),
     Flag.withDescription(
-      "Restart the background service without asking. Required to restart it from a script, where there is no prompt.",
+      "Restart the background service and update the desktop app without asking. Required from a script, where there is no prompt.",
     ),
     Flag.withDefault(false),
   ),
@@ -512,6 +548,10 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     }
   }
 
+  const releaseBaseUrl =
+    mirror?.feedUrl ?? (environment[CLI_RELEASE_BASE_URL_ENV]?.trim() || undefined);
+  const publishedBuild = yield* fetchReleaseBuild(targetVersion, releaseBaseUrl);
+
   const status = yield* service.status;
   // Service names are per user, so another home's unit belongs to a different install.
   const servesThisHome =
@@ -525,29 +565,81 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   const serviceVersion = serviceInstalled ? status.installedVersion : undefined;
   const executableCurrent = targetVersion === currentVersion;
   const restartPending = status.problems?.includes("restart-pending") === true;
+
+  const runtimePaths = pinnedRuntimePaths(path, input.baseDir, targetVersion, platform);
+  const alreadyOnDisk = yield* fs.readFileString(runtimePaths.sentinelPath).pipe(
+    Effect.map((sentinel) => sentinel.trim() === targetVersion),
+    Effect.orElseSucceed(() => false),
+  );
+  const runningFromTarget = launcherOwnsVersionsDir(
+    path,
+    runtimePaths.versionDir,
+    yield* HostProcess.ExecutablePath,
+  );
+  const runtimeBuild = alreadyOnDisk
+    ? ((yield* fs.readFileString(path.join(runtimePaths.versionDir, CLI_RELEASE_BUILD_FILE)).pipe(
+        Effect.map(parseReleaseBuild),
+        Effect.orElseSucceed(() => undefined),
+      )) ?? (runningFromTarget ? BUILD_COMMIT : undefined))
+    : undefined;
+  // Releases are republished under the same version with new commits; a runtime from before
+  // BUILD files existed counts as an older build.
+  let rebuilt =
+    !reinstall && alreadyOnDisk && publishedBuild !== undefined && runtimeBuild !== publishedBuild;
+  if ((reinstall || rebuilt) && platform === "win32" && runningFromTarget) {
+    if (reinstall) {
+      return yield* new CliUpdateError({
+        reason: `This t3 is running from the t3@${targetVersion} runtime being replaced. Run the reinstall from the desktop app or another t3 version.`,
+      });
+    }
+    yield* Console.log(
+      `A newer build of ${targetVersion} is published (build ${publishedBuild}), but this t3 runs from the runtime it would replace. Use T3 Code → Help → Reinstall This Version.`,
+    );
+    rebuilt = false;
+  }
+  const replace = reinstall || rebuilt;
+
   const serviceCurrent =
     !serviceInstalled ||
-    (!reinstall &&
+    (!replace &&
       serviceVersion === targetVersion &&
       (executableCurrent ? status.current : (status.problems ?? []).length === 0));
   const newestInstalled =
     serviceVersion !== undefined && compareExactServiceVersions(serviceVersion, currentVersion) > 0
       ? serviceVersion
       : currentVersion;
+  const serviceProgram = serviceInstalled
+    ? yield* fs.readFile(status.unitPath).pipe(
+        Effect.map((unit) => BootService.bootServiceProgramOf(decodeServiceUnit(unit))),
+        Effect.orElseSucceed(() => undefined),
+      )
+    : undefined;
+  const appPlan = yield* planDesktopAppUpdate({
+    baseDir: input.baseDir,
+    targetVersion,
+    publishedBuild,
+    allowDowngrade: input.allowDowngrade,
+    releaseBaseUrl,
+    serviceProgram: serviceProgram ?? undefined,
+  });
+  const appStale = appPlan?.decision.action === "install";
+  const appNote = appPlan?.decision.action === "skip" ? appPlan.decision.note : undefined;
 
   // The desktop app's bundled CLI is always on the app's version, so a stale `t3` launcher
   // is the only sign that an installed copy still needs to move.
   const launcherStale =
     executableCurrent &&
     serviceCurrent &&
-    !reinstall &&
+    !replace &&
     (yield* hasLauncherOnOlderVersion({ baseDir: input.baseDir, version: targetVersion }));
-  if (executableCurrent && serviceCurrent && !reinstall && !launcherStale) {
+  if (executableCurrent && serviceCurrent && !replace && !launcherStale && !appStale) {
+    const build = runtimeBuild === undefined ? "" : `, build ${runtimeBuild}`;
     yield* Console.log(
       serviceVersion !== undefined
-        ? `t3 and its background service are already on ${targetVersion} (${targetChannel}).`
-        : `t3 is already on ${targetVersion} (${targetChannel}).`,
+        ? `t3 and its background service are already on ${targetVersion} (${targetChannel}${build}).`
+        : `t3 is already on ${targetVersion} (${targetChannel}${build}).`,
     );
+    if (appNote !== undefined) yield* Console.log(`  ${appNote}`);
     return;
   }
   if (!input.allowDowngrade && compareExactServiceVersions(targetVersion, newestInstalled) < 0) {
@@ -556,37 +648,27 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     });
   }
 
-  const alreadyOnDisk = yield* fs
-    .readFileString(pinnedRuntimePaths(path, input.baseDir, targetVersion, platform).sentinelPath)
-    .pipe(
-      Effect.map((sentinel) => sentinel.trim() === targetVersion),
-      Effect.orElseSucceed(() => false),
-    );
-
-  if (reinstall && platform === "win32") {
-    const executablePath = yield* HostProcess.ExecutablePath;
-    const versionDir = pinnedRuntimePaths(path, input.baseDir, targetVersion, platform).versionDir;
-    if (launcherOwnsVersionsDir(path, versionDir, executablePath)) {
-      return yield* new CliUpdateError({
-        reason: `This t3 is running from the t3@${targetVersion} runtime being replaced. Run the reinstall from the desktop app or another t3 version.`,
-      });
-    }
-  }
-
   progress.heading(
     reinstall
       ? `Reinstalling T3 Code ${targetVersion} (${targetChannel}).`
-      : executableCurrent && restartPending
-        ? `The background service is still running the version before ${targetVersion} (${targetChannel}).`
-        : executableCurrent && serviceInstalled
-          ? `Updating the background service ${serviceVersion ?? "(unknown version)"} -> ${targetVersion} (${targetChannel}).`
-          : alreadyOnDisk
-            ? "Switching T3 Code"
-            : "Updating T3 Code",
-    executableCurrent || reinstall
-      ? ""
-      : `${currentVersion} → ${targetVersion}${targetChannel === "stable" ? "" : ` (${targetChannel})`}`,
+      : rebuilt
+        ? `A newer build of ${targetVersion} is published.`
+        : executableCurrent && restartPending
+          ? `The background service is still running the version before ${targetVersion} (${targetChannel}).`
+          : executableCurrent && serviceInstalled && !serviceCurrent
+            ? `Updating the background service ${serviceVersion ?? "(unknown version)"} -> ${targetVersion} (${targetChannel}).`
+            : executableCurrent && !launcherStale
+              ? `Updating the desktop app to ${targetVersion} (${targetChannel}).`
+              : alreadyOnDisk
+                ? "Switching T3 Code"
+                : "Updating T3 Code",
+    rebuilt
+      ? `build ${runtimeBuild ?? "unknown"} → ${publishedBuild}`
+      : executableCurrent || reinstall
+        ? ""
+        : `${currentVersion} → ${targetVersion}${targetChannel === "stable" ? "" : ` (${targetChannel})`}`,
   );
+  const interactive = process.stdin.isTTY && process.stdout.isTTY;
   let restartService = false;
   if (serviceInstalled && !serviceCurrent) {
     yield* Console.log(
@@ -594,7 +676,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     );
     if (input.assumeYes) {
       restartService = true;
-    } else if (process.stdin.isTTY && process.stdout.isTTY) {
+    } else if (interactive) {
       restartService = yield* Prompt.run(
         Prompt.Confirm({
           message: "Restart the background service once the download is verified?",
@@ -605,6 +687,30 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       yield* Console.log(
         "  Not a terminal, so the service keeps running its current version. Rerun with --yes to restart it now, or run `t3 service restart` later.",
       );
+    }
+  }
+  let updateApp = false;
+  if (appStale) {
+    yield* Console.log(
+      `  The desktop app is on ${describeBuild(appPlan.current)}; this release is ${targetVersion} (build ${publishedBuild}).${platform === "win32" ? " Its installer closes T3 Code while it runs." : ""}`,
+    );
+    if (input.assumeYes) {
+      updateApp = true;
+    } else if (interactive) {
+      updateApp = yield* Prompt.run(
+        Prompt.Confirm({
+          message: "Update the desktop app once its installer is verified?",
+          initial: true,
+        }),
+      ).pipe(Effect.catchTags({ QuitError: () => Effect.succeed(false) }));
+    } else {
+      yield* Console.log(
+        "  Not a terminal, so the desktop app was left as is. Rerun with --yes to update it.",
+      );
+    }
+    if (!updateApp && executableCurrent && serviceCurrent && !replace && !launcherStale) {
+      yield* Console.log("Left as is.");
+      return;
     }
   }
 
@@ -618,9 +724,9 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     httpClient,
     platform,
     arch,
-    releaseBaseUrl: mirror?.feedUrl ?? (environment[CLI_RELEASE_BASE_URL_ENV]?.trim() || undefined),
+    releaseBaseUrl,
     requirePublishedRelease: mirror !== undefined,
-    replaceExisting: reinstall,
+    replaceExisting: replace,
     aroundReplace:
       platform === "win32"
         ? (swap) =>
@@ -692,6 +798,25 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       })
     : false;
 
+  // The app's installer closes it; reopen it only when it was open and the service switches now.
+  const appOutcome =
+    updateApp && appPlan?.install !== undefined && appPlan.fileName !== undefined
+      ? yield* runDesktopAppStep({
+          plan: { ...appPlan, install: appPlan.install },
+          fileName: appPlan.fileName,
+          baseDir: input.baseDir,
+          targetVersion,
+          publishedBuild,
+          releaseBaseUrl,
+          reopen:
+            appPlan.install.kind === "nsis" &&
+            appPlan.install.executable !== undefined &&
+            !(restartService && Boolean(environment[SERVICE_UNIT_ENV])) &&
+            (yield* isWindowsAppRunning(appPlan.install.executable)),
+          onProgress: progress.report,
+        }).pipe(Effect.ensuring(Effect.sync(progress.finish)))
+      : undefined;
+
   // Use today's service manager for the target version. Inside the service it hands off to
   // the target CLI, so stopping this process cannot interrupt the switch.
   let servicePlan: BootService.BootServicePlan | undefined;
@@ -740,6 +865,37 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   } else {
     yield* Console.log(`  Run ${runtime.entryPath}\n`);
   }
+  const installedBuild = yield* fs
+    .readFileString(path.join(runtimePaths.versionDir, CLI_RELEASE_BUILD_FILE))
+    .pipe(
+      Effect.map(parseReleaseBuild),
+      Effect.orElseSucceed(() => undefined),
+    );
+  if (installedBuild !== undefined || publishedBuild !== undefined) {
+    yield* Console.log(
+      `  t3 runtime: ${describeBuild({ version: targetVersion, build: installedBuild })}`,
+    );
+  }
+  let appFailure: string | undefined;
+  if (appOutcome?._tag === "failed") {
+    appFailure = appOutcome.reason;
+  } else if (appOutcome?._tag === "pending") {
+    yield* Console.log(
+      `  The desktop app installer needs administrator rights and there is no terminal to ask for a password. To finish, run: ${appOutcome.command}`,
+    );
+  } else if (appOutcome?._tag === "installed") {
+    if (appOutcome.after.version === targetVersion && appOutcome.after.build === publishedBuild) {
+      yield* Console.log(
+        `  Desktop app: ${describeBuild(appOutcome.after)}${platform === "win32" ? "" : ". Quit and reopen T3 Code to start it."}`,
+      );
+    } else {
+      appFailure = `it still reports ${describeBuild(appOutcome.after)} after installing ${targetVersion} (build ${publishedBuild}).`;
+    }
+  } else if (appPlan?.decision.action === "current") {
+    yield* Console.log(`  Desktop app: ${describeBuild(appPlan.current)}`);
+  } else if (appNote !== undefined) {
+    yield* Console.log(`  ${appNote}`);
+  }
   if (servicePlan?.handedOff === true) {
     yield* Console.log(
       `  Background service switching to ${targetVersion} outside this session, since this session runs inside it and disconnects when it restarts. Result: ${servicePlan.logPath}`,
@@ -769,4 +925,61 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       `  A server started by hand is still running at ${foreground.origin} (pid ${foreground.pid}). Stop it and start it again to pick up ${targetVersion}.`,
     );
   }
+  if (appFailure !== undefined) {
+    return yield* new CliUpdateError({
+      reason: `t3@${targetVersion} is installed, but the desktop app was not updated: ${appFailure} Run \`t3 update\` again to retry the app.`,
+    });
+  }
 });
+
+const runDesktopAppStep = Effect.fn("cli.update.desktop_app")(
+  function* (input: {
+    readonly plan: DesktopAppPlan & { readonly install: NonNullable<DesktopAppPlan["install"]> };
+    readonly fileName: string;
+    readonly baseDir: string;
+    readonly targetVersion: string;
+    readonly publishedBuild: string | undefined;
+    readonly releaseBaseUrl: string | undefined;
+    readonly reopen: boolean;
+    readonly onProgress: (progress: PinnedRuntimeProgress) => void;
+  }) {
+    const { plan } = input;
+    yield* Console.log("Updating the desktop app...");
+    const checksum = plan.checksum;
+    if (checksum === undefined) {
+      return {
+        _tag: "failed",
+        reason: "the release lists no checksum for its installer.",
+      } as const;
+    }
+    const installer = yield* downloadVerifiedReleaseAsset({
+      httpClient: yield* HttpClient.HttpClient,
+      version: input.targetVersion,
+      fileName: input.fileName,
+      expected: checksum,
+      releaseBaseUrl: input.releaseBaseUrl,
+      label: "desktop app installer",
+      onProgress: input.onProgress,
+    });
+    const pending = yield* installDesktopApp({
+      install: plan.install,
+      installer,
+      fileName: input.fileName,
+      baseDir: input.baseDir,
+      reopen: input.reopen,
+    });
+    if (pending !== undefined) return { _tag: "pending", command: pending } as const;
+    const after = yield* readDesktopAppBuild(plan.install, {
+      checksum,
+      targetVersion: input.targetVersion,
+      publishedBuild: input.publishedBuild,
+    });
+    return { _tag: "installed", after } as const;
+  },
+  Effect.catchTags({
+    PinnedRuntimeInstallError: (error) =>
+      Effect.succeed({ _tag: "failed", reason: `could not finish ${error.step}.` } as const),
+    DesktopAppUpdateError: (error) =>
+      Effect.succeed({ _tag: "failed", reason: error.reason } as const),
+  }),
+);

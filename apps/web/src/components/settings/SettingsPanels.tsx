@@ -36,7 +36,12 @@ import { createModelSelection, pickModelSelection } from "@t3tools/shared/model"
 import { resolvePastedPath } from "@t3tools/shared/path";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
-import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
+import {
+  APP_BUILD,
+  APP_VERSION,
+  HOSTED_APP_CHANNEL,
+  HOSTED_APP_CHANNEL_LABEL,
+} from "../../branding";
 import { AboutVersionTitle } from "./AboutVersionTitle";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { DesktopAppSection } from "./DesktopAppSettings";
@@ -197,6 +202,15 @@ function AboutVersionSection() {
       ? primaryPolicy.organization
       : undefined;
   const selectedHostedAppChannel = hasDesktopBridge ? null : HOSTED_APP_CHANNEL;
+  // The fork republishes a version with new commits, so the same version can differ in build.
+  const serviceBuild = environments.find(
+    (environment) => environment.entry.target._tag === "PrimaryConnectionTarget",
+  )?.serverConfig?.environment.serverBuild;
+  const buildMismatch =
+    hasDesktopBridge &&
+    APP_BUILD !== undefined &&
+    serviceBuild !== undefined &&
+    serviceBuild !== APP_BUILD;
   // A switch that failed part way leaves this app or a server on the other track.
   // With its updater off, a switch cannot move this app, so it is not counted.
   const appOffTrack =
@@ -378,7 +392,14 @@ function AboutVersionSection() {
       {hasDesktopBridge ? (
         <SettingsRow
           {...setting("reinstall")}
-          description={gt("Download and reinstall this version of T3 Code")}
+          description={
+            buildMismatch
+              ? gt(
+                  "Background service is build {serviceBuild}; this app is build {appBuild}. Reinstall brings both to the published build.",
+                  { serviceBuild, appBuild: APP_BUILD },
+                )
+              : gt("Download and reinstall this version of T3 Code")
+          }
           control={
             <Button size="sm" variant="outline" disabled={isReinstalling} onClick={reinstall}>
               <T>Reinstall</T>

@@ -9788,6 +9788,7 @@
   "943047215ad556d5": "업데이트 확인",
   "a474bef3f2ff5815": "업데이트가 있습니다.",
   "8bf01d9bb1aee8ad": "애플리케이션의 현재 버전입니다.",
+  "4643c5a016809958": "Background service is build {serviceBuild}; this app is build {appBuild}. Reinstall brings both to the published build.",
   "4d5b0abd905bad02": "Download and reinstall this version of T3 Code",
   "04252d1e180b2731": "{policy} Nightly 빌드를 사용할 수 없습니다. 계속 업데이트를 받으려면 Stable로 전환하세요.",
   "7636fc45b55353dd": "{policy} Nightly 빌드를 사용할 수 없습니다.",

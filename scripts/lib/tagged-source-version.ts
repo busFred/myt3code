@@ -29,3 +29,19 @@ export function resolveTaggedSourceVersion(repoRoot: string, manifestVersion: st
   }
   return manifestVersion;
 }
+
+/** The 12-character commit a build comes from, as the desktop packager stamps it; "" without Git. */
+export function resolveSourceCommit(repoRoot: string): string {
+  try {
+    const commit = NodeChildProcess.execFileSync("git", ["rev-parse", "--short=12", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: "pipe",
+    })
+      .trim()
+      .toLowerCase();
+    return /^[0-9a-f]{7,40}$/.test(commit) ? commit : "";
+  } catch {
+    return "";
+  }
+}

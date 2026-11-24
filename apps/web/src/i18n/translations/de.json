@@ -9834,6 +9834,7 @@
   "943047215ad556d5": "Nach Updates suchen",
   "a474bef3f2ff5815": "Update verfügbar.",
   "8bf01d9bb1aee8ad": "Aktuelle Version der Anwendung.",
+  "4643c5a016809958": "Background service is build {serviceBuild}; this app is build {appBuild}. Reinstall brings both to the published build.",
   "4d5b0abd905bad02": "Download and reinstall this version of T3 Code",
   "04252d1e180b2731": "{policy} Nightly-Builds sind nicht verfügbar; wechsle zu Stable, um weiterhin Updates zu erhalten.",
   "7636fc45b55353dd": "{policy} Nightly-Builds sind nicht verfügbar.",
