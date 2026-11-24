@@ -13,3 +13,21 @@ export const hasLinkBack = (
       candidate.environmentId === environmentId &&
       peerLinkHealth(candidate, now).kind !== "expired",
   );
+
+export type LinkDirection = "two-way" | "one-way" | "unknown" | "checking";
+
+/**
+ * Whether the peer links back here. `unknown` when this app cannot read the peer's links;
+ * `checking` while they load for the first time.
+ */
+export const linkDirection = (input: {
+  readonly canRead: boolean;
+  readonly peerLinks: ReadonlyArray<PeerLinkSummary> | null;
+  readonly failed: boolean;
+  readonly environmentId: EnvironmentId;
+  readonly now: DateTime.Utc;
+}): LinkDirection => {
+  if (!input.canRead) return "unknown";
+  if (input.peerLinks === null) return input.failed ? "unknown" : "checking";
+  return hasLinkBack(input.peerLinks, input.environmentId, input.now) ? "two-way" : "one-way";
+};
