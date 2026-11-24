@@ -13055,9 +13055,7 @@
   "235b63b4d74d87a3": "Linking bi-directionally…",
   "be71bd6d54c47635": "Bi-directional link",
   "17fcfcf5cee3166c": "Closing the window keeps T3 Code running in the system tray. Use the tray icon to show it again or quit. The icon may be under the ^ arrow on the taskbar.",
-  "60ed646e0dec9647": "Never expire (bi-directional)",
   "ab145ef3ec7012cf": "Linked {label} bi-directionally",
-  "85bd0a0b6774efa6": "Already linked. Bi-directional link keeps existing links as they are. To change how long they last, use Never expire (bi-directional), or Renew under Authorized clients on the other machine. To change the access, forget the link first or untick Bi-directional link.",
   "9766592e038e3957": "Could not reinstall",
   "23856d3bc053c276": "Reinstall failed.",
   "4d5b0abd905bad02": "Download and reinstall this version of T3 Code",
@@ -13066,5 +13064,8 @@
   "f5c19f36eaa793ad": "Upstream T3 Code v{version} is out. Update your fork to get it.",
   "1e72fbdeebcbe104": "View release",
   "a25ef497af7e6835": "Reinstall",
-  "1da28b29abbb76cb": "repair download reinstall this version fix broken install"
+  "1da28b29abbb76cb": "repair download reinstall this version fix broken install",
+  "d25b2febc143b79b": "Never expire",
+  "cf96e8b0d769de48": "Also makes {label}'s link back here never expire.",
+  "0e230a1ef8c2fb2c": "Already linked. Bi-directional link keeps existing links as they are. To change how long they last, use Never expire on the link, or Renew under Authorized clients on the other machine. To change the access, forget the link first or untick Bi-directional link."
 }
