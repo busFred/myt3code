@@ -72,7 +72,7 @@ import {
   renewFailedSteps,
   summarizeBothWays,
 } from "./sessionLifetime.logic";
-import { hasLinkBack } from "./linkedEnvironments.logic";
+import { linkDirection } from "./linkedEnvironments.logic";
 import { LinkSeveralEnvironmentsAction } from "./LinkSeveralEnvironments";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useLiveRefresh } from "../../hooks/useLiveRefresh";
@@ -179,15 +179,19 @@ function LinkedEnvironmentRow({
   const mayManagePeer = useEnvironmentScope(link.environmentId, AuthAccessWriteScope);
   const mayManageHere = useEnvironmentScope(environmentId, AuthAccessWriteScope);
   const canSetExpiry = link.peerSessionId !== undefined && savedPeer !== null && mayManagePeer;
-  const canLinkBack = savedPeer !== null && mayManagePeer && mayManageHere;
+  const canReadPeer = savedPeer !== null && mayManagePeer;
   const peerLinks = useEnvironmentQuery(
-    canLinkBack ? peerLinkEnvironment.list({ environmentId: link.environmentId, input: {} }) : null,
+    canReadPeer ? peerLinkEnvironment.list({ environmentId: link.environmentId, input: {} }) : null,
     m,
   );
-  const showLinkBack =
-    canLinkBack &&
-    peerLinks.data !== null &&
-    !hasLinkBack(peerLinks.data.links, environmentId, DateTime.makeUnsafe(nowMinute));
+  const direction = linkDirection({
+    canRead: canReadPeer,
+    peerLinks: peerLinks.data?.links ?? null,
+    failed: peerLinks.error !== null,
+    environmentId,
+    now: DateTime.makeUnsafe(nowMinute),
+  });
+  const showLinkBack = direction === "one-way" && mayManageHere;
   const runBothWays = useBothWaysRunner();
   const setExpiry = async (lifetime: AuthSessionLifetime) => {
     setRenewing(true);
@@ -290,6 +294,42 @@ function LinkedEnvironmentRow({
           </div>
           <p className="text-xs text-muted-foreground">
             {m(accessConfig[link.access].label)} · {status}
+            {direction === "two-way" ? (
+              <>
+                {" · "}
+                <span className="font-medium text-success">{gt("Two-way")}</span>
+              </>
+            ) : direction === "one-way" ? (
+              <>
+                {" · "}
+                <span className="font-medium text-warning">{gt("One-way")}</span>
+              </>
+            ) : direction === "unknown" ? (
+              <>
+                {" · "}
+                <Tooltip>
+                  <TooltipTrigger render={<span className="italic" />}>
+                    {gt("Two-way unknown")}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">
+                    {peerLinks.error !== null
+                      ? gt("Could not read {label}''s links: {error}", {
+                          label: link.label,
+                          error: peerLinks.error,
+                        })
+                      : savedPeer === null
+                        ? gt(
+                            "{label} isn''t in this app''s environment list, so it can''t see that machine''s links.",
+                            { label: link.label },
+                          )
+                        : gt(
+                            "This app isn''t signed in to {label} with Manage access, so it can''t see that machine''s links.",
+                            { label: link.label },
+                          )}
+                  </TooltipPopup>
+                </Tooltip>
+              </>
+            ) : null}
           </p>
           <p className="truncate text-xs text-muted-foreground/80">{link.urls.join(", ")}</p>
         </div>

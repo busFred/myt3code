@@ -13071,5 +13071,11 @@
   "1f11069b3815c668": "Makes {label} link to this machine too. To undo, forget this machine in {label}''s Linked environments.",
   "d7799b675a6e553e": "Expiry",
   "06bbfbc495b97e44": "Already linked. Bi-directional link keeps existing links as they are. To change how long they last, use Expiry on the link, or Renew under Authorized clients on the other machine. To change the access, forget the link first or untick Bi-directional link.",
-  "4643c5a016809958": "Background service is build {serviceBuild}; this app is build {appBuild}. Reinstall brings both to the published build."
+  "4643c5a016809958": "Background service is build {serviceBuild}; this app is build {appBuild}. Reinstall brings both to the published build.",
+  "16492b501ed975aa": "Two-way",
+  "b246f7262cb6db29": "One-way",
+  "167f0fed9af78a8a": "Two-way unknown",
+  "1f2ee7651215e3b2": "Could not read {label}''s links: {error}",
+  "b9c02d5fdb01c69f": "{label} isn''t in this app''s environment list, so it can''t see that machine''s links.",
+  "b7a1800177fcbc86": "This app isn''t signed in to {label} with Manage access, so it can''t see that machine''s links."
 }
