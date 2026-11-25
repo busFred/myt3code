@@ -2,7 +2,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { ManagedUpdatesPolicy } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { type CliShimTarget, renderCliShim } from "@t3tools/shared/desktopCliShim";
+import {
+  type CliShimTarget,
+  readCliShimRuntime,
+  renderCliShim,
+} from "@t3tools/shared/desktopCliShim";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -843,6 +847,83 @@ it.layer(NodeServices.layer)("t3 update checks the database before switching", (
   );
 });
 
+it.layer(NodeServices.layer)("t3 update prunes the runtimes it replaced", (it) => {
+  it.effect("removes the older runtime this t3 came from, and keeps one still running", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-prune-" });
+      const targetVersion = "99.0.0";
+      const now = Duration.toMillis(Duration.days(1));
+      yield* TestClock.setTime(now);
+      // The running t3's own version, one an older process still runs, and the target.
+      for (const version of [packageJson.version, "0.0.9", targetVersion]) {
+        const runtime = pinnedRuntimePaths(path, baseDir, version, "darwin");
+        yield* fs.makeDirectory(runtime.versionDir, { recursive: true });
+        yield* fs.writeFileString(runtime.entryPath, "");
+        yield* fs.writeFileString(runtime.sentinelPath, `${version}\n`);
+        yield* fs.utimes(runtime.sentinelPath, 0, 0);
+      }
+      const running = pinnedRuntimePaths(path, baseDir, "0.0.9", "darwin").entryPath;
+      const service = Layer.mock(BootService.BootService, {
+        status: Effect.succeed<BootService.BootServiceStatus>({
+          supported: true,
+          installed: false,
+          current: false,
+          unitPath: path.join(baseDir, "t3code.service"),
+          logPath: path.join(baseDir, "boot-service.log"),
+        }),
+      });
+      const runner = ProcessRunner.ProcessRunner.of({
+        run: (input) =>
+          unrelatedLsof.run(input).pipe(
+            Effect.map((result) => ({
+              ...result,
+              stdout: input.args?.includes("__service-preflight")
+                ? JSON.stringify({
+                    status: "ready",
+                    version: targetVersion,
+                    launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+                  })
+                : input.args?.includes("--version")
+                  ? `t3 v${targetVersion}\n`
+                  : `p42\nftxt\nn${running}\n`,
+            })),
+          ),
+      });
+
+      yield* runUpdate({
+        baseDir,
+        logsDir: baseDir,
+        databasePath: path.join(baseDir, "statev2.sqlite"),
+        serverRuntimeStatePath: path.join(baseDir, "server-runtime.json"),
+        channel: undefined,
+        requestedVersion: targetVersion,
+        allowDowngrade: false,
+        assumeYes: true,
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            service,
+            Layer.succeed(ProcessRunner.ProcessRunner, runner),
+            ManagedPolicy.layerTest(),
+            Layer.succeed(HttpClient.HttpClient, noReleaseLookups),
+            Layer.fresh(TestConsole.layer),
+          ),
+        ),
+      );
+
+      const versions = (yield* fs.readDirectory(
+        path.join(baseDir, "runtime", "versions"),
+      )).toSorted();
+      assert.deepEqual(versions, ["0.0.9", targetVersion]);
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "darwin"),
+      Effect.provideService(HostProcess.Environment, { PATH: "" }),
+    ),
+  );
+});
+
 it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
   const version = packageJson.version;
   const fixture = Effect.fnUntraced(function* (input: { readonly launcherVersion: string }) {
@@ -987,15 +1068,32 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
     );
   };
 
-  it.effect("moves a stale recorded launcher to the app's version with no service installed", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const { baseDir, launcher, currentEntry } = yield* fixture({ launcherVersion: "0.0.1" });
-      const output = yield* update(baseDir, {});
-      assert.include(output, "Run t3 to get started.");
-      assert.equal(yield* readPosixLauncherTarget(launcher), currentEntry);
-      assert.equal(yield* fs.readFileString(currentEntry), "old\n");
-    }),
+  it.effect.each([
+    { name: "and the app's launcher with it", runtimeBranch: true },
+    { name: "and leaves an app launcher that runs only the app", runtimeBranch: false },
+  ])(
+    "moves a stale recorded launcher to the app's version with no service installed, $name",
+    ({ runtimeBranch }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { baseDir, launcher, currentEntry } = yield* fixture({ launcherVersion: "0.0.1" });
+        const appShim = `${baseDir}/bin/t3`;
+        yield* fs.makeDirectory(`${baseDir}/bin`);
+        const appShimBefore = renderCliShim({
+          target: { kind: "direct", executable: `${baseDir}/app/t3code`, entry: "bin.mjs" },
+          shimPath: appShim,
+          t3Home: baseDir,
+          runtime: runtimeBranch ? yield* fs.readLink(launcher) : undefined,
+        });
+        yield* fs.writeFileString(appShim, appShimBefore);
+        const output = yield* update(baseDir, {});
+        assert.include(output, "Run t3 to get started.");
+        assert.equal(yield* readPosixLauncherTarget(launcher), currentEntry);
+        assert.equal(yield* fs.readFileString(currentEntry), "old\n");
+        const appShimAfter = yield* fs.readFileString(appShim);
+        if (runtimeBranch) assert.equal(readCliShimRuntime(appShimAfter), currentEntry);
+        else assert.equal(appShimAfter, appShimBefore);
+      }),
   );
 
   it.effect.each([

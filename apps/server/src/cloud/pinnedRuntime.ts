@@ -23,6 +23,7 @@ import {
 } from "@t3tools/shared/cliRelease";
 
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { standaloneLauncherTarget } from "@t3tools/shared/desktopCliShim";
 
 import * as ProcessRunner from "../processRunner.ts";
 import { windowsPowerShellPath } from "@t3tools/shared/windowsSystem";
@@ -668,7 +669,7 @@ export const windowsLauncherScript = (executable: string) =>
 
 /** Like {@link windowsShimTarget}, but only for a shim exactly as written; never a user's wrapper. */
 export const generatedWindowsShimTarget = (contents: string) =>
-  /^@echo off\r?\n"([^"]+)" %\*(?: & exit \/b)?\s*$/.exec(contents)?.[1];
+  standaloneLauncherTarget(contents, "win32");
 
 /**
  * The `t3` script the install scripts and `t3 update` write on macOS and Linux. Exec by absolute
@@ -688,8 +689,7 @@ export const readPosixLauncherTarget = Effect.fn("cloud.pinned_runtime.read_posi
     }
     const contents = yield* fs.readFileString(launcher).pipe(Effect.option);
     if (Option.isNone(contents)) return undefined;
-    const quoted = /^#!\/bin\/sh\nexec '((?:[^']|'\\'')*)' "\$@"\n$/.exec(contents.value)?.[1];
-    return quoted?.replaceAll("'\\''", "'");
+    return standaloneLauncherTarget(contents.value, "linux");
   },
 );
 

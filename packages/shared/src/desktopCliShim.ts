@@ -23,17 +23,26 @@ export type CliShimTarget =
   | { readonly kind: "direct"; readonly executable: string; readonly entry: string }
   | { readonly kind: "windows"; readonly executable: string; readonly entry: string };
 
-/** Embed this install's home and executable path so `sudo`, which clears the environment, uses the same install. */
+/**
+ * Embed this install's home and executable path so `sudo`, which clears the environment, uses the
+ * same install. With `runtime`, the standalone t3 that this home's launchers run, it runs that and
+ * falls back to the app's bundled CLI only once it is gone, so there is one t3 per machine.
+ */
 export const renderCliShim = (input: {
   readonly target: CliShimTarget;
   readonly shimPath: string;
   readonly t3Home: string;
+  readonly runtime?: string | undefined;
 }) => {
-  const { target } = input;
+  const { target, runtime } = input;
   if (target.kind === "windows") {
-    const utf8 = [target.executable, target.entry, input.shimPath, input.t3Home].some((value) =>
-      [...value].some((character) => character.codePointAt(0)! > 0x7f),
-    );
+    const utf8 = [
+      target.executable,
+      target.entry,
+      input.shimPath,
+      input.t3Home,
+      runtime ?? "",
+    ].some((value) => [...value].some((character) => character.codePointAt(0)! > 0x7f));
     const restore = utf8 ? ["chcp %t3_codepage% >nul"] : [];
     return [
       "@echo off",
@@ -49,6 +58,7 @@ export const renderCliShim = (input: {
         : []),
       `set "T3CODE_CLI_PATH=${cmdText(input.shimPath)}"`,
       `if not defined T3CODE_HOME set "T3CODE_HOME=${cmdText(input.t3Home)}"`,
+      ...(runtime === undefined ? [] : [`if exist ${cmdWord(runtime)} goto runtime`]),
       'set "ELECTRON_RUN_AS_NODE=1"',
       // Electron's Windows executable starts without stdin; this tells the CLI to reopen the console.
       'set "T3CODE_DESKTOP_CLI_LAUNCHER=1"',
@@ -59,9 +69,13 @@ export const renderCliShim = (input: {
       "exit /b 127",
       ":run",
       `${cmdWord(target.executable)} ${cmdWord(target.entry)} %*`,
+      ":finish",
       'set "t3_exit=%ERRORLEVEL%"',
       ...restore,
       "exit /b %t3_exit%",
+      // After the app line, which readers take as this launcher's target. `t3 update` rewrites
+      // this file while it runs; the goto finds its label again in the new contents.
+      ...(runtime === undefined ? [] : [":runtime", `${cmdWord(runtime)} %* & goto finish`]),
       "",
     ].join("\r\n");
   }
@@ -71,6 +85,9 @@ export const renderCliShim = (input: {
     `export T3CODE_CLI_PATH=${shellWord(input.shimPath)}`,
     `home=${shellWord(input.t3Home)}`,
     'export T3CODE_HOME="${T3CODE_HOME:-$home}"',
+    ...(runtime === undefined
+      ? []
+      : [`runtime=${shellWord(runtime)}`, 'if [ -x "$runtime" ]; then exec "$runtime" "$@"; fi']),
     "export ELECTRON_RUN_AS_NODE=1",
     `app=${shellWord(target.kind === "appimage" ? target.appImage : target.executable)}`,
     'if [ ! -x "$app" ]; then',
@@ -164,3 +181,22 @@ export const readCliShimTarget = (contents: string): CliShimTarget | undefined =
     ? undefined
     : { kind: "appimage", appImage: app, executableName };
 };
+
+/** The standalone t3 a launcher the app wrote runs first; undefined when it has none. */
+export const readCliShimRuntime = (contents: string): string | undefined => {
+  if (!contents.includes(MARKER)) return undefined;
+  const windows = /^if exist "([^"]+)" goto runtime\r?$/m.exec(contents)?.[1];
+  if (windows !== undefined) return windows.replaceAll("%%", "%");
+  return unshellWord(/^runtime=(.+)$/m.exec(contents)?.[1] ?? "");
+};
+
+/**
+ * The executable a standalone `t3` launcher runs, as `t3 update` and the install scripts write it:
+ * a `t3.cmd` on Windows, an exec script elsewhere. Symlinks are resolved by the caller.
+ */
+export const standaloneLauncherTarget = (contents: string, platform: NodeJS.Platform) =>
+  platform === "win32"
+    ? /^@echo off\r?\n"([^"]+)" %\*(?: & exit \/b)?\s*$/.exec(contents)?.[1]
+    : /^#!\/bin\/sh\nexec '((?:[^']|'\\'')*)' "\$@"\n$/
+        .exec(contents)?.[1]
+        ?.replaceAll("'\\''", "'");
