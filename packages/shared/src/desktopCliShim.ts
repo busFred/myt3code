@@ -5,6 +5,9 @@
 export const DESKTOP_CLI_SHIM_MARKER = "Written by T3 Code: runs the desktop app's bundled t3 CLI.";
 
 export const DESKTOP_CLI_SHIM_SERVER_ENTRY = "apps/server/dist/bin.mjs";
+
+/** Set when the desktop app itself runs its bundled CLI, unlike this launcher, which runs the same executable. */
+export const DESKTOP_APP_INVOKED_ENV = "T3CODE_DESKTOP_APP_INVOKED";
 const MARKER = DESKTOP_CLI_SHIM_MARKER;
 const SERVER_ENTRY = DESKTOP_CLI_SHIM_SERVER_ENTRY;
 

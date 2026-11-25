@@ -14,6 +14,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import packageJson from "../../package.json" with { type: "json" };
 import {
   generatedWindowsShimTarget,
+  windowsLauncherScript,
   isVersionExecutable,
   readPosixLauncherTarget,
   recordPinnedRuntimeLauncher,
@@ -118,7 +119,7 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
   // An empty spot is created exclusively, so a file that appears after the check above is kept.
   if (windows) {
     yield* fs
-      .writeFileString(link, `@echo off\r\n"${executable}" %*`, occupied ? {} : { flag: "wx" })
+      .writeFileString(link, windowsLauncherScript(executable), occupied ? {} : { flag: "wx" })
       .pipe(Effect.mapError(failed(`Could not write ${link}.`)));
   } else {
     yield* writePosixLauncher({ launcher: link, executable, exclusive: !occupied }).pipe(

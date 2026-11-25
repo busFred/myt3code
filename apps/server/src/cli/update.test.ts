@@ -246,7 +246,9 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
         assert.isTrue(yield* repointRecordedLaunchers({ baseDir: root, targetEntryPath: newExe }));
         assert.equal(
           yield* fs.readFileString(launcher),
-          platform === "win32" ? `@echo off\r\n"${newExe}" %*` : posixLauncherScript(newExe),
+          platform === "win32"
+            ? `@echo off\r\n"${newExe}" %* & exit /b`
+            : posixLauncherScript(newExe),
         );
         assert.equal(yield* fs.readFileString(desktop), desktopContents);
         if (platform === "win32")
@@ -301,7 +303,10 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       const repointed = yield* repointLauncher({ launchedAs, baseDir, targetEntryPath });
 
       assert.equal(Option.getOrUndefined(repointed), launcher);
-      assert.equal(yield* fs.readFileString(launcher), `@echo off\r\n"${targetEntryPath}" %*`);
+      assert.equal(
+        yield* fs.readFileString(launcher),
+        `@echo off\r\n"${targetEntryPath}" %* & exit /b`,
+      );
     }).pipe(
       Effect.scoped,
       Effect.provideService(HostProcess.Platform, "win32"),
@@ -870,6 +875,7 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
       /** The release's app installer for this machine. */
       readonly appAsset?: { readonly name: string; readonly bytes: Uint8Array };
       readonly assumeYes?: boolean;
+      readonly environment?: NodeJS.ProcessEnv;
     },
     requests: string[] = [],
   ) => {
@@ -976,7 +982,7 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
     }).pipe(
       Effect.provideService(HostProcess.Platform, options.platform ?? "linux"),
       Effect.provideService(HostProcess.Architecture, "x64"),
-      Effect.provideService(HostProcess.Environment, { PATH: "" }),
+      Effect.provideService(HostProcess.Environment, options.environment ?? { PATH: "" }),
       Effect.provideService(HostProcess.ExecutablePath, options.executablePath ?? "/usr/bin/t3"),
     );
   };
@@ -1154,6 +1160,63 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
         assert.isFalse(requests.some((url) => url.endsWith(".zip") || url.endsWith(".exe")));
         assert.equal(yield* fs.readFileString(currentEntry), "old\n");
       }),
+  );
+
+  it.effect("from the app's t3 launcher on Windows, hands the app installer off last", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { baseDir } = yield* fixture({ launcherVersion: version });
+      yield* fs.writeFileString(`${baseDir}/runtime/versions/${version}/BUILD`, "bbbbbbbbbbbb\n");
+      const windowsRuntime = pinnedRuntimePaths(yield* Path.Path, baseDir, version, "win32");
+      yield* fs.writeFileString(windowsRuntime.entryPath, "old\n");
+      yield* fs.writeFileString(windowsRuntime.sentinelPath, `${version}\n`);
+      const executable = `${baseDir}/app/T3 Code (Beta).exe`;
+      yield* fs.makeDirectory(`${baseDir}/app/resources`, { recursive: true });
+      yield* fs.writeFileString(executable, "");
+      yield* fs.writeFile(
+        `${baseDir}/app/resources/app.asar`,
+        encodeAsar({
+          "package.json": JSON.stringify({ version, t3codeCommitHash: "aaaaaaaaaaaa" }),
+        }),
+      );
+      const shim = `${baseDir}/bin/t3.cmd`;
+      yield* fs.makeDirectory(`${baseDir}/bin`, { recursive: true });
+      yield* fs.writeFileString(
+        shim,
+        renderCliShim({
+          target: { kind: "windows", executable, entry: "bin.mjs" },
+          shimPath: shim,
+          t3Home: baseDir,
+        }),
+      );
+      // The launcher runs the app's Electron executable as node, like the app's own runs.
+      yield* insideDesktopApp;
+      const spawned: Array<ChildProcess.StandardCommand> = [];
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const spawner = ChildProcessSpawner.make((command) => {
+        if (ChildProcess.isStandardCommand(command)) spawned.push(command);
+        return delegate.spawn(ChildProcess.make(process.execPath, ["-e", ""]));
+      });
+      const installerName = `T3-Code-${version}-x64.exe`;
+      const output = yield* update(baseDir, {
+        platform: "win32",
+        build: "bbbbbbbbbbbb",
+        executablePath: executable,
+        environment: { PATH: "", T3CODE_CLI_PATH: shim },
+        appAsset: { name: installerName, bytes: new TextEncoder().encode("setup") },
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+
+      assert.equal(spawned.length, 1);
+      const [installer] = spawned;
+      assert.match(installer!.command, /\/runtime\/desktop\/handoff-[^/]+\/T3-Code-[^/]+\.exe$/);
+      assert.deepEqual(installer!.args, ["/S"]);
+      assert.isTrue(installer!.options.detached);
+      // The installer runs from its file after this t3 exits.
+      assert.equal(yield* fs.readFileString(installer!.command), "setup");
+      // No re-read of the app, which the installer has not replaced yet.
+      assert.notInclude(output, "Desktop app:");
+      assert.isTrue(output.endsWith("  The desktop app installer finishes in the background."));
+    }),
   );
 
   it.effect("leaves a recorded launcher on a newer version alone", () =>

@@ -370,9 +370,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
       await NodeFSP.writeFile(shim, `@echo off\r\n"${older}" %*`, "utf8");
       const upgrade = await installOver({ script: "install.ps1", home, binDir });
       expect(upgrade.code, upgrade.output).toBe(0);
-      expect(await NodeFSP.readFile(shim, "utf8")).toContain(
-        NodePath.join(upgrade.target, "t3.exe"),
-      );
+      const upgraded = await NodeFSP.readFile(shim, "utf8");
+      expect(upgraded).toContain(NodePath.join(upgrade.target, "t3.exe"));
+      // cmd.exe rereads a running batch file; ending on the same line keeps a rewrite safe.
+      expect(upgraded).toMatch(/" %\* & exit \/b$/);
 
       const again = await installOver({ script: "install.ps1", home, binDir });
       expect(again.code, again.output).toBe(0);

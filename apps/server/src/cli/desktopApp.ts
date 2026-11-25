@@ -4,7 +4,7 @@ import {
   desktopAppAssetFileName,
   parseReleaseBuild,
 } from "@t3tools/shared/cliRelease";
-import { readCliShimTarget } from "@t3tools/shared/desktopCliShim";
+import { DESKTOP_APP_INVOKED_ENV, readCliShimTarget } from "@t3tools/shared/desktopCliShim";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -292,9 +292,22 @@ export interface DesktopAppPlan {
   readonly fileName: string | undefined;
   readonly checksum: string | undefined;
   readonly decision: DesktopAppDecision;
+  /** This t3 runs from the app's own executable, which its Windows installer closes. */
+  readonly handoff: boolean;
 }
 
-/** Undefined when there is no desktop app here, or this t3 is the one inside it. */
+/**
+ * Whether the desktop app ran this t3 itself, for its own update or Reinstall. The app's `t3`
+ * launcher runs the same Electron executable, but always sets T3CODE_CLI_PATH.
+ */
+export const invokedByDesktopApp = (input: {
+  readonly electron: boolean;
+  readonly environment: NodeJS.ProcessEnv;
+}) =>
+  input.environment[DESKTOP_APP_INVOKED_ENV] === "1" ||
+  (input.electron && !input.environment.T3CODE_CLI_PATH?.trim());
+
+/** Undefined when there is no desktop app here, or the app itself ran this t3. */
 export const planDesktopAppUpdate = Effect.fn("cli.desktop_app.plan")(function* (input: {
   readonly baseDir: string;
   readonly targetVersion: string;
@@ -303,13 +316,19 @@ export const planDesktopAppUpdate = Effect.fn("cli.desktop_app.plan")(function* 
   readonly releaseBaseUrl: string | undefined;
   readonly serviceProgram: string | undefined;
 }) {
-  // The app's own update and Reinstall run `t3 update` through its bundled CLI.
-  if (process.versions.electron !== undefined) return undefined;
+  const environment = yield* HostProcess.Environment;
+  if (invokedByDesktopApp({ electron: process.versions.electron !== undefined, environment })) {
+    yield* Effect.logDebug("The desktop app ran this t3, so it updates itself.");
+    return undefined;
+  }
   const path = yield* Path.Path;
   const arch = yield* HostProcess.Architecture;
   const httpClient = yield* HttpClient.HttpClient;
   const app = yield* locateDesktopApp(input.baseDir);
-  if (app === undefined) return undefined;
+  if (app === undefined) {
+    yield* Effect.logDebug("No desktop app found.", { baseDir: input.baseDir });
+    return undefined;
+  }
   const fileName =
     app.kind === "other" ? undefined : desktopAppAssetFileName(input.targetVersion, app.kind, arch);
   const checksum =
@@ -331,6 +350,9 @@ export const planDesktopAppUpdate = Effect.fn("cli.desktop_app.plan")(function* 
     current,
     fileName,
     checksum,
+    handoff:
+      app.kind === "nsis" &&
+      launcherOwnsVersionsDir(path, app.installDir, yield* HostProcess.ExecutablePath),
     decision: decideDesktopAppUpdate({
       kind: app.kind,
       current,
@@ -359,10 +381,11 @@ export const isWindowsAppRunning = Effect.fn("cli.desktop_app.is_running")(funct
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        "if (Get-Process | Where-Object { $_.Path -eq $env:T3CODE_APP_EXECUTABLE }) { 'running' }",
+        "if (Get-Process | Where-Object { $_.Path -eq $env:T3CODE_APP_EXECUTABLE -and $_.Id -ne $env:T3CODE_SELF_PID }) { 'running' }",
       ],
-      // Passed by environment so the path needs no PowerShell quoting.
-      env: { T3CODE_APP_EXECUTABLE: executable },
+      // Passed by environment so the path needs no PowerShell quoting. This t3 may run from the
+      // app's executable through its launcher, so it never counts itself.
+      env: { T3CODE_APP_EXECUTABLE: executable, T3CODE_SELF_PID: String(process.pid) },
       timeout: Duration.seconds(15),
     })
     .pipe(
@@ -374,7 +397,7 @@ export const isWindowsAppRunning = Effect.fn("cli.desktop_app.is_running")(funct
   return yield* runner
     .run({
       command: "tasklist",
-      args: ["/FI", `IMAGENAME eq ${name}`, "/FO", "CSV", "/NH"],
+      args: ["/FI", `IMAGENAME eq ${name}`, "/FI", `PID ne ${process.pid}`, "/FO", "CSV", "/NH"],
       timeout: Duration.seconds(10),
     })
     .pipe(
@@ -383,11 +406,14 @@ export const isWindowsAppRunning = Effect.fn("cli.desktop_app.is_running")(funct
     );
 });
 
+const HANDOFF_PREFIX = "handoff-";
+
 const failed = (reason: string) => (cause: unknown) => new DesktopAppUpdateError({ reason, cause });
 
 /**
  * Installs verified installer bytes over the app. Returns the command still to run when a .deb
- * needs a password and there is no terminal to ask for it.
+ * needs a password and there is no terminal to ask for it. A handoff starts the Windows installer
+ * detached and returns while it runs, since it closes every process in the app's folder.
  */
 export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* (input: {
   readonly install: Exclude<DesktopAppInstall, { readonly kind: "other" }>;
@@ -395,6 +421,7 @@ export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* 
   readonly fileName: string;
   readonly baseDir: string;
   readonly reopen: boolean;
+  readonly handoff: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -412,12 +439,27 @@ export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* 
   }
   // Its own folder per run, so concurrent updates never run each other's installer.
   const parent = path.join(input.baseDir, "runtime", "desktop");
-  const directory = yield* fs
-    .makeDirectory(parent, { recursive: true })
-    .pipe(
-      Effect.andThen(fs.makeTempDirectory({ directory: parent, prefix: "install-" })),
-      Effect.mapError(failed(`Could not prepare ${parent}.`)),
-    );
+  // A handed-off installer outlives its run; Windows refuses to delete one still running.
+  yield* fs.readDirectory(parent).pipe(
+    Effect.flatMap((entries) =>
+      Effect.forEach(
+        entries.filter((entry) => entry.startsWith(HANDOFF_PREFIX)),
+        (entry) =>
+          fs.remove(path.join(parent, entry), { recursive: true, force: true }).pipe(Effect.ignore),
+        { discard: true },
+      ),
+    ),
+    Effect.ignore,
+  );
+  const directory = yield* fs.makeDirectory(parent, { recursive: true }).pipe(
+    Effect.andThen(
+      fs.makeTempDirectory({
+        directory: parent,
+        prefix: input.handoff && install.kind === "nsis" ? HANDOFF_PREFIX : "install-",
+      }),
+    ),
+    Effect.mapError(failed(`Could not prepare ${parent}.`)),
+  );
   const removeDirectory = fs
     .remove(directory, { recursive: true, force: true })
     .pipe(Effect.ignore);
@@ -450,10 +492,33 @@ export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* 
     return `sudo dpkg -i '${file.replaceAll("'", `'"'"'`)}'`;
   }
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const args = ["/S", ...(input.reopen ? ["--force-run"] : [])];
+  if (install.kind === "nsis" && input.handoff) {
+    yield* Effect.scoped(
+      spawner
+        .spawn(
+          ChildProcess.make(file, args, {
+            detached: true,
+            windowsHide: true,
+            stdin: "ignore",
+            stdout: "ignore",
+            stderr: "ignore",
+          }),
+        )
+        .pipe(
+          Effect.flatMap((handle) => handle.unref),
+          Effect.asVoid,
+        ),
+    ).pipe(
+      Effect.mapError(failed(`Could not start ${file}.`)),
+      Effect.tapError(() => removeDirectory),
+    );
+    return undefined;
+  }
   yield* Effect.gen(function* () {
     if (install.kind === "nsis") {
       // The installer closes the app processes under its folder; `--force-run` reopens it.
-      return yield* run(file, ["/S", ...(input.reopen ? ["--force-run"] : [])]);
+      return yield* run(file, args);
     }
     if (passwordless) return yield* run("sudo", ["-n", "dpkg", "-i", file]);
     // Effect detaches POSIX children by default; sudo then cannot ask for a password.

@@ -1,6 +1,7 @@
 import { bootstrapRemoteBearerSession } from "@t3tools/client-runtime/authorization";
 import { defaultBootServiceUnitPath } from "@t3tools/shared/bootServiceUnitPath";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { DESKTOP_APP_INVOKED_ENV } from "@t3tools/shared/desktopCliShim";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -99,6 +100,7 @@ export const runBundledCli = Effect.fn("DesktopServiceConnection.runBundledCli")
           {
             env: {
               ELECTRON_RUN_AS_NODE: "1",
+              [DESKTOP_APP_INVOKED_ENV]: "1",
               T3_BOOT_SERVICE_UNIT: undefined,
               T3_SERVICE_LAUNCHER_CONTEXT: undefined,
               T3CODE_DESKTOP_CLI_LAUNCHER: undefined,
