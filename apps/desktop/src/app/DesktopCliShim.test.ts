@@ -247,6 +247,59 @@ describe("renderCliShim", () => {
 });
 
 effectIt.layer(NodeServices.layer)("installedRuntime", (it) => {
+  it.effect.each([
+    { name: "a recorded launcher wins", recorded: "1.2.3", service: "1.10.0", runs: "1.2.3" },
+    {
+      name: "only the service uses its runtime",
+      recorded: undefined,
+      service: "1.10.0",
+      runs: "1.10.0",
+    },
+    {
+      name: "a service on a removed runtime",
+      recorded: undefined,
+      service: "9.0.0",
+      runs: undefined,
+    },
+    {
+      name: "neither runs the bundled CLI",
+      recorded: undefined,
+      service: undefined,
+      runs: undefined,
+    },
+  ])("$name", ({ recorded, service, runs }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-shim-runtime-" });
+      const runtime = (version: string) => path.join(baseDir, "runtime", "versions", version, "t3");
+      for (const version of ["1.2.3", "1.10.0"]) {
+        yield* fs.makeDirectory(path.dirname(runtime(version)), { recursive: true });
+        yield* fs.writeFileString(runtime(version), "");
+      }
+      if (recorded !== undefined) {
+        const launcher = path.join(baseDir, "a", "t3");
+        yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+        yield* fs.writeFileString(launcher, `#!/bin/sh\nexec '${runtime(recorded)}' "$@"\n`);
+        yield* fs.writeFileString(path.join(baseDir, "runtime", "launchers"), `${launcher}\n`);
+      }
+      if (service !== undefined) {
+        yield* fs.writeFileString(
+          path.join(baseDir, "runtime", "service-state.json"),
+          JSON.stringify({ protocol: 4, activeVersion: service }),
+        );
+      }
+      const found = yield* installedRuntime.pipe(
+        Effect.provideService(DesktopEnvironment.DesktopEnvironment, {
+          path,
+          baseDir,
+          platform: "linux",
+        } as DesktopEnvironment.DesktopEnvironment["Service"]),
+      );
+      assert.equal(found, runs === undefined ? undefined : runtime(runs));
+    }),
+  );
+
   it.effect("is the runtime the most recently written recorded launcher runs", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
