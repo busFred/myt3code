@@ -47,12 +47,14 @@ side lists and revokes it in Sharing & access like any other session, and owns i
   moves an expiry earlier. The linking side reads the session id from its token's signed but
   unencrypted claims and reports it as `peerSessionId`, so a client with access on the receiving
   side can renew that session there.
-- **A bi-directional link is two links.** Each is made as a single link is, with a code minted on
-  the side being linked to. [`runLinkBothWays`](../../packages/client-runtime/src/linkBothWays.ts)
-  runs both for a client connected to each side, turns Linked environments on first where it is
-  off, and leaves an [app invite](./04_environment-auth.md#scoped-sessions-and-delegation) when the
-  link back is full access. Both link through `POST /api/peer-links/link`, which keeps a link a
-  side already has rather than replacing its working token. `t3 environment link --bidirectional`
+- **A link back is a second link.** Each is made as a single link is, with a code minted on the
+  side being linked to ([`linkBatch`](../../packages/client-runtime/src/linkBatch.ts)). The web
+  client turns Linked environments on first where it is off and its session may change settings,
+  because the receiving side refuses a peer-link sign-in while it is off, and can leave an
+  [app invite](./04_environment-auth.md#scoped-sessions-and-delegation)
+  ([`appInvite`](../../packages/client-runtime/src/appInvite.ts)) when the link back is full
+  access. `t3 environment link --bidirectional` links through `POST /api/peer-links/link`, which
+  keeps a link a side already has rather than replacing its working token. It
   checks that the other side has renew, spends one standard code for a session that must manage
   access there, shortened to minutes, has the other side link back, and turns Linked environments
   on here through the running server (`POST /api/peer-links/enable`).

@@ -510,14 +510,16 @@ an address you trust: the code is sent there.
   Sharing & access.
 - A link stays valid while agents use it. One unused for 30 days expires, as
   does one to a machine on an older T3 Code after 30 days; link again with a
-  new pairing code. A link made with a code from `t3 pair --expire` stays valid
-  that long after its last use instead, or always with `never`, and
-  `t3 auth session renew` on the machine it links to changes that later.
+  new pairing code.
+- When you make a link, pick how long it lasts: 30 days, 1 year or Never. To
+  change it later without a new pairing code, use the link's **Expiry** menu
+  (in the map details or the list row). Renewing a link that never expires
+  keeps it that way. From a terminal, a code from `t3 pair --expire` sets the
+  same thing, and `t3 auth session renew` on the machine it links to changes
+  it later.
 
-### Bi-directional link
-
-A link works in one direction. To link two machines bi-directionally from a terminal
-on one of them, make a code with `t3 pair` on the other machine and run:
+To link two machines both ways from a terminal on one of them, make a code with
+`t3 pair` on the other machine and run:
 
 ```bash
 t3 environment link <address> --pairing-code <code> --bidirectional --expire never
@@ -525,21 +527,11 @@ t3 environment link <address> --pairing-code <code> --bidirectional --expire nev
 
 It links each machine to the other and turns on Linked environments on both.
 With `--access full-access` it also invites the other machine's desktop app to
-connect to this one, when the other machine's link here has full access, new or
-not; the invite lasts a day, and `--no-invite-app` skips it. The invite is
-left only when this machine has an https or Tailscale address, since the app's
-code must not cross the network unencrypted.
-Links with less access leave no invite, because the app would get more access
-than the link. A machine that is already linked keeps its link. The invite needs
-a code that gives every standard permission, as a plain `t3 pair` code does;
-with a narrower one the command still links and says the invite was not left. The code must be able to manage access there, as a plain
-`t3 pair` code can; it is spent once for a session that ends when the command
-does. `--expire` sets how long both links and the invited app stay signed in.
-The other machine
-reaches this one at its Tailscale address; pass `--self-url <url>` to give
-another. Each step prints its result. Run the command again with a fresh code to
-retry the steps that failed; finished ones are left as they are. A machine on an
-older T3 Code cannot link bi-directionally, and the command says so.
+connect to this one (`--no-invite-app` skips it); the invite is left only when
+this machine has an https or Tailscale address. The other machine reaches this
+one at its Tailscale address; `--self-url <url>` gives another. Each step prints
+its result; run the command again with a fresh code to retry the ones that
+failed.
 
 On web and desktop, **Settings → Environments** opens as a map of your machines:
 this app, each environment with one line per route (the one in use is
@@ -564,6 +556,12 @@ link … back** when you create the link, or select a one-way link and use
 may manage access on each. Two machines linked to each other at the same access
 are drawn as one line with an arrowhead at each end; they are still two links,
 and each is forgotten on its own.
+
+When you link back at full access, you can also tick **Also invite the desktop
+app on … to connect to …**. That machine's desktop app then uses its background
+service to connect within a day. It is offered only over HTTPS or another
+secure connection. Linking back also turns on Linked environments on the other
+machine when your session there may change its settings.
 
 To link one environment to several machines at once, Shift-click the machines
 (or Shift-drag a box around them, or press Space on a focused machine), then
