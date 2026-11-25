@@ -3212,10 +3212,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "no computador que abriu esta página"
-      ]
+      "c": [" ", "no computador que abriu esta página"]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3227,10 +3224,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "· quem executar recebe este acesso"
-      ]
+      "c": [" ", "· quem executar recebe este acesso"]
     }
   ],
   "c54cc9c75db9dc58": "Aprove apenas um login que você acabou de iniciar.",
@@ -8988,17 +8982,10 @@
   "e5ac7abeaeb78750": "Desmarcar tudo",
   "ab520df47bca22d2": "Selecionar tudo",
   "3a57c9bbcd12529f": "Não foi possível verificar quais máquinas já estão vinculadas, então nenhuma pode ser escolhida: {error}",
-  "4381e144bbeaddb2": "Vinculada nos dois sentidos",
-  "692450a6537f52a8": "Vinculada em um sentido",
   "78ccf685018ef797": "Vinculada",
-  "956b5c20a1fba7c1": "Não foi possível vincular de volta: {reason}",
   "641c3b24cbc7d86b": "{count, plural, one {# máquina precisa de um código de pareamento, então não está na lista.} other {# máquinas precisam de um código de pareamento, então não estão na lista.}}",
   "87433cf138dc3e2c": "{linked, plural, one {# máquina vinculada.} other {# máquinas vinculadas.}}",
   "d044bb95248da10c": "{linked} de {total} vinculadas. As que falharam continuam selecionadas para você tentar de novo.",
-  "079237b461191c9a": "{count, plural, one {# máquina não pôde vincular de volta.} other {# máquinas não puderam vincular de volta.}}",
-  "86d17c42dae16356": "Vincular também cada máquina de volta a {source}",
-  "23fd4db8faa1a001": "Os agentes de lá poderão trabalhar também em {source}.",
-  "35d59319f62bd505": "{count, plural, one {# máquina continua vinculada em um sentido.} other {# máquinas continuam vinculadas em um sentido.}}",
   "d2fbaffe08b6cf60": "{count, plural, one {Vincular # máquina} other {Vincular # máquinas}}",
   "8e3378b526d615f4": "Vincular vários…",
   "b550d04490078bda": "Os agentes daqui poderão então iniciar threads em cada máquina escolhida, enviar mensagens e aguardá-las. Cada vínculo aparece em Clientes autorizados em Compartilhamento e acesso da respectiva máquina, onde pode ser revogado.",

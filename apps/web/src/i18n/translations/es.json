@@ -3212,10 +3212,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "en el ordenador que abrió esta página"
-      ]
+      "c": [" ", "en el ordenador que abrió esta página"]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3227,10 +3224,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "· quien lo ejecute obtiene este acceso"
-      ]
+      "c": [" ", "· quien lo ejecute obtiene este acceso"]
     }
   ],
   "c54cc9c75db9dc58": "Aprueba solo un inicio de sesión que acabes de iniciar.",
@@ -8987,17 +8981,10 @@
   "e5ac7abeaeb78750": "No seleccionar nada",
   "ab520df47bca22d2": "Seleccionar todo",
   "3a57c9bbcd12529f": "No se pudo comprobar qué máquinas ya están vinculadas, así que no se puede elegir ninguna: {error}",
-  "4381e144bbeaddb2": "Vinculada en ambos sentidos",
-  "692450a6537f52a8": "Vinculada en un sentido",
   "78ccf685018ef797": "Vinculada",
-  "956b5c20a1fba7c1": "No se pudo vincular de vuelta: {reason}",
   "641c3b24cbc7d86b": "{count, plural, one {# máquina necesita un código de emparejamiento, así que no aparece en la lista.} other {# máquinas necesitan un código de emparejamiento, así que no aparecen en la lista.}}",
   "87433cf138dc3e2c": "{linked, plural, one {Se vinculó # máquina.} other {Se vincularon # máquinas.}}",
   "d044bb95248da10c": "Se vincularon {linked} de {total}. Las que fallaron siguen seleccionadas para que puedas reintentarlas.",
-  "079237b461191c9a": "{count, plural, one {# máquina no pudo vincularse de vuelta.} other {# máquinas no pudieron vincularse de vuelta.}}",
-  "86d17c42dae16356": "Vincular también cada máquina de vuelta a {source}",
-  "23fd4db8faa1a001": "Los agentes de allí podrán trabajar también en {source}.",
-  "35d59319f62bd505": "{count, plural, one {# máquina queda vinculada en un sentido.} other {# máquinas quedan vinculadas en un sentido.}}",
   "d2fbaffe08b6cf60": "{count, plural, one {Vincular # máquina} other {Vincular # máquinas}}",
   "8e3378b526d615f4": "Vincular varios…",
   "b550d04490078bda": "Así los agentes de aquí podrán iniciar hilos en cada máquina que elijas, enviarles mensajes y esperarlos. Cada vínculo aparece en Clientes autorizados, en Compartir y acceso de esa máquina, donde se puede revocar.",

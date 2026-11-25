@@ -3213,10 +3213,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "auf dem Computer, der diese Seite geöffnet hat"
-      ]
+      "c": [" ", "auf dem Computer, der diese Seite geöffnet hat"]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3228,10 +3225,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "· wer es ausführt, erhält diesen Zugriff"
-      ]
+      "c": [" ", "· wer es ausführt, erhält diesen Zugriff"]
     }
   ],
   "c54cc9c75db9dc58": "Genehmige nur eine Anmeldung, die du gerade selbst gestartet hast.",
@@ -8989,17 +8983,10 @@
   "e5ac7abeaeb78750": "Nichts auswählen",
   "ab520df47bca22d2": "Alles auswählen",
   "3a57c9bbcd12529f": "Es konnte nicht geprüft werden, welche Rechner bereits verknüpft sind, daher kann keiner ausgewählt werden: {error}",
-  "4381e144bbeaddb2": "In beide Richtungen verknüpft",
-  "692450a6537f52a8": "In eine Richtung verknüpft",
   "78ccf685018ef797": "Verknüpft",
-  "956b5c20a1fba7c1": "Zurückverknüpfen fehlgeschlagen: {reason}",
   "641c3b24cbc7d86b": "{count, plural, one {# Rechner braucht einen Kopplungscode und ist daher nicht aufgeführt.} other {# Rechner brauchen einen Kopplungscode und sind daher nicht aufgeführt.}}",
   "87433cf138dc3e2c": "{linked, plural, one {# Rechner verknüpft.} other {# Rechner verknüpft.}}",
   "d044bb95248da10c": "{linked} von {total} verknüpft. Die fehlgeschlagenen bleiben ausgewählt, damit du es erneut versuchen kannst.",
-  "079237b461191c9a": "{count, plural, one {# Rechner konnte nicht zurückverknüpfen.} other {# Rechner konnten nicht zurückverknüpfen.}}",
-  "86d17c42dae16356": "Auch jeden Rechner zurück mit {source} verknüpfen",
-  "23fd4db8faa1a001": "Agenten dort können dann auch auf {source} arbeiten.",
-  "35d59319f62bd505": "{count, plural, one {# Rechner bleibt einseitig verknüpft.} other {# Rechner bleiben einseitig verknüpft.}}",
   "d2fbaffe08b6cf60": "{count, plural, one {# Rechner verknüpfen} other {# Rechner verknüpfen}}",
   "8e3378b526d615f4": "Mehrere verknüpfen…",
   "b550d04490078bda": "Agenten hier können dann auf jedem ausgewählten Rechner Threads starten, ihnen Nachrichten senden und auf sie warten. Jede Verknüpfung erscheint unter „Autorisierte Clients“ in „Freigabe & Zugriff“ des jeweiligen Rechners und kann dort widerrufen werden.",

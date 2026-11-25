@@ -3212,10 +3212,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "on the computer that opened this page"
-      ]
+      "c": [" ", "on the computer that opened this page"]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3227,10 +3224,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "· whoever runs it gets this access"
-      ]
+      "c": [" ", "· whoever runs it gets this access"]
     }
   ],
   "c54cc9c75db9dc58": "Only approve a sign-in you just started.",
@@ -8997,17 +8991,10 @@
   "e5ac7abeaeb78750": "Select none",
   "ab520df47bca22d2": "Select all",
   "3a57c9bbcd12529f": "Could not check which machines are already linked, so none can be picked: {error}",
-  "4381e144bbeaddb2": "Linked both ways",
-  "692450a6537f52a8": "Linked one way",
   "78ccf685018ef797": "Linked",
-  "956b5c20a1fba7c1": "Could not link back: {reason}",
   "641c3b24cbc7d86b": "{count, plural, one {# machine needs a pairing code, so it is not listed.} other {# machines need a pairing code, so they are not listed.}}",
   "87433cf138dc3e2c": "{linked, plural, one {Linked # machine.} other {Linked # machines.}}",
   "d044bb95248da10c": "Linked {linked} of {total}. The ones that failed stay selected, so you can try them again.",
-  "079237b461191c9a": "{count, plural, one {# machine could not link back.} other {# machines could not link back.}}",
-  "86d17c42dae16356": "Also link each machine back to {source}",
-  "23fd4db8faa1a001": "Agents there can then work on {source} too.",
-  "35d59319f62bd505": "{count, plural, one {# machine stays one-way.} other {# machines stay one-way.}}",
   "d2fbaffe08b6cf60": "{count, plural, one {Link # machine} other {Link # machines}}",
   "8e3378b526d615f4": "Link several…",
   "b550d04490078bda": "Agents here can then launch, message and wait on threads on each machine you pick. Each appears under Authorized clients in that machine's Sharing & access, where it can be revoked.",

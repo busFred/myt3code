@@ -3212,10 +3212,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "på datorn som öppnade den här sidan"
-      ]
+      "c": [" ", "på datorn som öppnade den här sidan"]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3227,10 +3224,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "· den som kör den får den här åtkomsten"
-      ]
+      "c": [" ", "· den som kör den får den här åtkomsten"]
     }
   ],
   "c54cc9c75db9dc58": "Godkänn bara en inloggning som du själv precis har startat.",
@@ -8995,17 +8989,10 @@
   "e5ac7abeaeb78750": "Avmarkera allt",
   "ab520df47bca22d2": "Markera allt",
   "3a57c9bbcd12529f": "Det gick inte att kontrollera vilka datorer som redan är länkade, så ingen kan väljas: {error}",
-  "4381e144bbeaddb2": "Länkad åt båda håll",
-  "692450a6537f52a8": "Länkad åt ett håll",
   "78ccf685018ef797": "Länkad",
-  "956b5c20a1fba7c1": "Kunde inte länka tillbaka: {reason}",
   "641c3b24cbc7d86b": "{count, plural, one {# maskin behöver en parkopplingskod och visas därför inte i listan.} other {# maskiner behöver en parkopplingskod och visas därför inte i listan.}}",
   "87433cf138dc3e2c": "{linked, plural, one {Länkade # dator.} other {Länkade # datorer.}}",
   "d044bb95248da10c": "Länkade {linked} av {total}. De som misslyckades är fortfarande markerade så att du kan försöka igen.",
-  "079237b461191c9a": "{count, plural, one {# maskin kunde inte länka tillbaka.} other {# maskiner kunde inte länka tillbaka.}}",
-  "86d17c42dae16356": "Länka även varje dator tillbaka till {source}",
-  "23fd4db8faa1a001": "Agenter där kan då också arbeta på {source}.",
-  "35d59319f62bd505": "{count, plural, one {# maskin förblir länkad åt ett håll.} other {# maskiner förblir länkade åt ett håll.}}",
   "d2fbaffe08b6cf60": "{count, plural, one {Länka # dator} other {Länka # datorer}}",
   "8e3378b526d615f4": "Länka flera…",
   "b550d04490078bda": "Agenter här kan sedan starta, skicka meddelanden till och vänta på trådar på varje dator du väljer. Varje länk visas under Auktoriserade klienter i den datorns Delning och åtkomst, där den kan återkallas.",
