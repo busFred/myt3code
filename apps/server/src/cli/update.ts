@@ -41,6 +41,7 @@ import {
   recordPinnedRuntimeLauncher,
   readPosixLauncherTarget,
   resolveLauncherPath,
+  windowsLauncherScript,
   windowsShimTarget,
   writePosixLauncher,
 } from "../cloud/pinnedRuntime.ts";
@@ -218,7 +219,7 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
     if (quoted === undefined || !ownsTarget(quoted)) return Option.none<string>();
     yield* remember(shimPath);
     yield* fs
-      .writeFileString(shimPath, `@echo off\r\n"${input.targetEntryPath}" %*`)
+      .writeFileString(shimPath, windowsLauncherScript(input.targetEntryPath))
       .pipe(
         Effect.mapError(
           () => new CliUpdateError({ reason: `Could not rewrite the t3 launcher at ${shimPath}.` }),
@@ -317,7 +318,7 @@ export const repointRecordedLaunchers = Effect.fn("cli.update.repoint_recorded_l
       const result = yield* Effect.gen(function* () {
         if ((yield* ownedLauncherTarget(launcher, versionsDir)) === undefined) return false;
         if (platform === "win32") {
-          yield* fs.writeFileString(launcher, `@echo off\r\n"${input.targetEntryPath}" %*`);
+          yield* fs.writeFileString(launcher, windowsLauncherScript(input.targetEntryPath));
         } else {
           yield* writePosixLauncher({
             launcher,
@@ -728,6 +729,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
           initial: true,
         }),
       ).pipe(Effect.catchTags({ QuitError: () => Effect.succeed(false) }));
+      if (!updateApp) appNote = "The desktop app was left as is.";
     } else {
       yield* Console.log(
         "  Not a terminal, so the desktop app was left as is. Rerun with --yes to update it.",
@@ -841,9 +843,9 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       : false;
 
   // The app's installer closes it; reopen it only when it was open and the service switches now.
-  const appOutcome =
+  const appStep =
     updateApp && !releaseChanged && appPlan?.install !== undefined && appPlan.fileName !== undefined
-      ? yield* runDesktopAppStep({
+      ? runDesktopAppStep({
           plan: { ...appPlan, install: appPlan.install },
           fileName: appPlan.fileName,
           baseDir: input.baseDir,
@@ -858,6 +860,8 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
           onProgress: progress.report,
         }).pipe(Effect.ensuring(Effect.sync(progress.finish)))
       : undefined;
+  // Run from the app's own executable on Windows, its installer would close this t3, so it runs last.
+  const appOutcome = appPlan?.handoff === true ? undefined : appStep && (yield* appStep);
 
   // Use today's service manager for the target version. Inside the service it hands off to
   // the target CLI, so stopping this process cannot interrupt the switch.
@@ -972,6 +976,18 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       reason: `t3@${targetVersion} installed build ${installedBuild}, not the ${publishedBuild} it looked up: ${RELEASE_CHANGED}`,
     });
   }
+  if (appPlan?.handoff === true && appStep !== undefined) {
+    const handoff = yield* appStep;
+    if (handoff._tag === "failed") {
+      appFailure = handoff.reason;
+    } else {
+      yield* Console.log(
+        handoff.reopen
+          ? "  The desktop app installer is running in the background; T3 Code reopens when it's done."
+          : "  The desktop app installer finishes in the background.",
+      );
+    }
+  }
   if (appFailure !== undefined) {
     return yield* new CliUpdateError({
       reason: `t3@${targetVersion} is installed, but the desktop app was not updated: ${appFailure} Run \`t3 update\` again to retry the app.`,
@@ -1014,8 +1030,11 @@ const runDesktopAppStep = Effect.fn("cli.update.desktop_app")(
       fileName: input.fileName,
       baseDir: input.baseDir,
       reopen: input.reopen,
+      handoff: plan.handoff,
     });
     if (pending !== undefined) return { _tag: "pending", command: pending } as const;
+    // The installer is still running and closes this t3 when it replaces the app.
+    if (plan.handoff) return { _tag: "handedOff", reopen: input.reopen } as const;
     const after = yield* readDesktopAppBuild(plan.install, {
       checksum,
       targetVersion: input.targetVersion,

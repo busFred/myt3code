@@ -198,6 +198,8 @@ it.layer(NodeServices.layer)("t3 uninstall launcher", (it) => {
             Effect.provideService(HostProcess.Environment, { PATH: shimDir }),
           );
       assert.equal(yield* windowsOwner(`@echo off\r\n"${exe}" %*`), shim);
+      assert.equal(yield* windowsOwner(`@echo off\r\n"${exe}" %* & exit /b`), shim);
+      assert.isUndefined(yield* windowsOwner(`@echo off\r\n"${exe}" %* & del x`));
       assert.isUndefined(yield* windowsOwner(`@echo off\r\nset FOO=1\r\n"${exe}" %*`));
 
       // npx can run another version than the installed one, so uninstall also reads the

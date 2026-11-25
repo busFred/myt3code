@@ -645,9 +645,17 @@ export function isVersionExecutable(
 /** The executable a `t3.cmd` shim written by the install script or `t3 update` runs. */
 export const windowsShimTarget = (contents: string) => /^"([^"]+)"/m.exec(contents)?.[1];
 
+/**
+ * The `t3.cmd` the install scripts and `t3 update` write. cmd.exe rereads a running batch file at
+ * its old offset, so a rewrite with a longer path would run its tail; `exit /b` on the same line
+ * ends it first and keeps the exit code.
+ */
+export const windowsLauncherScript = (executable: string) =>
+  `@echo off\r\n"${executable}" %* & exit /b`;
+
 /** Like {@link windowsShimTarget}, but only for a shim exactly as written; never a user's wrapper. */
 export const generatedWindowsShimTarget = (contents: string) =>
-  /^@echo off\r?\n"([^"]+)" %\*\s*$/.exec(contents)?.[1];
+  /^@echo off\r?\n"([^"]+)" %\*(?: & exit \/b)?\s*$/.exec(contents)?.[1];
 
 /**
  * The `t3` script the install scripts and `t3 update` write on macOS and Linux. Exec by absolute

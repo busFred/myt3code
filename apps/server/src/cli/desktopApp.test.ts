@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { encodeAsar } from "../testUtils/asar.ts";
-import { decideDesktopAppUpdate, readAsarRootFile } from "./desktopApp.ts";
+import { decideDesktopAppUpdate, invokedByDesktopApp, readAsarRootFile } from "./desktopApp.ts";
 
 const decide = (overrides: Partial<Parameters<typeof decideDesktopAppUpdate>[0]>) =>
   decideDesktopAppUpdate({
@@ -72,6 +72,25 @@ it.each([
   { name: "an install t3 cannot replace", overrides: { kind: "other" as const }, action: "skip" },
 ])("decides $action for $name", ({ overrides, action }) => {
   assert.equal(decide(overrides), action);
+});
+
+it.each([
+  {
+    name: "the app's own run, marked",
+    electron: true,
+    environment: { T3CODE_DESKTOP_APP_INVOKED: "1" },
+    invoked: true,
+  },
+  { name: "an app from before the marker", electron: true, environment: {}, invoked: true },
+  {
+    name: "the app's t3 launcher",
+    electron: true,
+    environment: { T3CODE_CLI_PATH: "C:\\Users\\me\\.t3\\bin\\t3.cmd" },
+    invoked: false,
+  },
+  { name: "a plain node t3", electron: false, environment: {}, invoked: false },
+])("$name counts as the app running t3: $invoked", ({ electron, environment, invoked }) => {
+  assert.equal(invokedByDesktopApp({ electron, environment }), invoked);
 });
 
 it.effect("reads a root file out of an asar archive", () =>
