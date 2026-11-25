@@ -699,6 +699,36 @@ it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
     return { baseDir, versionsDir, install };
   });
 
+  it.effect.each([
+    { status: "pending", activeVersion: "1.0.0", kept: ["1.0.0", "2.0.0"] },
+    { status: "committed", activeVersion: "2.0.0", kept: ["2.0.0"] },
+  ] as const)(
+    "keeps an update's previous runtime only while its trial is open: $status",
+    ({ status, activeVersion, kept }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { baseDir, versionsDir } = yield* setup(["1.0.0", "2.0.0"]);
+        yield* fs.writeFileString(
+          path.join(baseDir, "runtime", "service-state.json"),
+          JSON.stringify({
+            protocol: SERVICE_LAUNCHER_PROTOCOL,
+            activeVersion,
+            update: { id: "u", fromVersion: "1.0.0", targetVersion: "2.0.0", status },
+          }),
+        );
+        yield* prunePinnedRuntimes({ baseDir, keep: [] }).pipe(
+          Effect.provideService(
+            ProcessRunner.ProcessRunner,
+            lsofRunner("p1\nftxt\nn/usr/bin/true\n"),
+          ),
+          Effect.provideService(HostProcess.Platform, "darwin"),
+          Effect.provideService(HostProcess.Environment, {}),
+        );
+        assert.deepEqual((yield* fs.readDirectory(versionsDir)).toSorted(), [...kept]);
+      }),
+  );
+
   it.effect("removes only completed runtimes nothing references", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

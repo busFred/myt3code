@@ -22,6 +22,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -29,6 +30,8 @@ import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "./config.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
+import { pruneRuntimesOnStart } from "./cloud/selfUpdate.ts";
+import * as ProcessRunner from "./processRunner.ts";
 import { flushCompileCache } from "./compileCache.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -646,6 +649,16 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
     yield* runStartupPhase("auxiliary-roots.parked", options?.awaitAuxiliaryParked ?? Effect.void);
 
     const updateOutcome = yield* launcher.prepareTrial({ baseDir: serverConfig.baseDir });
+    // The prune at startup kept the previous runtime for a rollback the commit has now ruled out.
+    // Only a launcher-managed server commits a trial, and it always runs with a process runner.
+    const runner = yield* Effect.serviceOption(ProcessRunner.ProcessRunner);
+    if (updateOutcome?.status === "committed" && Option.isSome(runner)) {
+      yield* pruneRuntimesOnStart({ baseDir: serverConfig.baseDir, managed: true }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, runner.value),
+        Effect.ignoreCause({ log: true }),
+        Effect.forkScoped,
+      );
+    }
 
     yield* Effect.logDebug("startup phase: publishing welcome event", {
       environmentId: environment.environmentId,

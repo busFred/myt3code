@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
+import * as Schema from "effect/Schema";
 import {
   DESKTOP_CLI_SHIM_MARKER as MARKER,
   DESKTOP_CLI_SHIM_SERVER_ENTRY as SERVER_ENTRY,
@@ -26,10 +27,16 @@ export const launcherPath = (environment: DesktopEnvironment.DesktopEnvironment[
     environment.platform === "win32" ? "t3.cmd" : "t3",
   );
 
+// The one field of the service launcher's `runtime/service-state.json` this needs.
+const decodeServiceState = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ activeVersion: Schema.String })),
+);
+
 /**
  * The standalone t3 this home's recorded launchers run, which this launcher then runs too. Every
  * switch rewrites all of them, so the most recently written one wins over a higher version left
- * on disk after a downgrade.
+ * on disk after a downgrade. With none recorded, as when only the background service was set up,
+ * it is the runtime that service runs for this home.
  */
 export const installedRuntime = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -39,6 +46,7 @@ export const installedRuntime = Effect.gen(function* () {
   const records = yield* fs
     .readFileString(path.join(environment.baseDir, "runtime", "launchers"))
     .pipe(Effect.orElseSucceed(() => ""));
+  const name = environment.platform === "win32" ? "t3.exe" : "t3";
   let latest: { readonly writtenAt: number; readonly executable: string } | undefined;
   for (const launcher of new Set(records.split(/\r?\n/).filter((line) => path.isAbsolute(line)))) {
     const link = yield* fs.readLink(launcher).pipe(Effect.option);
@@ -57,11 +65,11 @@ export const installedRuntime = Effect.gen(function* () {
           )
         : undefined;
     if (executable === undefined) continue;
-    const [version, name, ...rest] = path.relative(versionsDir, executable).split(/[\\/]/);
+    const [version, file, ...rest] = path.relative(versionsDir, executable).split(/[\\/]/);
     if (
       version === undefined ||
       parseSemver(version) === null ||
-      !/^t3(?:\.exe)?$/i.test(name ?? "") ||
+      !/^t3(?:\.exe)?$/i.test(file ?? "") ||
       rest.length > 0 ||
       !(yield* fs.exists(executable).pipe(Effect.orElseSucceed(() => false)))
     ) {
@@ -69,7 +77,18 @@ export const installedRuntime = Effect.gen(function* () {
     }
     if (latest === undefined || writtenAt > latest.writtenAt) latest = { writtenAt, executable };
   }
-  return latest?.executable;
+  if (latest !== undefined) return latest.executable;
+  const active = Option.flatMap(
+    yield* fs
+      .readFileString(path.join(environment.baseDir, "runtime", "service-state.json"))
+      .pipe(Effect.option),
+    decodeServiceState,
+  );
+  if (Option.isNone(active) || parseSemver(active.value.activeVersion) === null) return undefined;
+  const executable = path.join(versionsDir, active.value.activeVersion, name);
+  return (yield* fs.exists(executable).pipe(Effect.orElseSucceed(() => false)))
+    ? executable
+    : undefined;
 });
 
 export const install = Effect.gen(function* () {

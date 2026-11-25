@@ -297,6 +297,47 @@ it.layer(NodeServices.layer)("self-update launchers", (it) => {
       }).pipe(Effect.provideService(HostProcess.Platform, platform)),
   );
 
+  it.effect.each([
+    { name: "gets one with only the service", serviceState: true, branch: true },
+    { name: "is left to the app without a service", serviceState: false, branch: false },
+  ])("an app launcher without a runtime branch $name", ({ serviceState, branch }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+      const baseDir = path.join(root, ".t3");
+      const target = path.join(baseDir, "runtime/versions/2.0.0/t3.exe");
+      yield* fs.makeDirectory(path.dirname(target), { recursive: true });
+      yield* fs.writeFileString(target, "");
+      if (serviceState) {
+        yield* fs.writeFileString(
+          path.join(baseDir, "runtime/service-state.json"),
+          JSON.stringify({ protocol: SERVICE_LAUNCHER_PROTOCOL, activeVersion: "2.0.0" }),
+        );
+      }
+      // No standalone t3 was ever installed, so no launcher is recorded.
+      const appLauncher = path.join(baseDir, "bin", "t3.cmd");
+      yield* fs.makeDirectory(path.dirname(appLauncher), { recursive: true });
+      yield* fs.writeFileString(
+        appLauncher,
+        renderCliShim({
+          target: { kind: "windows", executable: "C:\\T3\\T3 Code.exe", entry: "C:\\T3\\bin.mjs" },
+          shimPath: appLauncher,
+          t3Home: baseDir,
+        }),
+      );
+
+      yield* ServiceLauncherClient.repointLaunchers({ baseDir, targetVersion: "2.0.0" }).pipe(
+        Effect.provideService(HostProcess.Environment, { PATH: "" }),
+      );
+
+      assert.equal(
+        readCliShimRuntime(yield* fs.readFileString(appLauncher)),
+        branch ? target : undefined,
+      );
+    }).pipe(Effect.provideService(HostProcess.Platform, "win32")),
+  );
+
   it.effect("still moves the PATH launcher when the install bin one cannot be rewritten", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

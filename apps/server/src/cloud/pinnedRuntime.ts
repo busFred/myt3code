@@ -808,7 +808,8 @@ export const ownedLauncherTarget = Effect.fn("cloud.pinned_runtime.owned_launche
 /**
  * Moves every launcher this home owns to `targetEntryPath` after a switch: the recorded ones,
  * `extra` ones found another way, and the runtime branch of the desktop app's launcher. One without
- * that branch (an app-only machine, or an older app) is the app's to rewrite.
+ * that branch gets one when this home's service runs a runtime, as the app does at launch; on an
+ * app-only machine, or with an older app, the app rewrites it.
  */
 export const repointOwnedLaunchers = Effect.fn("cloud.pinned_runtime.repoint_owned_launchers")(
   function* (input: {
@@ -849,10 +850,16 @@ export const repointOwnedLaunchers = Effect.fn("cloud.pinned_runtime.repoint_own
     const appLauncher = path.join(input.baseDir, "bin", platform === "win32" ? "t3.cmd" : "t3");
     const contents = yield* fs.readFileString(appLauncher).pipe(Effect.option);
     const appTarget = Option.isSome(contents) ? readCliShimTarget(contents.value) : undefined;
+    const serviceRuns = yield* fs
+      .readFileString(path.join(input.baseDir, PINNED_RUNTIME_DIR, SERVICE_STATE_FILE))
+      .pipe(
+        Effect.map((text) => parseServiceState(text) !== undefined),
+        Effect.orElseSucceed(() => false),
+      );
     if (
       Option.isSome(contents) &&
       appTarget !== undefined &&
-      readCliShimRuntime(contents.value) !== undefined
+      (readCliShimRuntime(contents.value) !== undefined || serviceRuns)
     ) {
       yield* fs
         .writeFileString(
@@ -1043,7 +1050,8 @@ const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(fun
     if (state === undefined) return pruned;
     keep.add(state.activeVersion);
     if (state.update !== undefined) {
-      keep.add(state.update.fromVersion);
+      // Rollback needs the previous runtime only while the trial is open.
+      if (state.update.status === "pending") keep.add(state.update.fromVersion);
       keep.add(state.update.targetVersion);
     }
   }
