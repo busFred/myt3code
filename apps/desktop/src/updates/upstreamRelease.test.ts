@@ -22,14 +22,17 @@ describe("parseUpstreamRelease", () => {
 
 describe("isUpstreamNewer", () => {
   it.each([
-    ["0.1.12", "0.1.11", true],
-    ["0.1.11", "0.1.11", false],
-    ["0.1.10", "0.1.11", false],
-    ["0.2.0", "0.1.99", true],
-    ["0.1.11", "0.1.11-nightly.20261101.1", true],
-    ["0.1.11", "garbage", false],
-  ])("%s against app %s is %s", (upstream, app, expected) => {
-    expect(isUpstreamNewer(upstream, app)).toBe(expected);
+    ["0.1.12", "0.1.11", "0.1.11", true],
+    ["0.1.11", "0.1.11", "0.1.11", false],
+    ["0.1.10", "0.1.11", "0.1.11", false],
+    ["0.2.0", "0.1.99", "0.1.99", true],
+    ["0.1.11", "0.1.11-nightly.20261101.1", "0.1.10", true],
+    ["0.1.11", "garbage", "0.1.10", false],
+    // A rev build of the release it is based on already has it; the next release is newer.
+    ["0.1.12", "0.1.12-rev.4", "0.1.12", false],
+    ["0.1.13", "0.1.12-rev.4", "0.1.12", true],
+  ])("%s against app %s based on %s is %s", (upstream, app, base, expected) => {
+    expect(isUpstreamNewer(upstream, app, base)).toBe(expected);
   });
 });
 
@@ -37,12 +40,12 @@ describe("shouldNotifyUpstream", () => {
   const release = { version: "0.1.12", url: "https://example.test" };
 
   it("notifies once per upstream version", () => {
-    expect(shouldNotifyUpstream(release, "0.1.11", null)).toBe(true);
-    expect(shouldNotifyUpstream(release, "0.1.11", "0.1.11")).toBe(true);
-    expect(shouldNotifyUpstream(release, "0.1.11", "0.1.12")).toBe(false);
+    expect(shouldNotifyUpstream(release, "0.1.11", null, "0.1.11")).toBe(true);
+    expect(shouldNotifyUpstream(release, "0.1.11", "0.1.11", "0.1.11")).toBe(true);
+    expect(shouldNotifyUpstream(release, "0.1.11", "0.1.12", "0.1.11")).toBe(false);
   });
 
   it("stays quiet once the app has caught up", () => {
-    expect(shouldNotifyUpstream(release, "0.1.12", null)).toBe(false);
+    expect(shouldNotifyUpstream(release, "0.1.12", null, "0.1.11")).toBe(false);
   });
 });

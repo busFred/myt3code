@@ -21,11 +21,22 @@ export function parseUpstreamRelease(body: unknown): UpstreamRelease | null {
   };
 }
 
-export function isUpstreamNewer(upstreamVersion: string, appVersion: string): boolean {
+/**
+ * The upstream release this fork build is rebased on; bump it with every upstream sync.
+ * Fork builds are `X.Y.Z-rev.N`, which sorts below upstream `X.Y.Z` even once it is merged.
+ */
+const UPSTREAM_BASE_VERSION = "0.1.12";
+
+export function isUpstreamNewer(
+  upstreamVersion: string,
+  appVersion: string,
+  baseVersion: string = UPSTREAM_BASE_VERSION,
+): boolean {
   return (
     parseSemver(upstreamVersion) !== null &&
     parseSemver(appVersion) !== null &&
-    compareSemverVersions(upstreamVersion, appVersion) > 0
+    compareSemverVersions(upstreamVersion, appVersion) > 0 &&
+    compareSemverVersions(upstreamVersion, baseVersion) > 0
   );
 }
 
@@ -34,6 +45,10 @@ export function shouldNotifyUpstream(
   release: UpstreamRelease,
   appVersion: string,
   lastNotifiedVersion: string | null,
+  baseVersion: string = UPSTREAM_BASE_VERSION,
 ): boolean {
-  return isUpstreamNewer(release.version, appVersion) && release.version !== lastNotifiedVersion;
+  return (
+    isUpstreamNewer(release.version, appVersion, baseVersion) &&
+    release.version !== lastNotifiedVersion
+  );
 }
