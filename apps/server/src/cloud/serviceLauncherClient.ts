@@ -1,7 +1,6 @@
 import type { ServerSelfUpdateOutcome } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -10,12 +9,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import packageJson from "../../package.json" with { type: "json" };
-import {
-  pinnedRuntimePaths,
-  pinnedRuntimeVersionsDir,
-  readPosixLauncherTarget,
-  writePosixLauncher,
-} from "./pinnedRuntime.ts";
+import { pinnedRuntimePaths, repointOwnedLaunchers } from "./pinnedRuntime.ts";
 import {
   decodeServiceLauncherContext,
   decodeServiceLauncherParentMessage,
@@ -157,72 +151,42 @@ export const repointLaunchers = Effect.fn("cloud.service_launcher_client.repoint
     const path = yield* Path.Path;
     const environment = yield* HostProcess.Environment;
     const platform = yield* HostProcess.Platform;
-    if (platform !== "linux" && platform !== "darwin") return;
-    const installBinDir =
-      environment["T3CODE_INSTALL_BIN_DIR"] ||
-      (environment["HOME"] ? path.join(environment["HOME"], ".local", "bin") : undefined);
+    // Recorded launchers cover every install; POSIX ones from before recording are found here.
     const candidates = new Set<string>();
-    if (installBinDir !== undefined) candidates.add(path.join(installBinDir, "t3"));
-    for (const directory of (environment["PATH"] ?? "").split(":")) {
-      if (directory.length === 0) continue;
-      const candidate = path.join(directory, "t3");
-      if (
-        yield* fs.exists(candidate).pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("Could not check the t3 command on PATH", {
-              launchedAs: candidate,
-              cause,
-            }).pipe(Effect.as(false)),
-          ),
-        )
-      ) {
-        candidates.add(candidate);
-        break;
+    if (platform !== "win32") {
+      const installBinDir =
+        environment["T3CODE_INSTALL_BIN_DIR"] ||
+        (environment["HOME"] ? path.join(environment["HOME"], ".local", "bin") : undefined);
+      if (installBinDir !== undefined) candidates.add(path.join(installBinDir, "t3"));
+      for (const directory of (environment["PATH"] ?? "").split(":")) {
+        if (directory.length === 0) continue;
+        const candidate = path.join(directory, "t3");
+        if (
+          yield* fs.exists(candidate).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not check the t3 command on PATH", {
+                launchedAs: candidate,
+                cause,
+              }).pipe(Effect.as(false)),
+            ),
+          )
+        ) {
+          candidates.add(candidate);
+          break;
+        }
       }
     }
-    const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
     const target = pinnedRuntimePaths(path, input.baseDir, input.targetVersion, platform);
-    for (const launchedAs of candidates) {
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const linkTarget = yield* fs.readLink(launchedAs).pipe(
-            Effect.asSome,
-            Effect.catchIf(
-              (error) =>
-                error.reason._tag === "NotFound" ||
-                (error.reason.cause as NodeJS.ErrnoException | undefined)?.code === "EINVAL",
-              () => Effect.succeedNone,
-            ),
-          );
-          // A legacy symlink, or the script install.sh and `t3 update` write.
-          const current = Option.isSome(linkTarget)
-            ? path.resolve(path.dirname(launchedAs), linkTarget.value)
-            : yield* readPosixLauncherTarget(launchedAs);
-          if (current === undefined) return;
-          const relative = path.relative(versionsDir, current);
-          if (
-            relative.length === 0 ||
-            relative === ".." ||
-            relative.startsWith(`..${path.sep}`) ||
-            path.isAbsolute(relative)
-          )
-            return;
-          yield* writePosixLauncher({
-            launcher: launchedAs,
-            executable: target.entryPath,
-            exclusive: false,
-          });
-        }),
-      ).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterrupts(cause)
-            ? Effect.interrupt
-            : Effect.logWarning("Could not move the t3 command to the updated version", {
-                launchedAs,
-                cause,
-              }),
-        ),
-      );
+    const { failed } = yield* repointOwnedLaunchers({
+      baseDir: input.baseDir,
+      targetEntryPath: target.entryPath,
+      extra: [...candidates],
+    });
+    for (const { launcher, cause } of failed) {
+      yield* Effect.logWarning("Could not move the t3 command to the updated version", {
+        launchedAs: launcher,
+        cause,
+      });
     }
   },
 );

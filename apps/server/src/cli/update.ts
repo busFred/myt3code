@@ -1,10 +1,5 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
-  readCliShimRuntime,
-  readCliShimTarget,
-  renderCliShim,
-} from "@t3tools/shared/desktopCliShim";
-import {
   CLI_RELEASE_BASE_URL_ENV,
   CLI_RELEASE_BUILD_FILE,
   CLI_RELEASE_CHANNELS,
@@ -42,9 +37,11 @@ import {
   type PinnedRuntimeProgress,
   PinnedRuntimePreflightBlockedError,
   pinnedRuntimeVersionsDir,
+  ownedLauncherTarget,
   prunePinnedRuntimes,
+  readRecordedLaunchers,
   recordPinnedRuntimeLauncher,
-  readPosixLauncherTarget,
+  repointOwnedLaunchers,
   resolveLauncherPath,
   windowsLauncherScript,
   windowsShimTarget,
@@ -66,6 +63,7 @@ import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import {
   type DesktopAppPlan,
   installDesktopApp,
+  readDesktopAppHandoffFailures,
   isWindowsAppRunning,
   planDesktopAppUpdate,
   readDesktopAppBuild,
@@ -249,46 +247,6 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   return Option.some(launcher);
 });
 
-const readRecordedLaunchers = Effect.fn("cli.update.read_recorded_launchers")(function* (
-  baseDir: string,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const records = yield* fs
-    .readFileString(path.join(baseDir, "runtime", "launchers"))
-    .pipe(
-      Effect.catch((error) =>
-        error.reason._tag === "NotFound"
-          ? Effect.succeed("")
-          : Console.warn(`Could not read recorded t3 launchers: ${error}`).pipe(Effect.as("")),
-      ),
-    );
-  return [...new Set(records.split(/\r?\n/).filter((entry) => path.isAbsolute(entry)))];
-});
-
-/** Where a recorded launcher points, when that is inside this home's `runtime/versions`. */
-const ownedLauncherTarget = Effect.fn("cli.update.owned_launcher_target")(function* (
-  launcher: string,
-  versionsDir: string,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const platform = yield* HostProcess.Platform;
-  let target: string | undefined;
-  if (platform === "win32") {
-    const contents = yield* fs.readFileString(launcher).pipe(Effect.option);
-    target = Option.isSome(contents) ? windowsShimTarget(contents.value) : undefined;
-  } else {
-    const link = yield* fs.readLink(launcher).pipe(Effect.option);
-    target = Option.isSome(link)
-      ? path.resolve(path.dirname(launcher), link.value)
-      : yield* readPosixLauncherTarget(launcher);
-  }
-  return target !== undefined && launcherOwnsVersionsDir(path, versionsDir, target)
-    ? target
-    : undefined;
-});
-
 /** Whether a recorded launcher of this home points at a runtime version older than `version`. */
 const hasLauncherOnOlderVersion = Effect.fn("cli.update.has_launcher_on_older_version")(
   function* (input: { readonly baseDir: string; readonly version: string }) {
@@ -312,71 +270,16 @@ const hasLauncherOnOlderVersion = Effect.fn("cli.update.has_launcher_on_older_ve
   },
 );
 
+/** Moves every launcher this home owns to the target, warning about any it could not rewrite. */
 export const repointRecordedLaunchers = Effect.fn("cli.update.repoint_recorded_launchers")(
   function* (input: { readonly baseDir: string; readonly targetEntryPath: string }) {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const platform = yield* HostProcess.Platform;
-    const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
-    let repointed = false;
-    for (const launcher of yield* readRecordedLaunchers(input.baseDir)) {
-      const result = yield* Effect.gen(function* () {
-        if ((yield* ownedLauncherTarget(launcher, versionsDir)) === undefined) return false;
-        if (platform === "win32") {
-          yield* fs.writeFileString(launcher, windowsLauncherScript(input.targetEntryPath));
-        } else {
-          yield* writePosixLauncher({
-            launcher,
-            executable: input.targetEntryPath,
-            exclusive: false,
-          });
-        }
-        return true;
-      }).pipe(
-        Effect.catch((error) =>
-          Console.warn(`Could not repoint the t3 launcher at ${launcher}: ${error}`).pipe(
-            Effect.as(false),
-          ),
-        ),
-      );
-      repointed ||= result;
+    const { repointed, failed } = yield* repointOwnedLaunchers(input);
+    for (const { launcher, cause } of failed) {
+      yield* Console.warn(`Could not repoint the t3 launcher at ${launcher}: ${cause}`);
     }
     return repointed;
   },
 );
-
-/**
- * The app's `t3` launcher runs the runtime this home's launchers run, so it moves with them. One
- * without that branch (an app-only machine, or an older app) is the app's to rewrite.
- */
-const repointDesktopLauncher = Effect.fn("cli.update.repoint_desktop_launcher")(function* (input: {
-  readonly baseDir: string;
-  readonly targetEntryPath: string;
-}) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const platform = yield* HostProcess.Platform;
-  const shimPath = path.join(input.baseDir, "bin", platform === "win32" ? "t3.cmd" : "t3");
-  const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
-  if (Option.isNone(contents) || readCliShimRuntime(contents.value) === undefined) return;
-  const target = readCliShimTarget(contents.value);
-  if (target === undefined) return;
-  yield* fs
-    .writeFileString(
-      shimPath,
-      renderCliShim({
-        target,
-        shimPath,
-        t3Home: input.baseDir,
-        runtime: input.targetEntryPath,
-      }),
-    )
-    .pipe(
-      Effect.catch((error) =>
-        Console.warn(`Could not repoint the desktop app's t3 launcher at ${shimPath}: ${error}`),
-      ),
-    );
-});
 
 /** Windows executables see their own path, so find the installer shim by matching t3.cmd targets on PATH. */
 export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(function* (
@@ -667,6 +570,13 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     releaseBaseUrl,
     serviceProgram: serviceProgram ?? undefined,
   });
+  if (appPlan !== undefined) {
+    for (const code of yield* readDesktopAppHandoffFailures(input.baseDir)) {
+      yield* Console.log(
+        `The desktop app installer the last update started in the background failed (exit code ${code}).`,
+      );
+    }
+  }
   const appHeldBackNote =
     "The desktop app was left as is so it stays on the runtime's build. T3 Code → Help → Reinstall This Version moves both.";
   let appStale = appPlan?.decision.action === "install" && !rebuildHeldBack;
@@ -872,16 +782,13 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     targetEntryPath: runtime.entryPath,
   });
 
-  const recordedRepointed =
-    !appOnly && Option.isNone(repointed)
-      ? yield* repointRecordedLaunchers({
-          baseDir: input.baseDir,
-          targetEntryPath: runtime.entryPath,
-        })
-      : false;
-  if (Option.isSome(repointed) || recordedRepointed) {
-    yield* repointDesktopLauncher({ baseDir: input.baseDir, targetEntryPath: runtime.entryPath });
-  }
+  // Every other launcher moves too, so no two t3 commands run different builds.
+  const recordedRepointed = appOnly
+    ? false
+    : yield* repointRecordedLaunchers({
+        baseDir: input.baseDir,
+        targetEntryPath: runtime.entryPath,
+      });
 
   // The app's installer closes it; reopen it only when it was open and the service switches now.
   const appStep =

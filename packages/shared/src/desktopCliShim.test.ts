@@ -57,6 +57,11 @@ describe("desktopCliShim", () => {
     // `t3 update` takes a t3.cmd's first quoted line as what it runs; that must stay the app.
     if (target.kind === "windows") {
       expect(/^"([^"]+)"/m.exec(shim)?.[1]).toBe(target.executable);
+      // A rewrite while cmd waits on a program must not leave it reading on at an old offset.
+      const runs = shim.split("\r\n").filter((line) => line.startsWith('"'));
+      expect(runs.length).toBe(runtime === undefined ? 1 : 2);
+      for (const line of runs) expect(line).toMatch(/ %\* & goto finish$/);
+      if (runtime !== undefined) expect(shim).toContain('if /i "%T3CODE_HOME%"=="/home/me/.t3" ');
     }
   });
 

@@ -229,6 +229,8 @@ export class DesktopUpdates extends Context.Service<
       options?: { readonly allowDowngrade?: boolean },
     ) => Effect.Effect<DesktopUpdateCheckResult>;
     readonly download: Effect.Effect<DesktopUpdateActionResult>;
+    /** Downloads only while the offer is still `version`. */
+    readonly downloadVersion: (version: string) => Effect.Effect<DesktopUpdateActionResult>;
     readonly install: Effect.Effect<DesktopUpdateActionResult>;
     readonly installPrepared: (
       expectedVersion: string,
@@ -652,6 +654,7 @@ export const make = Effect.gen(function* () {
   // Install refreshes before downloading, and a second check could pick a stale, older release.
   const downloadAvailableUpdate = Effect.fn("desktop.updates.downloadAvailableUpdate")(function* (
     refresh: boolean,
+    expectedVersion?: string,
   ) {
     const admission = yield* Effect.scoped(
       admitAfterCheck(
@@ -696,7 +699,11 @@ export const make = Effect.gen(function* () {
         );
       }
       state = yield* Ref.get(updateStateRef);
-      if (state.status !== "available") {
+      // The refresh may find a newer release than the one the caller asked for.
+      if (
+        state.status !== "available" ||
+        (expectedVersion !== undefined && state.availableVersion !== expectedVersion)
+      ) {
         return { accepted: true, completed: false };
       }
       yield* setState(reduceDesktopUpdateStateOnDownloadStart(state));
@@ -1549,6 +1556,14 @@ export const make = Effect.gen(function* () {
         state: yield* Ref.get(updateStateRef),
       };
     }).pipe(Effect.withSpan("desktop.updates.download")),
+    downloadVersion: Effect.fn("desktop.updates.downloadVersion")(function* (version: string) {
+      const result = yield* downloadAvailableUpdate(true, version);
+      return {
+        accepted: result.accepted,
+        completed: result.completed,
+        state: yield* Ref.get(updateStateRef),
+      };
+    }),
     install: installWithExpectedVersion().pipe(
       Effect.map(({ accepted, completed, state }) => ({ accepted, completed, state })),
     ),

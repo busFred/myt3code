@@ -5,6 +5,7 @@ import {
   parseReleaseBuild,
 } from "@t3tools/shared/cliRelease";
 import { DESKTOP_APP_INVOKED_ENV, readCliShimTarget } from "@t3tools/shared/desktopCliShim";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -407,6 +408,36 @@ export const isWindowsAppRunning = Effect.fn("cli.desktop_app.is_running")(funct
 });
 
 const HANDOFF_PREFIX = "handoff-";
+const HANDOFF_RESULT = "result";
+const HANDOFF_SCRIPT = "install.cmd";
+// Long enough for an installer another update handed off to have started and finished.
+const HANDOFF_GRACE = Duration.hours(1);
+
+/**
+ * Exit codes of installers earlier updates handed off that failed. Each finished handoff is read
+ * once and its folder removed.
+ */
+export const readDesktopAppHandoffFailures = Effect.fn("cli.desktop_app.read_handoff_failures")(
+  function* (baseDir: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const parent = path.join(baseDir, "runtime", "desktop");
+    const entries = yield* fs.readDirectory(parent).pipe(Effect.orElseSucceed(() => []));
+    const failures: Array<number> = [];
+    for (const entry of entries.filter((name) => name.startsWith(HANDOFF_PREFIX))) {
+      const result = yield* fs
+        .readFileString(path.join(parent, entry, HANDOFF_RESULT))
+        .pipe(Effect.option);
+      if (Option.isNone(result)) continue;
+      const code = Number.parseInt(result.value.trim(), 10);
+      if (code !== 0) failures.push(Number.isNaN(code) ? -1 : code);
+      yield* fs
+        .remove(path.join(parent, entry), { recursive: true, force: true })
+        .pipe(Effect.ignore);
+    }
+    return failures;
+  },
+);
 
 const failed = (reason: string) => (cause: unknown) => new DesktopAppUpdateError({ reason, cause });
 
@@ -439,18 +470,18 @@ export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* 
   }
   // Its own folder per run, so concurrent updates never run each other's installer.
   const parent = path.join(input.baseDir, "runtime", "desktop");
-  // A handed-off installer outlives its run; Windows refuses to delete one still running.
-  yield* fs.readDirectory(parent).pipe(
-    Effect.flatMap((entries) =>
-      Effect.forEach(
-        entries.filter((entry) => entry.startsWith(HANDOFF_PREFIX)),
-        (entry) =>
-          fs.remove(path.join(parent, entry), { recursive: true, force: true }).pipe(Effect.ignore),
-        { discard: true },
-      ),
-    ),
-    Effect.ignore,
-  );
+  // A handed-off installer outlives its run, and another update's may not have started yet.
+  const settledBefore = (yield* Clock.currentTimeMillis) - Duration.toMillis(HANDOFF_GRACE);
+  for (const entry of yield* fs.readDirectory(parent).pipe(Effect.orElseSucceed(() => []))) {
+    if (!entry.startsWith(HANDOFF_PREFIX)) continue;
+    const folder = path.join(parent, entry);
+    const createdAt = yield* fs.stat(folder).pipe(
+      Effect.map((info) => Option.getOrUndefined(info.mtime)?.getTime()),
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (createdAt === undefined || createdAt >= settledBefore) continue;
+    yield* fs.remove(folder, { recursive: true, force: true }).pipe(Effect.ignore);
+  }
   const directory = yield* fs.makeDirectory(parent, { recursive: true }).pipe(
     Effect.andThen(
       fs.makeTempDirectory({
@@ -494,10 +525,27 @@ export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* 
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const args = ["/S", ...(input.reopen ? ["--force-run"] : [])];
   if (install.kind === "nsis" && input.handoff) {
+    // Run from its own folder, so no path needs cmd quoting; the next `t3 update` reads the result.
+    yield* fs
+      .writeFileString(
+        path.join(directory, HANDOFF_SCRIPT),
+        [
+          "@echo off",
+          `"%~dp0${input.fileName}" ${args.join(" ")}`,
+          `>"%~dp0${HANDOFF_RESULT}" echo %ERRORLEVEL%`,
+          "",
+        ].join("\r\n"),
+      )
+      .pipe(
+        Effect.mapError(failed(`Could not save ${directory}.`)),
+        Effect.tapError(() => removeDirectory),
+      );
+    const comspec = (yield* HostProcess.Environment).ComSpec?.trim() || "cmd.exe";
     yield* Effect.scoped(
       spawner
         .spawn(
-          ChildProcess.make(file, args, {
+          ChildProcess.make(comspec, ["/d", "/c", HANDOFF_SCRIPT], {
+            cwd: directory,
             detached: true,
             windowsHide: true,
             stdin: "ignore",

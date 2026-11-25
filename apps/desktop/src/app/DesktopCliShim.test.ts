@@ -195,7 +195,7 @@ describe("renderCliShim", () => {
     ]);
   });
 
-  it("runs the installed t3, and the app's own once that is gone", () => {
+  it("runs the installed t3, the app's own for another home, and once the runtime is gone", () => {
     const root = tempRoot();
     writeExecutable(NodePath.join(root, "app"), REPORTER);
     const runtime = NodePath.join(root, "home", "runtime", "versions", "1.2.3", "t3");
@@ -206,6 +206,9 @@ describe("renderCliShim", () => {
       runtime,
     );
     expect(run(shim, ["update", "--yes"]).stdout).toBe("runtime node= update --yes\n");
+    const otherHome = run(shim, ["update"], { T3CODE_HOME: NodePath.join(root, "other") });
+    expect(otherHome.status).toBe(3);
+    expect(otherHome.stdout).toContain(`home=${NodePath.join(root, "other")}`);
     NodeFS.rmSync(runtime);
     const fallback = run(shim, ["update"]);
     expect(fallback.status).toBe(3);
@@ -234,7 +237,7 @@ describe("renderCliShim", () => {
 });
 
 effectIt.layer(NodeServices.layer)("installedRuntime", (it) => {
-  it.effect("is the newest runtime a recorded launcher runs", () =>
+  it.effect("is the runtime the most recently written recorded launcher runs", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -254,8 +257,10 @@ effectIt.layer(NodeServices.layer)("installedRuntime", (it) => {
       for (const launcher of Object.values(launchers)) {
         yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       }
+      // After a downgrade to 1.2.3, a launcher that failed to move still runs 1.10.0.
+      yield* fs.writeFileString(launchers.newer, script(runtime("1.10.0")));
+      yield* fs.utimes(launchers.newer, 0, 0);
       yield* fs.writeFileString(launchers.older, script(runtime("1.2.3")));
-      yield* fs.symlink(runtime("1.10.0"), launchers.newer);
       yield* fs.writeFileString(launchers.missing, script(runtime("9.0.0")));
       yield* fs.writeFileString(launchers.foreign, script("/usr/local/bin/t3"));
       const find = installedRuntime.pipe(
@@ -270,7 +275,7 @@ effectIt.layer(NodeServices.layer)("installedRuntime", (it) => {
         path.join(baseDir, "runtime", "launchers"),
         `${Object.values(launchers).join("\n")}\n`,
       );
-      assert.equal(yield* find, runtime("1.10.0"));
+      assert.equal(yield* find, runtime("1.2.3"));
     }),
   );
 });

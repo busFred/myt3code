@@ -14,7 +14,8 @@ import {
   type ServiceLauncherChildMessage,
   type ServiceLauncherParentMessage,
 } from "./serviceProtocol.ts";
-import { posixLauncherScript } from "./pinnedRuntime.ts";
+import { readCliShimRuntime, renderCliShim } from "@t3tools/shared/desktopCliShim";
+import { posixLauncherScript, windowsLauncherScript } from "./pinnedRuntime.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
 
 class FakeLauncherProcess {
@@ -241,6 +242,59 @@ it.layer(NodeServices.layer)("self-update launchers", (it) => {
         assert.equal(yield* fs.readFileString(installed), posixLauncherScript(exe("2.0.0")));
         assert.equal(yield* fs.readFileString(onPath), posixLauncherScript(exe("2.0.0")));
       }).pipe(Effect.provideService(HostProcess.Platform, "linux")),
+  );
+
+  // A committed trial must leave no t3 command on the old build, on Windows too.
+  it.effect.each(["linux", "win32"] as const)(
+    "on %s, moves recorded launchers and the app launcher's runtime",
+    (platform) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+        const baseDir = path.join(root, ".t3");
+        const name = platform === "win32" ? "t3.exe" : "t3";
+        const exe = (version: string) => path.join(baseDir, "runtime/versions", version, name);
+        for (const file of [exe("1.0.0"), exe("2.0.0")]) {
+          yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+          yield* fs.writeFileString(file, "");
+        }
+        const recorded = path.join(root, "elsewhere", platform === "win32" ? "t3.cmd" : "t3");
+        yield* fs.makeDirectory(path.dirname(recorded), { recursive: true });
+        yield* fs.writeFileString(
+          recorded,
+          platform === "win32"
+            ? `@echo off\r\n"${exe("1.0.0")}" %*`
+            : posixLauncherScript(exe("1.0.0")),
+        );
+        yield* fs.writeFileString(path.join(baseDir, "runtime/launchers"), `${recorded}\n`);
+        const appLauncher = path.join(baseDir, "bin", platform === "win32" ? "t3.cmd" : "t3");
+        yield* fs.makeDirectory(path.dirname(appLauncher), { recursive: true });
+        yield* fs.writeFileString(
+          appLauncher,
+          renderCliShim({
+            target:
+              platform === "win32"
+                ? { kind: "windows", executable: "C:\\T3\\T3 Code.exe", entry: "C:\\T3\\bin.mjs" }
+                : { kind: "direct", executable: "/opt/T3/t3code", entry: "/opt/T3/bin.mjs" },
+            shimPath: appLauncher,
+            t3Home: baseDir,
+            runtime: exe("1.0.0"),
+          }),
+        );
+
+        yield* ServiceLauncherClient.repointLaunchers({ baseDir, targetVersion: "2.0.0" }).pipe(
+          Effect.provideService(HostProcess.Environment, { HOME: root, PATH: "" }),
+        );
+
+        assert.equal(
+          yield* fs.readFileString(recorded),
+          platform === "win32"
+            ? windowsLauncherScript(exe("2.0.0"))
+            : posixLauncherScript(exe("2.0.0")),
+        );
+        assert.equal(readCliShimRuntime(yield* fs.readFileString(appLauncher)), exe("2.0.0"));
+      }).pipe(Effect.provideService(HostProcess.Platform, platform)),
   );
 
   it.effect("still moves the PATH launcher when the install bin one cannot be rewritten", () =>

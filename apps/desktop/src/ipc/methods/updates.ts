@@ -77,7 +77,7 @@ export const reinstallCurrentVersion = DesktopIpc.makeIpcMethod({
   payload: Schema.Void,
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.updates.reinstall")(function* () {
-    yield* reinstallWithConfirmation;
+    yield* reinstallWithConfirmation();
   }),
 });
 

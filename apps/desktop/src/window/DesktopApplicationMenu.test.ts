@@ -92,6 +92,7 @@ const layerDesktopUpdates = ({ checkResult, reinstall }: MenuServices) =>
     setChannel: () => Effect.die("unexpected setChannel"),
     check: () => (checkResult ? Effect.succeed(checkResult) : Effect.die("unexpected check")),
     download: Effect.die("unexpected download"),
+    downloadVersion: () => Effect.die("unexpected downloadVersion"),
     install: Effect.die("unexpected install"),
     installPrepared: () => Effect.die("unexpected installPrepared"),
     reinstallCurrent: reinstall ?? Effect.die("unexpected reinstallCurrent"),

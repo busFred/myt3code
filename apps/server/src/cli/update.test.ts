@@ -1276,12 +1276,20 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
       }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
 
       assert.equal(spawned.length, 1);
-      const [installer] = spawned;
-      assert.match(installer!.command, /\/runtime\/desktop\/handoff-[^/]+\/T3-Code-[^/]+\.exe$/);
-      assert.deepEqual(installer!.args, ["/S"]);
-      assert.isTrue(installer!.options.detached);
-      // The installer runs from its file after this t3 exits.
-      assert.equal(yield* fs.readFileString(installer!.command), "setup");
+      const [handoff] = spawned;
+      assert.equal(handoff!.command, "cmd.exe");
+      assert.deepEqual(handoff!.args, ["/d", "/c", "install.cmd"]);
+      assert.isTrue(handoff!.options.detached);
+      const folder = handoff!.options.cwd!;
+      assert.match(folder, /\/runtime\/desktop\/handoff-[^/]+$/);
+      // The installer runs from its file after this t3 exits, and leaves its exit code behind.
+      assert.equal(yield* fs.readFileString(`${folder}/${installerName}`), "setup");
+      assert.deepEqual((yield* fs.readFileString(`${folder}/install.cmd`)).split("\r\n"), [
+        "@echo off",
+        `"%~dp0${installerName}" /S`,
+        '>"%~dp0result" echo %ERRORLEVEL%',
+        "",
+      ]);
       // No re-read of the app, which the installer has not replaced yet.
       assert.notInclude(output, "Desktop app:");
       assert.isTrue(output.endsWith("  The desktop app installer finishes in the background."));
