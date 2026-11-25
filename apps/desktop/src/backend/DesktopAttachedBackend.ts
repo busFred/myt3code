@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FiberHandle from "effect/FiberHandle";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient } from "effect/http";
@@ -12,12 +13,17 @@ import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopHomeOwner from "./DesktopHomeOwner.ts";
 
+const ServiceDescriptor = Schema.fromJsonString(
+  Schema.Struct({ serverVersion: Schema.String, serverBuild: Schema.optional(Schema.String) }),
+);
+const decodeServiceDescriptor = Schema.decodeUnknownOption(ServiceDescriptor);
+
 export const make = Effect.fn("DesktopAttachedBackend.make")(function* (input: {
   readonly onReady: (origin: URL, reconnecting: boolean) => Effect.Effect<void>;
   readonly onShutdown: Effect.Effect<void>;
 }) {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const { localBackendAttachment } = yield* DesktopState.DesktopState;
+  const { localBackendAttachment, attachedService } = yield* DesktopState.DesktopState;
   const httpClient = yield* HttpClient.HttpClient;
   const monitor = yield* FiberHandle.make<void>();
   const ready = yield* SubscriptionRef.make(false);
@@ -31,13 +37,16 @@ export const make = Effect.fn("DesktopAttachedBackend.make")(function* (input: {
     if (Option.isNone(attachment)) return;
     const owner = yield* attachment.value.readOwner;
     const origin = Option.map(owner, (current) => new URL(DesktopHomeOwner.ownerOrigin(current)));
-    const healthy =
-      Option.isSome(origin) &&
-      (yield* httpClient.get(new URL("/.well-known/t3/environment", origin.value)).pipe(
-        Effect.flatMap((response) => response.text.pipe(Effect.as(response.status === 200))),
-        Effect.timeout(Duration.seconds(2)),
-        Effect.orElseSucceed(() => false),
-      ));
+    const descriptor = Option.isNone(origin)
+      ? undefined
+      : yield* httpClient.get(new URL("/.well-known/t3/environment", origin.value)).pipe(
+          Effect.flatMap((response) =>
+            response.text.pipe(Effect.map((text) => (response.status === 200 ? text : undefined))),
+          ),
+          Effect.timeout(Duration.seconds(2)),
+          Effect.orElseSucceed(() => undefined),
+        );
+    const healthy = descriptor !== undefined;
     if (!healthy || Option.isNone(owner) || Option.isNone(origin)) {
       if (yield* SubscriptionRef.get(ready)) {
         yield* SubscriptionRef.set(ready, false);
@@ -73,6 +82,13 @@ export const make = Effect.fn("DesktopAttachedBackend.make")(function* (input: {
       }),
     );
     lastOwner = identity;
+    yield* SubscriptionRef.set(
+      attachedService,
+      Option.map(decodeServiceDescriptor(descriptor), (service) => ({
+        serverVersion: service.serverVersion,
+        serverBuild: service.serverBuild,
+      })),
+    );
     yield* SubscriptionRef.set(ready, true);
     yield* input.onReady(origin.value, wasReady);
     wasReady = true;

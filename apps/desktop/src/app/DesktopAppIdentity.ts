@@ -28,6 +28,8 @@ export class DesktopAppIdentity extends Context.Service<
       DesktopUserData.DesktopUserDataInitializationError
     >;
     readonly configure: Effect.Effect<void>;
+    /** The commit this packaged build was made from; none in development. */
+    readonly commitHash: Effect.Effect<Option.Option<string>>;
   }
 >()("@t3tools/desktop/app/DesktopAppIdentity") {}
 
@@ -118,6 +120,7 @@ export const make = Effect.gen(function* () {
   return DesktopAppIdentity.of({
     resolveUserDataPath: userDataPath,
     configure,
+    commitHash: resolveAboutCommitHash,
   });
 });
 
