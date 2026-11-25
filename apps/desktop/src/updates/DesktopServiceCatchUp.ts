@@ -13,12 +13,13 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient, HttpClientResponse } from "effect/http";
+import type { DesktopUpdateState } from "@t3tools/contracts";
 
 import * as DesktopAppIdentity from "../app/DesktopAppIdentity.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
-import { appCatchUpDecision, sameBuild } from "../backend/DesktopServiceDecision.ts";
+import { appCatchUpDecision, catchUpTargetMatches } from "../backend/DesktopServiceDecision.ts";
 import type * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 import { reinstallWithConfirmation } from "./reinstallWithConfirmation.ts";
@@ -27,7 +28,8 @@ const { logInfo } = makeComponentLogger("desktop-service-catch-up");
 
 /**
  * Keeps the app on the background service's build when the service moved ahead, as `t3 update`
- * run from a terminal does. Once per service build each launch, and quiet when offline.
+ * run from a terminal does. A service build is done once an attempt ran or there is nothing to
+ * do, so each one is tried at most once a launch; offline, nothing happens.
  */
 export const listen: Effect.Effect<
   void,
@@ -57,52 +59,97 @@ export const listen: Effect.Effect<
       Effect.orElseSucceed(() => undefined),
     );
 
+  const scope = yield* Effect.scope;
+  const busy = (current: DesktopUpdateState) =>
+    current.status === "checking" || current.status === "downloading";
+  const untilIdle = Effect.scoped(
+    Effect.suspend(() => updates.subscribe).pipe(
+      Effect.flatMap(({ changes }) =>
+        changes.pipe(
+          Stream.filter((current) => !busy(current)),
+          Stream.runHead,
+        ),
+      ),
+    ),
+  );
+
   const catchUp = Effect.fn("desktop.serviceCatchUp.run")(function* (
     service: DesktopState.AttachedServiceBuild,
   ) {
     const key = `${service.serverVersion}:${service.serverBuild ?? ""}`;
-    const first = yield* Ref.modify(seen, (keys) =>
-      keys.has(key) ? [false, keys] : [true, new Set([...keys, key])],
-    );
-    if (!first || (yield* Ref.get(state.quitting))) return;
+    if ((yield* Ref.get(seen)).has(key) || (yield* Ref.get(state.quitting))) return;
+    const markSeen = Ref.update(seen, (keys) => new Set([...keys, key]));
     const decision = appCatchUpDecision({
       appVersion: environment.appVersion,
       appBuild: Option.getOrUndefined(yield* identity.commitHash),
       serviceVersion: service.serverVersion,
       serviceBuild: service.serverBuild,
     });
-    if (decision === "none" || (yield* updates.isActionActive)) return;
+    if (decision === "none") return yield* markSeen;
     const current = yield* updates.getState;
-    // The app's own update or Reinstall moves the service first; that run finishes the job.
-    if (current.status === "downloading" || current.status === "downloaded") return;
+    // Not seen yet: the caller tries once more when the updater is idle.
+    if ((yield* updates.isActionActive) || busy(current)) return "busy" as const;
+    yield* markSeen;
+    // A downloaded update installs on restart, and that install moves the service with it.
+    if (current.status === "downloaded") return;
     if (decision === "update") {
       const offered =
         current.status === "available" && current.availableVersion === service.serverVersion
           ? current
           : (yield* updates.check("service-newer")).state;
-      if (offered.status !== "available" || offered.availableVersion !== service.serverVersion)
+      if (
+        !catchUpTargetMatches({
+          decision,
+          serviceVersion: service.serverVersion,
+          serviceBuild: service.serverBuild,
+          offeredVersion: offered.availableVersion,
+        })
+      )
         return;
       yield* logInfo("downloading the background service's version", {
         version: service.serverVersion,
       });
-      yield* updates.download;
+      yield* updates.downloadVersion(service.serverVersion);
       return;
     }
-    if (current.status === "available" || service.serverBuild === undefined) return;
-    const published = yield* publishedBuild(service.serverVersion);
-    if (published === undefined || !sameBuild(published, service.serverBuild)) return;
+    // Another offer is on screen; Reinstall would refuse while it is.
+    if (current.status === "available") return;
+    const stillPublished = publishedBuild(service.serverVersion).pipe(
+      Effect.map((published) =>
+        catchUpTargetMatches({
+          decision,
+          serviceVersion: service.serverVersion,
+          serviceBuild: service.serverBuild,
+          offeredVersion: environment.appVersion,
+          publishedBuild: published,
+        }),
+      ),
+    );
+    if (!(yield* stillPublished)) return;
     yield* logInfo("offering to reinstall the background service's build", {
       version: service.serverVersion,
-      build: published,
     });
-    yield* reinstallWithConfirmation;
+    // Checked again after the user confirms, in case the release was republished meanwhile.
+    yield* reinstallWithConfirmation({ stillWanted: stillPublished });
   });
 
   yield* SubscriptionRef.changes(state.attachedService).pipe(
     Stream.runForEach((service) =>
       Option.isNone(service)
         ? Effect.void
-        : catchUp(service.value).pipe(Effect.ignoreCause({ log: true })),
+        : catchUp(service.value).pipe(
+            // After that, the next service publish tries again.
+            Effect.flatMap((outcome) =>
+              outcome === "busy"
+                ? untilIdle.pipe(
+                    Effect.andThen(catchUp(service.value)),
+                    Effect.ignoreCause({ log: true }),
+                    Effect.forkIn(scope),
+                  )
+                : Effect.void,
+            ),
+            Effect.ignoreCause({ log: true }),
+          ),
     ),
     Effect.forkScoped,
   );

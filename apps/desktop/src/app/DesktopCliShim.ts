@@ -10,7 +10,7 @@ import {
   standaloneLauncherTarget,
   type CliShimTarget,
 } from "@t3tools/shared/desktopCliShim";
-import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
+import { parseSemver } from "@t3tools/shared/semver";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
@@ -26,7 +26,11 @@ export const launcherPath = (environment: DesktopEnvironment.DesktopEnvironment[
     environment.platform === "win32" ? "t3.cmd" : "t3",
   );
 
-/** The newest standalone t3 this home's recorded launchers run, which this launcher then runs too. */
+/**
+ * The standalone t3 this home's recorded launchers run, which this launcher then runs too. Every
+ * switch rewrites all of them, so the most recently written one wins over a higher version left
+ * on disk after a downgrade.
+ */
 export const installedRuntime = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fs = yield* FileSystem.FileSystem;
@@ -35,14 +39,15 @@ export const installedRuntime = Effect.gen(function* () {
   const records = yield* fs
     .readFileString(path.join(environment.baseDir, "runtime", "launchers"))
     .pipe(Effect.orElseSucceed(() => ""));
-  let newest: { readonly version: string; readonly executable: string } | undefined;
+  let latest: { readonly writtenAt: number; readonly executable: string } | undefined;
   for (const launcher of new Set(records.split(/\r?\n/).filter((line) => path.isAbsolute(line)))) {
     const link = yield* fs.readLink(launcher).pipe(Effect.option);
     // Stat first so a runtime binary recorded by mistake is never read whole.
-    const small = yield* fs.stat(launcher).pipe(
-      Effect.map((info) => info.type === "File" && info.size <= 4096n),
-      Effect.orElseSucceed(() => false),
-    );
+    const info = yield* fs.stat(launcher).pipe(Effect.option);
+    const small = Option.isSome(info) && info.value.type === "File" && info.value.size <= 4096n;
+    const writtenAt = Option.isSome(info)
+      ? (Option.getOrUndefined(info.value.mtime)?.getTime() ?? 0)
+      : 0;
     const executable = Option.isSome(link)
       ? path.resolve(path.dirname(launcher), link.value)
       : small
@@ -62,11 +67,9 @@ export const installedRuntime = Effect.gen(function* () {
     ) {
       continue;
     }
-    if (newest === undefined || compareSemverVersions(version, newest.version) > 0) {
-      newest = { version, executable };
-    }
+    if (latest === undefined || writtenAt > latest.writtenAt) latest = { writtenAt, executable };
   }
-  return newest?.executable;
+  return latest?.executable;
 });
 
 export const install = Effect.gen(function* () {

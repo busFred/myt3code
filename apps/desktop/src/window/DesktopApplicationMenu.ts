@@ -214,7 +214,7 @@ export const make = Effect.gen(function* () {
       runMenuEffect("check-for-updates", handleCheckForUpdatesMenuClick);
     };
     const reinstallClick = () => {
-      runMenuEffect("reinstall-current-version", reinstallWithConfirmation);
+      runMenuEffect("reinstall-current-version", reinstallWithConfirmation());
     };
     const settingsClick = () => {
       runMenuEffect("open-settings", dispatchMenuAction("open-settings"));

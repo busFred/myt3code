@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   appCatchUpDecision,
+  catchUpTargetMatches,
   closeChoiceBehavior,
   closeDecision,
   closeDialogChoices,
@@ -153,6 +154,42 @@ describe("app catching up to the background service", () => {
       ...overrides,
     };
     expect(appCatchUpDecision(input)).toBe(expected);
+  });
+});
+
+describe("the app's catch-up target", () => {
+  it.each([
+    { label: "the offered update is the service's", offeredVersion: "0.3.0", expected: true },
+    { label: "the feed moved past the service", offeredVersion: "0.3.1", expected: false },
+    { label: "nothing offered", offeredVersion: null, expected: false },
+    {
+      label: "reinstall of the service's published build",
+      decision: "reinstall-if-published",
+      publishedBuild: "d2d1243a5da8",
+      expected: true,
+    },
+    {
+      label: "reinstall after the release was republished",
+      decision: "reinstall-if-published",
+      publishedBuild: "0123456789ab",
+      expected: false,
+    },
+    {
+      label: "reinstall with no BUILD file",
+      decision: "reinstall-if-published",
+      publishedBuild: undefined,
+      expected: false,
+    },
+  ] as const)("$label -> $expected", ({ label: _label, expected, ...overrides }) => {
+    expect(
+      catchUpTargetMatches({
+        decision: "update",
+        serviceVersion: "0.3.0",
+        serviceBuild: "d2d1243a5da8",
+        offeredVersion: "0.3.0",
+        ...overrides,
+      }),
+    ).toBe(expected);
   });
 });
 

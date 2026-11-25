@@ -75,7 +75,7 @@ export const serviceUpdateDecision = (input: {
 };
 
 /** Builds are commit hashes, which releases and the app may record at different lengths. */
-export const sameBuild = (left: string, right: string) => {
+const sameBuild = (left: string, right: string) => {
   const [a, b] = [left.trim().toLowerCase(), right.trim().toLowerCase()];
   return a.length > 0 && b.length > 0 && (a.startsWith(b) || b.startsWith(a));
 };
@@ -104,6 +104,24 @@ export const appCatchUpDecision = (input: {
     return "none";
   return "reinstall-if-published";
 };
+
+/**
+ * Whether what the updater would install is still the service's release. Anything else ends the
+ * catch-up for that service build, so a moved feed or a republished release is never followed.
+ */
+export const catchUpTargetMatches = (input: {
+  readonly decision: "update" | "reinstall-if-published";
+  readonly serviceVersion: string;
+  readonly serviceBuild: string | undefined;
+  readonly offeredVersion: string | null | undefined;
+  /** The release's BUILD file, which only a same-version reinstall reads. */
+  readonly publishedBuild?: string | undefined;
+}) =>
+  input.offeredVersion === input.serviceVersion &&
+  (input.decision === "update" ||
+    (input.serviceBuild !== undefined &&
+      input.publishedBuild !== undefined &&
+      sameBuild(input.publishedBuild, input.serviceBuild)));
 
 export const serviceUpdateResponse = (
   trigger: ServiceUpdateTrigger,
