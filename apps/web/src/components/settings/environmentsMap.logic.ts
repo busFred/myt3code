@@ -46,6 +46,8 @@ export interface FleetEnvironmentInput {
   readonly outgoing: FleetOutgoingLinks;
   /** Linked environments is supported and switched on there. */
   readonly offersLinks: boolean;
+  /** Linked environments is supported but off there, and this client may turn it on. */
+  readonly canTurnOnLinks?: boolean;
   /** This client's session there may create links from it and pairing codes on it. */
   readonly canWriteAccess: boolean;
   /** An address another machine can reach it at, so a link to it needs no typed address. */
@@ -95,6 +97,8 @@ export type FleetNode =
       readonly linking: FleetLinking;
       /** The client can mint a pairing code there itself, so linking to it asks for none. */
       readonly mintable: boolean;
+      /** Linked environments is off there, and linking from or to it turns it on first. */
+      readonly turnsOnLinks: boolean;
       readonly canWriteAccess: boolean;
       readonly hasLinkAddress: boolean;
     }
@@ -169,7 +173,7 @@ function routeState(environment: FleetEnvironmentInput, routeId: string): FleetR
 
 function linking(environment: FleetEnvironmentInput): FleetLinking {
   if (environment.phase !== "connected") return "disconnected";
-  if (!environment.offersLinks) return "off";
+  if (!environment.offersLinks && environment.canTurnOnLinks !== true) return "off";
   return environment.canWriteAccess ? "ready" : "forbidden";
 }
 
@@ -210,6 +214,10 @@ export function buildFleetGraph(input: {
         environment.phase === "connected" &&
         environment.canWriteAccess &&
         environment.hasLinkAddress,
+      turnsOnLinks:
+        environment.phase === "connected" &&
+        !environment.offersLinks &&
+        environment.canTurnOnLinks === true,
       canWriteAccess: environment.canWriteAccess,
       hasLinkAddress: environment.hasLinkAddress,
     });
@@ -344,7 +352,8 @@ export function fleetLinkBackOffered(graph: FleetGraph, edge: FleetLinkEdge): bo
     },
     target: {
       connected: target.phase === "connected",
-      offersLinks: target.linking !== "off",
+      offersLinks: target.linking !== "off" && !target.turnsOnLinks,
+      canTurnOnLinks: target.turnsOnLinks,
       writable: target.canWriteAccess,
       links:
         target.outgoing === "loaded"

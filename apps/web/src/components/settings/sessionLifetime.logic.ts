@@ -1,10 +1,8 @@
-import type {
-  BothWaysOutcome,
-  BothWaysStep,
-  RenewBothWaysOutcome,
-  RenewBothWaysStep,
-} from "@t3tools/client-runtime/link-both-ways";
-import { type AuthSessionLifetime, NON_RENEWABLE_SESSION_SUBJECTS } from "@t3tools/contracts";
+import {
+  type AuthSessionLifetime,
+  isNeverExpiring,
+  NON_RENEWABLE_SESSION_SUBJECTS,
+} from "@t3tools/contracts";
 
 const DAY_MILLIS = 24 * 60 * 60 * 1000;
 export const MAX_CUSTOM_LIFETIME_DAYS = 3650;
@@ -44,6 +42,23 @@ export const RENEW_LIFETIMES: ReadonlyArray<{
   { id: "never", lifetime: { _tag: "never" } },
 ];
 
+/** A new link's lifetime: the default 30 days stays implicit, as older servers know only it. */
+export const linkLifetime = (id: RenewLifetimeId): AuthSessionLifetime | undefined =>
+  id === "30-days" ? undefined : RENEW_LIFETIMES.find((entry) => entry.id === id)?.lifetime;
+
+/**
+ * Where the link expiry picker starts. A link being made again keeps how long it lasts, so
+ * renewing never shortens one that never expires; one ending over a month away lasts a year.
+ */
+export function defaultLinkLifetimeId(
+  existingExpiresAtMillis: number | null,
+  nowMillis: number,
+): RenewLifetimeId {
+  if (existingExpiresAtMillis === null) return "30-days";
+  if (isNeverExpiring(existingExpiresAtMillis)) return "never";
+  return existingExpiresAtMillis - nowMillis > 31 * DAY_MILLIS ? "1-year" : "30-days";
+}
+
 /** T3 Connect and desktop app sessions keep their own lifetimes; the server refuses to renew them. */
 export const canRenewSession = (session: { readonly subject: string }) =>
   !NON_RENEWABLE_SESSION_SUBJECTS.includes(session.subject);
@@ -79,64 +94,3 @@ export function isMissingEndpointFailure(failure: unknown, depth = 0): boolean {
   }
   return "cause" in failure && isMissingEndpointFailure(failure.cause, depth + 1);
 }
-
-export interface BothWaysSummary {
-  readonly failedSteps: ReadonlyArray<BothWaysStep>;
-  /** A server dropped the requested lifetime, so a link got its default. */
-  readonly lifetimeIgnored: boolean;
-  readonly complete: boolean;
-  /** Some step did something; with every link kept as it was, nothing changed. */
-  readonly changed: boolean;
-  /** The other machine's desktop app was invited to connect back. */
-  readonly invited: boolean;
-  /** The invite was skipped for want of an address it may safely travel over, which needs a look. */
-  readonly inviteBlocked: boolean;
-  /** Worth closing the dialog on: every step went through, and the invite left nothing to read. */
-  readonly closable: boolean;
-}
-
-export function summarizeBothWays(
-  outcomes: ReadonlyMap<BothWaysStep, BothWaysOutcome>,
-): BothWaysSummary {
-  const failedSteps = [...outcomes].flatMap(([step, outcome]) =>
-    outcome.kind === "failed" ? [step] : [],
-  );
-  const invite = outcomes.get("invite");
-  const inviteBlocked = invite?.kind === "skipped" && invite.reason === "no_safe_address";
-  const complete = failedSteps.length === 0;
-  const changed = [...outcomes.values()].some((outcome) => outcome.kind === "done");
-  return {
-    failedSteps,
-    lifetimeIgnored: [...outcomes.values()].some(
-      (outcome) => outcome.kind === "done" && outcome.lifetimeIgnored === true,
-    ),
-    complete,
-    changed,
-    invited: invite?.kind === "done",
-    inviteBlocked,
-    closable: complete && changed && !inviteBlocked,
-  };
-}
-
-/** A retry skips what an earlier run finished, which stays done for this request. */
-export function mergeBothWaysRetry(
-  previous: ReadonlyMap<BothWaysStep, BothWaysOutcome> | undefined,
-  outcomes: ReadonlyMap<BothWaysStep, BothWaysOutcome>,
-): ReadonlyMap<BothWaysStep, BothWaysOutcome> {
-  if (previous === undefined) return outcomes;
-  return new Map(
-    [...outcomes].map(([step, outcome]) => {
-      const before = previous.get(step);
-      return [
-        step,
-        before?.kind === "done" &&
-        (outcome.kind === "kept" || (outcome.kind === "skipped" && outcome.reason === undefined))
-          ? before
-          : outcome,
-      ];
-    }),
-  );
-}
-
-export const renewFailedSteps = (outcomes: ReadonlyMap<RenewBothWaysStep, RenewBothWaysOutcome>) =>
-  [...outcomes].flatMap(([step, outcome]) => (outcome.kind === "failed" ? [step] : []));

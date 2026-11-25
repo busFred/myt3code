@@ -536,6 +536,30 @@ describe("fleetLinkOffer", () => {
     expect(reason("nolabs", "cups")).toBe("source-off");
     expect(reason("guest", "cups")).toBe("source-forbidden");
   });
+
+  it("links from a machine with links off that the client may turn them on at, and back to it", () => {
+    const off = { offersLinks: false, canTurnOnLinks: true } as const;
+    const turnable = build([environment("nolabs", "off", off), environment("cups")]);
+    expect(fleetLinkOffer(turnable, node("nolabs"), node("cups"))).toMatchObject({
+      kind: "link",
+      path: "code-less",
+    });
+    // Without access management there, turning links on does not make it a source.
+    const forbidden = build([
+      environment("nolabs", "off", { ...off, canWriteAccess: false }),
+      environment("cups"),
+    ]);
+    expect(fleetLinkOffer(forbidden, node("nolabs"), node("cups"))).toMatchObject({
+      reason: "source-forbidden",
+    });
+    // Its links are not read while off, and linking back from it turns them on first.
+    const oneWay = build([
+      environment("cups", [link("nolabs")]),
+      environment("nolabs", "off", off),
+    ]);
+    const edgeToIt = oneWay.edges.filter(isLinkEdge).find((entry) => entry.to === node("nolabs"))!;
+    expect(fleetLinkBackOffered(oneWay, edgeToIt)).toBe(true);
+  });
 });
 
 describe("fleetLinkAction", () => {

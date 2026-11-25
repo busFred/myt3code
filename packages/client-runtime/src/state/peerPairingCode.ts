@@ -8,6 +8,7 @@ import {
   type AuthCreatePairingCredentialInput,
   type AuthMcpClientAccess,
   type AuthPairingCredentialResult,
+  type AuthSessionLifetime,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
@@ -123,6 +124,39 @@ export function createPeerPairingCodeCommand<R, E>(
         ),
         Effect.map((minted) => minted.credential),
       ),
+  });
+}
+
+// Untraced: mintPairingCredential owns the span.
+const mintPeerLinkCode = Effect.fnUntraced(function* (input: {
+  readonly access: AuthMcpClientAccess;
+  readonly lifetime?: AuthSessionLifetime;
+}) {
+  const minted = yield* mintOnEnvironment({
+    label: PEER_PAIRING_CODE_LABEL,
+    access: input.access,
+    purpose: "peer-link",
+    ...(input.lifetime === undefined ? {} : { lifetime: input.lifetime }),
+  });
+  if (minted.purpose !== "peer-link" || minted.access !== input.access) {
+    return yield* new PeerPairingCodeError({
+      reason: "unavailable",
+      cause: "The environment did not issue a peer-link code.",
+    });
+  }
+  return minted.credential;
+});
+
+/**
+ * `createPeerPairingCodeCommand` with a lifetime for the link's session. Older servers drop
+ * the lifetime, and the link gets their default.
+ */
+export function createPeerLinkCodeCommand<R, E>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,
+) {
+  return createEnvironmentCommand(runtime, {
+    label: "environment-data:peer-link-code:mint",
+    execute: mintPeerLinkCode,
   });
 }
 

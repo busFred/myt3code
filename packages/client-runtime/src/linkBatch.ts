@@ -42,21 +42,19 @@ export interface LinkBatchCandidate {
 /**
  * `writable` holds the machines where this client's session may create pairing codes.
  * Until `links` has loaded, no machine's `linked` is known, and linking one that is
- * already linked would replace its working token, so none is offered. `unfinished` holds
- * linked machines whose two-way steps a retry should finish; that keeps the link.
+ * already linked would replace its working token, so none is offered.
  */
 export const linkBatchCandidates = (
   machines: ReadonlyArray<LinkableMachine>,
   writable: ReadonlySet<EnvironmentId>,
   links: LinkListState,
-  unfinished: ReadonlySet<EnvironmentId> = new Set(),
 ): ReadonlyArray<LinkBatchCandidate> =>
   machines.map((machine) => ({
     machine,
     blocked:
       links !== "loaded"
         ? "links_unknown"
-        : machine.linked && !unfinished.has(machine.environmentId)
+        : machine.linked
           ? "linked"
           : !machine.connected
             ? "not_connected"
@@ -97,7 +95,8 @@ export type LinkBackBlock =
  * the user's own connected environments, so one line says what is in the way.
  */
 export type LinkBackOffer =
-  | { readonly kind: "offered" }
+  /** `turnsOnLinks`: Linked environments is off on the target, and the client turns it on first. */
+  | { readonly kind: "offered"; readonly turnsOnLinks?: true }
   | { readonly kind: "blocked"; readonly reason: LinkBackBlock }
   | { readonly kind: "hidden" };
 
@@ -112,6 +111,11 @@ export const linkBackOffer = (input: {
     readonly connected: boolean;
     /** Linked environments is supported and switched on there. */
     readonly offersLinks: boolean;
+    /**
+     * Linked environments is supported but off there, and the client's session may change its
+     * settings (`settings:write`), so it can turn it on first.
+     */
+    readonly canTurnOnLinks?: boolean;
     /** The client's session there may create links: `access:write`. */
     readonly writable: boolean;
     /** Its own links: null until they are known. */
@@ -127,10 +131,13 @@ export const linkBackOffer = (input: {
 }): LinkBackOffer => {
   const { target, source } = input;
   if (target === null || !target.connected || !source.connected) return { kind: "hidden" };
-  if (!target.offersLinks) return { kind: "blocked", reason: "target_links_off" };
+  const turnsOnLinks = !target.offersLinks && target.canTurnOnLinks === true;
+  if (!target.offersLinks && !turnsOnLinks) return { kind: "blocked", reason: "target_links_off" };
   if (!target.writable) return { kind: "blocked", reason: "target_no_access" };
   if (!source.writable) return { kind: "blocked", reason: "source_no_access" };
   if (source.urls.length === 0) return { kind: "blocked", reason: "source_no_address" };
+  // With links off there, a link it may still hold does not work: linking back replaces it.
+  if (turnsOnLinks) return { kind: "offered", turnsOnLinks: true };
   // Unknown or already there: offering it could replace a working token.
   if (
     target.links === null ||

@@ -1,14 +1,13 @@
-import type { BothWaysOutcome, BothWaysStep } from "@t3tools/client-runtime/link-both-ways";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   canRenewSession,
+  defaultLinkLifetimeId,
   describeLifetime,
   isLifetimeChoiceValid,
   isMissingEndpointFailure,
   lifetimeFromChoice,
-  mergeBothWaysRetry,
-  summarizeBothWays,
+  linkLifetime,
 } from "./sessionLifetime.logic";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -58,86 +57,23 @@ describe("session lifetime helpers", () => {
   });
 });
 
-describe("both ways outcomes", () => {
-  const outcomes = (entries: Array<[BothWaysStep, BothWaysOutcome]>) => new Map(entries);
-
-  it("lists failed steps and a dropped lifetime", () => {
-    const summary = summarizeBothWays(
-      outcomes([
-        ["a_to_b", { kind: "done", lifetimeIgnored: true }],
-        ["b_to_a", { kind: "failed", failure: "no_address", detail: null }],
-        ["invite", { kind: "skipped" }],
-      ]),
-    );
-    expect(summary).toEqual({
-      failedSteps: ["b_to_a"],
-      lifetimeIgnored: true,
-      complete: false,
-      changed: true,
-      invited: false,
-      inviteBlocked: false,
-      closable: false,
-    });
-    // Links both sides already had are kept: nothing failed, and nothing changed either.
-    expect(
-      summarizeBothWays(
-        outcomes([
-          ["enable_a", { kind: "skipped" }],
-          ["a_to_b", { kind: "kept", access: "auto" }],
-          ["b_to_a", { kind: "kept", access: "auto" }],
-          ["invite", { kind: "skipped", reason: "not_full_access" }],
-        ]),
-      ),
-    ).toEqual({
-      failedSteps: [],
-      lifetimeIgnored: false,
-      complete: true,
-      changed: false,
-      invited: false,
-      inviteBlocked: false,
-      closable: false,
-    });
-    // A skipped invite for want of a safe address keeps the results up; a lower access does not.
-    const linked = (invite: BothWaysOutcome) =>
-      summarizeBothWays(
-        outcomes([
-          ["a_to_b", { kind: "done" }],
-          ["b_to_a", { kind: "done" }],
-          ["invite", invite],
-        ]),
-      );
-    expect(linked({ kind: "done" })).toMatchObject({ invited: true, closable: true });
-    expect(linked({ kind: "skipped", reason: "not_full_access" })).toMatchObject({
-      invited: false,
-      closable: true,
-    });
-    expect(linked({ kind: "skipped", reason: "no_safe_address" })).toMatchObject({
-      inviteBlocked: true,
-      closable: false,
-    });
-    expect(linked({ kind: "failed", failure: "other", detail: null })).toMatchObject({
-      closable: false,
-    });
+describe("link lifetime", () => {
+  const now = Date.UTC(2026, 10, 25);
+  it.each([
+    ["a new link", null, "30-days"],
+    ["a never-expiring link", Date.UTC(9999, 11, 31), "never"],
+    // The linking side derives its copy from `expires_in`, so it lands a little early.
+    ["a never-expiring link as the linking side sees it", Date.UTC(9999, 11, 30), "never"],
+    ["a link ending within a month", now + 20 * DAY, "30-days"],
+    ["a link ending in half a year", now + 180 * DAY, "1-year"],
+    ["an expired link", now - DAY, "30-days"],
+  ] as const)("starts renewing %s at %s", (_name, expiresAt, expected) => {
+    expect(defaultLinkLifetimeId(expiresAt, now)).toBe(expected);
   });
 
-  it("keeps what an earlier run finished, so the next retry still knows a link was made", () => {
-    const previous = outcomes([
-      ["a_to_b", { kind: "done" }],
-      ["b_to_a", { kind: "skipped" }],
-      ["invite", { kind: "failed", failure: "other", detail: null }],
-    ]);
-    const retried = mergeBothWaysRetry(
-      previous,
-      outcomes([
-        ["a_to_b", { kind: "kept", access: "auto" }],
-        ["b_to_a", { kind: "skipped" }],
-        ["invite", { kind: "done" }],
-      ]),
-    );
-    expect(Object.fromEntries(retried)).toEqual({
-      a_to_b: { kind: "done" },
-      b_to_a: { kind: "skipped" },
-      invite: { kind: "done" },
-    });
+  it("leaves the default 30 days to the server", () => {
+    expect(linkLifetime("30-days")).toBeUndefined();
+    expect(linkLifetime("never")).toEqual({ _tag: "never" });
+    expect(linkLifetime("1-year")).toEqual({ _tag: "duration", millis: 365 * DAY });
   });
 });

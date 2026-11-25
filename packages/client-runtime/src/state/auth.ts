@@ -9,7 +9,6 @@ import type {
   AuthRenewClientSessionInput,
   AuthCreateAppInviteInput,
   AuthRevokeAppInviteInput,
-  AuthLinkPeerInput,
   AuthRefreshPeerLinkExpiryInput,
   AuthRevokePairingLinkInput,
 } from "@t3tools/contracts";
@@ -176,20 +175,6 @@ export function createAuthEnvironmentAtoms<R, E>(
           timeoutMs: ACCESS_REQUEST_TIMEOUT_MS,
           requestInit: NO_REDIRECTS,
           request: ({ client, headers }) => client.takePendingAppInvites({ headers }),
-        }),
-    }),
-    /** `peerLinks.link` over HTTP, optionally turning Linked environments on there first. */
-    linkPeer: createEnvironmentCommand(runtime, {
-      label: "environment-data:server:access-link-peer",
-      execute: (input: AuthLinkPeerInput) =>
-        executeConnectedEnvironmentHttpRequest({
-          group: "access",
-          method: "POST",
-          url: (urls) => urls.linkPeer(),
-          // Linking probes the other environment's addresses and signs in there.
-          timeoutMs: 60_000,
-          requestInit: NO_REDIRECTS,
-          request: ({ client, headers }) => client.linkPeer({ headers, payload: input }),
         }),
     }),
     /** Has the environment ask a linked one when its link there ends; older servers answer 404. */

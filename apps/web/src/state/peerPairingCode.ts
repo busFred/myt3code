@@ -1,11 +1,12 @@
 import {
   createMcpApprovalCodeCommand,
-  createPeerPairingCodeCommand,
+  createPeerLinkCodeCommand,
 } from "@t3tools/client-runtime/state/peerPairingCode";
 import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   AuthMcpClientAccess,
   AuthPairingCredentialResult,
+  AuthSessionLifetime,
   EnvironmentId,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
@@ -13,22 +14,24 @@ import * as Result from "effect/Result";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 
-const mintPairingCode = createPeerPairingCodeCommand(connectionAtomRuntime);
+const mintPairingCode = createPeerLinkCodeCommand(connectionAtomRuntime);
 const mintMcpApprovalCode = createMcpApprovalCodeCommand(connectionAtomRuntime);
 
 /**
  * A fresh pairing code minted on `environmentId` with this client's session
- * there, for linking with `access`. Fails with `PeerPairingCodeError` when the
- * session may not create one.
+ * there, for linking with `access`, its session lasting `lifetime` (absent keeps
+ * that server's default). Fails with `PeerPairingCodeError` when the session may
+ * not create one.
  */
 export async function mintPairingCodeOn(
   environmentId: EnvironmentId,
   access: AuthMcpClientAccess,
+  lifetime?: AuthSessionLifetime,
 ): Promise<Result.Result<string, unknown>> {
   const result = await runAtomCommand(
     appAtomRegistry,
     mintPairingCode,
-    { environmentId, input: access },
+    { environmentId, input: { access, ...(lifetime === undefined ? {} : { lifetime }) } },
     { reportFailure: false },
   );
   return result._tag === "Success"

@@ -49,16 +49,6 @@ describe("linkBatchCandidates", () => {
     ]);
   });
 
-  it("keeps a machine linked one way pickable while its two-way steps are unfinished", () => {
-    const machines = [machine("half", { linked: true }), machine("whole", { linked: true })];
-    const writable = new Set(machines.map((entry) => entry.environmentId));
-    expect(
-      linkBatchCandidates(machines, writable, "loaded", new Set([id("half")])).map(
-        ({ blocked }) => blocked,
-      ),
-    ).toEqual([null, "linked"]);
-  });
-
   it("offers no machine until the linking environment's links have loaded", () => {
     // With no list, a linked machine reads as unlinked.
     const machines = [machine("ready"), machine("linked-but-unlisted")];
@@ -225,6 +215,24 @@ describe("linkBackOffer", () => {
     ).toEqual({ kind: "offered" });
   });
 
+  it("turns Linked environments on first where the client may, whatever links it held", () => {
+    const off = { offersLinks: false, canTurnOnLinks: true } as const;
+    expect(offer({ target: off })).toEqual({ kind: "offered", turnsOnLinks: true });
+    expect(
+      offer({
+        target: { ...off, links: [{ environmentId: id("source"), status: "reachable" }] },
+      }),
+    ).toEqual({ kind: "offered", turnsOnLinks: true });
+    // Every other rule still holds.
+    expect(offer({ target: { ...off, writable: false } })).toEqual({
+      kind: "blocked",
+      reason: "target_no_access",
+    });
+    expect(offer({ target: { ...off, connected: false } })).toEqual({ kind: "hidden" });
+    // Already on: the setting is not touched.
+    expect(offer({ target: { canTurnOnLinks: true } })).toEqual({ kind: "offered" });
+  });
+
   it("says nothing where the user would not expect it", () => {
     for (const hidden of [
       offer({ target: null }),
@@ -241,6 +249,10 @@ describe("linkBackOffer", () => {
 
   it("names what is in the way between two connected environments", () => {
     expect(offer({ target: { offersLinks: false } })).toEqual({
+      kind: "blocked",
+      reason: "target_links_off",
+    });
+    expect(offer({ target: { offersLinks: false, canTurnOnLinks: false } })).toEqual({
       kind: "blocked",
       reason: "target_links_off",
     });

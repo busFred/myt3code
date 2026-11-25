@@ -14,7 +14,11 @@ import {
 } from "@t3tools/client-runtime/link-request";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import type { PeerLinkHealth } from "@t3tools/client-runtime/state/peerLinks";
-import { AuthAccessWriteScope, type EnvironmentId } from "@t3tools/contracts";
+import {
+  AuthAccessWriteScope,
+  AuthSettingsWriteScope,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { useGT, useMessages } from "gt-react";
@@ -62,7 +66,12 @@ import {
   useRetainedRelayEnvironments,
 } from "~/state/environments";
 import { environmentIdsKey } from "~/state/environmentAtomList";
-import { peerLinkEnvironment, peerLinkListsAtom, usePeerLinkHosts } from "~/state/peerLinks";
+import {
+  canTurnOnLinks,
+  peerLinkEnvironment,
+  peerLinkListsAtom,
+  usePeerLinkHosts,
+} from "~/state/peerLinks";
 import { formatEnvironmentQueryError } from "~/state/query";
 import { relayEnvironmentDiscovery } from "~/state/relay";
 import { preparedConnectionsAtom, useEnvironmentsWithScope } from "~/state/session";
@@ -293,6 +302,7 @@ function useFleetGraph() {
     ),
   );
   const writable = useEnvironmentsWithScope(environments, AuthAccessWriteScope);
+  const settingsWritable = useEnvironmentsWithScope(environments, AuthSettingsWriteScope);
   const { machines: connect, problem: connectProblem } = useConnectMachines();
   const machines = linkableMachines({
     environments,
@@ -324,6 +334,10 @@ function useFleetGraph() {
       activeRouteId: active === null ? null : connectionRouteId(active.target),
       refusedRouteIds: environment.refusedRouteIds,
       offersLinks,
+      canTurnOnLinks: canTurnOnLinks(
+        environment.serverConfig,
+        settingsWritable.has(environment.environmentId),
+      ),
       canWriteAccess: writable.has(environment.environmentId),
       hasLinkAddress: (machineById.get(environment.environmentId)?.urls.length ?? 0) > 0,
       outgoing:

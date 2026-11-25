@@ -111,13 +111,17 @@
       "types": "./src/feedbackRequest.ts",
       "default": "./src/feedbackRequest.ts"
     },
+    "./app-invite": {
+      "types": "./src/appInvite.ts",
+      "default": "./src/appInvite.ts"
+    },
     "./link-batch": {
       "types": "./src/linkBatch.ts",
       "default": "./src/linkBatch.ts"
     },
-    "./link-both-ways": {
-      "types": "./src/linkBothWays.ts",
-      "default": "./src/linkBothWays.ts"
+    "./link-expiry": {
+      "types": "./src/linkExpiry.ts",
+      "default": "./src/linkExpiry.ts"
     },
     "./link-request": {
       "types": "./src/linkRequest.ts",

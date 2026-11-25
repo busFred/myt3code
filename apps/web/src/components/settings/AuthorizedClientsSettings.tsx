@@ -57,10 +57,12 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { SessionLifetimePicker } from "./BothWays";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import {
   DEFAULT_LIFETIME_CHOICE,
   type LifetimeChoice,
+  type LifetimeMode,
+  MAX_CUSTOM_LIFETIME_DAYS,
   RENEW_LIFETIMES,
   type RenewLifetimeId,
   canRenewSession,
@@ -92,6 +94,71 @@ import {
   isHostedAppPairingUrl,
   endpointShareHint,
 } from "./ConnectionsSettings.logic";
+
+/** How long a device stays signed in: the default 30 days, a number of days, or never. */
+function SessionLifetimePicker({
+  value,
+  onChange,
+  disabled = false,
+  label,
+}: {
+  readonly value: LifetimeChoice;
+  readonly onChange: (next: LifetimeChoice) => void;
+  readonly disabled?: boolean;
+  readonly label: string;
+}) {
+  const gt = useGT();
+  const labelId = useId();
+  const names: Record<LifetimeMode, string> = {
+    default: gt("30 days"),
+    custom: gt("Custom…"),
+    never: gt("Never"),
+  };
+  return (
+    <div className="space-y-1.5">
+      <span id={labelId} className="block text-xs font-medium text-foreground">
+        {label}
+      </span>
+      <div className="flex items-center gap-2">
+        <Select
+          value={value.mode}
+          disabled={disabled}
+          onValueChange={(next) => {
+            if (next !== null) onChange({ ...value, mode: next as LifetimeMode });
+          }}
+        >
+          <SelectTrigger aria-labelledby={labelId}>
+            <SelectValue>{names[value.mode]}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup alignItemWithTrigger={false}>
+            {(["default", "custom", "never"] as const).map((mode) => (
+              <SelectItem key={mode} value={mode} hideIndicator>
+                {names[mode]}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        {value.mode === "custom" ? (
+          <>
+            <Input
+              value={value.days}
+              onChange={(event) => onChange({ ...value, days: event.target.value })}
+              disabled={disabled}
+              inputMode="numeric"
+              aria-label={gt("Days")}
+              aria-invalid={!isLifetimeChoiceValid(value)}
+              className="w-24"
+              nativeInput
+            />
+            <span className="text-xs text-muted-foreground">
+              {gt("days, up to {max}", { max: MAX_CUSTOM_LIFETIME_DAYS })}
+            </span>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 function AccessScopeSummary({
   scopes,

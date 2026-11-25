@@ -6,11 +6,11 @@ import {
 } from "@t3tools/client-runtime/link-batch";
 import { ANOTHER_ADDRESS, linkRequestFailureMessage } from "@t3tools/client-runtime/link-request";
 import {
-  isNeverExpiring,
   AuthAccessWriteScope,
   type AuthMcpClientAccess,
-  type AuthSessionLifetime,
+  AuthSettingsWriteScope,
   type EnvironmentId,
+  isNeverExpiring,
   type PeerLinkSummary,
 } from "@t3tools/contracts";
 import {
@@ -21,21 +21,24 @@ import { peerLinkHealth, type PeerLinkHealth } from "@t3tools/client-runtime/sta
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
-import type { BothWaysOutcome, BothWaysStep } from "@t3tools/client-runtime/link-both-ways";
 import { PlusIcon } from "lucide-react";
 import { T, useGT, useMessages, Var } from "gt-react";
 import { type ReactNode, useId, useRef, useState } from "react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
-import { useEnvironment, useEnvironments } from "~/state/environments";
-import { refreshLinkExpiries, renewLinksBothWays } from "~/state/bothWays";
+import { cn } from "~/lib/utils";
+import { useEnvironment } from "~/state/environments";
 import { mintPairingCodeOn } from "~/state/peerPairingCode";
+import { inviteDesktopAppTo } from "~/state/peerLinkSessions";
 import {
+  canTurnOnLinks,
+  ensureLinkedEnvironmentsOn,
   peerLinkEnvironment,
   useLinkableMachines,
   useLinkBackOffers,
   useLinkThroughRoutes,
 } from "~/state/peerLinks";
+import { useEnvironments } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -43,8 +46,6 @@ import { accessConfig } from "../auth/ConnectAgentSurface";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   Dialog,
   DialogClose,
@@ -60,20 +61,10 @@ import { Input } from "../ui/input";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import { LinkAccessPicker } from "./LinkAccessPicker";
-import { BothWaysOption, BothWaysResults, useBothWaysRunner } from "./BothWays";
+import { LinkExpiryMenu, LinkExpiryPicker } from "./LinkExpiryMenu";
 import { LinkAddressWarning, LinkMachineSelect } from "./LinkMachineSelect";
-import {
-  DEFAULT_LIFETIME_CHOICE,
-  describeLifetime,
-  type LifetimeChoice,
-  RENEW_LIFETIMES,
-  type RenewLifetimeId,
-  isLifetimeChoiceValid,
-  renewFailedSteps,
-  summarizeBothWays,
-} from "./sessionLifetime.logic";
-import { linkDirection } from "./linkedEnvironments.logic";
 import { LinkSeveralEnvironmentsAction } from "./LinkSeveralEnvironments";
+import { defaultLinkLifetimeId, linkLifetime, type RenewLifetimeId } from "./sessionLifetime.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useLiveRefresh } from "../../hooks/useLiveRefresh";
 import { m as resolveMessage } from "../../i18n/messages";
@@ -171,106 +162,6 @@ function LinkedEnvironmentRow({
   const health = peerLinkHealth(link, DateTime.makeUnsafe(nowMinute));
   const canUnlink = useAtomValue(peerLinkEnvironment.unlink.permissionAtom(environmentId));
   const { busy, forget } = useForgetPeerLink(environmentId, link);
-  const [renewing, setRenewing] = useState(false);
-  const [linkingBack, setLinkingBack] = useState(false);
-  // The link's session lives on the machine it links to, and renewing it needs access
-  // management there, so only machines this app is signed in to offer it.
-  const savedPeer = useEnvironment(link.environmentId);
-  const mayManagePeer = useEnvironmentScope(link.environmentId, AuthAccessWriteScope);
-  const mayManageHere = useEnvironmentScope(environmentId, AuthAccessWriteScope);
-  const canSetExpiry = link.peerSessionId !== undefined && savedPeer !== null && mayManagePeer;
-  const canReadPeer = savedPeer !== null && mayManagePeer;
-  const peerLinks = useEnvironmentQuery(
-    canReadPeer ? peerLinkEnvironment.list({ environmentId: link.environmentId, input: {} }) : null,
-    m,
-  );
-  const direction = linkDirection({
-    canRead: canReadPeer,
-    peerLinks: peerLinks.data?.links ?? null,
-    failed: peerLinks.error !== null,
-    environmentId,
-    now: DateTime.makeUnsafe(nowMinute),
-  });
-  const showLinkBack = direction === "one-way" && mayManageHere;
-  const runBothWays = useBothWaysRunner();
-  const setExpiry = async (lifetime: AuthSessionLifetime) => {
-    setRenewing(true);
-    // Only this link: with no link back named, that step is skipped.
-    const outcomes = await renewLinksBothWays({
-      a: { environmentId, linkToOther: link },
-      b: { environmentId: link.environmentId },
-      lifetime,
-    });
-    // Each side keeps the expiry its peer last named; have both ask again, so this shows.
-    await refreshLinkExpiries(environmentId, link.environmentId);
-    setRenewing(false);
-    const failed = renewFailedSteps(outcomes);
-    if (failed.length === 0) {
-      const described = describeLifetime(lifetime);
-      toastManager.add({
-        type: "success",
-        title:
-          described.kind === "never"
-            ? gt("{label} never expires", { label: link.label })
-            : gt(
-                "{days, plural, one {{label} now expires in {days} day} other {{label} now expires in {days} days}}",
-                { label: link.label, days: described.days },
-              ),
-      });
-      return;
-    }
-    const failures = [...outcomes.values()].flatMap((outcome) =>
-      outcome.kind === "failed" ? [outcome.failure] : [],
-    );
-    failureToast(
-      gt("Could not change the expiry"),
-      failures.includes("unsupported")
-        ? gt("That machine runs an older T3 Code")
-        : failures.includes("unknown_session")
-          ? gt("A machine does not report its link's session. Link it again to renew.")
-          : gt("Check that this app is signed in there with access management."),
-    );
-  };
-  const linkBack = async () => {
-    setLinkingBack(true);
-    const outcomes = await runBothWays({
-      a: environmentId,
-      b: link.environmentId,
-      access: link.access,
-      lifetime: isNeverExpiring(link.expiresAt)
-        ? { mode: "never", days: "90" }
-        : DEFAULT_LIFETIME_CHOICE,
-      invite: false,
-    });
-    setLinkingBack(false);
-    if (outcomes === null) {
-      failureToast(gt("Could not link back"), gt("Both machines must be saved in this app."));
-      return;
-    }
-    const step = outcomes.get("b_to_a");
-    if (step?.kind === "done" || step?.kind === "kept") {
-      toastManager.add({
-        type: "success",
-        title: gt("{label} now links back here", { label: link.label }),
-      });
-      peerLinks.refresh();
-      return;
-    }
-    failureToast(
-      gt("Could not link back"),
-      step?.kind === "failed"
-        ? (step.detail ??
-            (step.failure === "unsupported"
-              ? gt("That machine runs an older T3 Code")
-              : gt("Check that this app is signed in there with access management.")))
-        : gt("Check that this app is signed in there with access management."),
-    );
-  };
-  const expiryLabels: Record<RenewLifetimeId, string> = {
-    "30-days": gt("30 days"),
-    "1-year": gt("1 year"),
-    never: gt("Never"),
-  };
   const status = peerLinkStatusText(health, gt, isNeverExpiring(link.expiresAt));
   return (
     <div className={ITEM_ROW_CLASSNAME}>
@@ -294,91 +185,12 @@ function LinkedEnvironmentRow({
           </div>
           <p className="text-xs text-muted-foreground">
             {m(accessConfig[link.access].label)} · {status}
-            {direction === "two-way" ? (
-              <>
-                {" · "}
-                <span className="font-medium text-success">{gt("Two-way")}</span>
-              </>
-            ) : direction === "one-way" ? (
-              <>
-                {" · "}
-                <span className="font-medium text-warning">{gt("One-way")}</span>
-              </>
-            ) : direction === "unknown" ? (
-              <>
-                {" · "}
-                <Tooltip>
-                  <TooltipTrigger render={<span className="italic" />}>
-                    {gt("Two-way unknown")}
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">
-                    {peerLinks.error !== null
-                      ? gt("Could not read {label}''s links: {error}", {
-                          label: link.label,
-                          error: peerLinks.error,
-                        })
-                      : savedPeer === null
-                        ? gt(
-                            "{label} isn''t in this app''s environment list, so it can''t see that machine''s links.",
-                            { label: link.label },
-                          )
-                        : gt(
-                            "This app isn''t signed in to {label} with Manage access, so it can''t see that machine''s links.",
-                            { label: link.label },
-                          )}
-                  </TooltipPopup>
-                </Tooltip>
-              </>
-            ) : null}
           </p>
           <p className="truncate text-xs text-muted-foreground/80">{link.urls.join(", ")}</p>
         </div>
         {canUnlink ? (
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-            {showLinkBack ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={busy || renewing || linkingBack}
-                      onClick={() => void linkBack()}
-                    >
-                      {linkingBack ? gt("Linking…") : gt("Link back")}
-                    </Button>
-                  }
-                />
-                <TooltipPopup side="top">
-                  {gt(
-                    "Makes {label} link to this machine too. To undo, forget this machine in {label}''s Linked environments.",
-                    { label: link.label },
-                  )}
-                </TooltipPopup>
-              </Tooltip>
-            ) : null}
-            {canSetExpiry && health.kind !== "expired" ? (
-              <Menu>
-                <MenuTrigger
-                  render={
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={busy || renewing || linkingBack}
-                    />
-                  }
-                >
-                  {renewing ? gt("Updating…") : gt("Expiry")}
-                </MenuTrigger>
-                <MenuPopup align="end">
-                  {RENEW_LIFETIMES.map(({ id, lifetime }) => (
-                    <MenuItem key={id} onClick={() => void setExpiry(lifetime)}>
-                      {expiryLabels[id]}
-                    </MenuItem>
-                  ))}
-                </MenuPopup>
-              </Menu>
-            ) : null}
+            <LinkExpiryMenu environmentId={environmentId} link={link} disabled={busy} />
             <Button
               size="xs"
               variant="destructive-outline"
@@ -478,21 +290,6 @@ export function LinkEnvironmentDialog({
   const [pairingCode, setPairingCode] = useState("");
   const [access, setAccess] = useState<AuthMcpClientAccess>("approval-required");
   const [busy, setBusy] = useState(false);
-  const [bothWays, setBothWays] = useState(true);
-  const [lifetime, setLifetime] = useState<LifetimeChoice>(DEFAULT_LIFETIME_CHOICE);
-  const [bothWaysOutcomes, setBothWaysOutcomes] = useState<ReadonlyMap<
-    BothWaysStep,
-    BothWaysOutcome
-  > | null>(null);
-  const runBothWays = useBothWaysRunner();
-  const warnLifetimeIgnored = () =>
-    toastManager.add({
-      type: "warning",
-      title: gt("That machine runs an older T3 Code"),
-      description: gt(
-        "It ignored the device lifetime, so the device signs in for the default 30 days.",
-      ),
-    });
   // Machines whose minting already failed, so the dialog asks for a code instead.
   const [mintFailed, setMintFailed] = useState<ReadonlySet<EnvironmentId>>(new Set());
   // Enter then a click can both run before a re-render; this guard is synchronous.
@@ -514,6 +311,13 @@ export function LinkEnvironmentDialog({
   // Machines that would not give a code through a link, so the dialog asks for one instead.
   const [throughFailed, setThroughFailed] = useState<ReadonlySet<EnvironmentId>>(new Set());
   const [alsoLinkBack, setAlsoLinkBack] = useState(false);
+  const [alsoInvite, setAlsoInvite] = useState(false);
+  // Null until picked: a link being made again starts at how long it lasts now.
+  const [lifetimeChoice, setLifetimeChoice] = useState<RenewLifetimeId | null>(null);
+  const nowMinute = useNowMinute();
+  const sourceLinks = useEnvironmentQuery(
+    open ? peerLinkEnvironment.list({ environmentId, input: {} }) : null,
+  );
   const selected = choice ?? (machines.length === 0 ? ANOTHER_ADDRESS : null);
   // Only for the machine the dialog opened for: another choice or address is another machine.
   const prefilledThrough =
@@ -559,16 +363,45 @@ export function LinkEnvironmentDialog({
       : null;
   const linkBack = useLinkBackOffers(environmentId, targetId === null ? [] : [targetId], open);
   const backOffer = linkBack.offerFor(targetId);
-  // A bi-directional link mints a code on each machine with this app's own sessions, so only a
-  // machine this app is signed in to offers it. It replaces the plain link back there.
-  const canLinkBothWays = machine !== null && canMint;
-  const linkingBothWays = canLinkBothWays && bothWays;
+  // A pasted code carries its own lifetime, and a code got through a link carries none.
+  const existing = machine?.linked
+    ? (sourceLinks.data?.links.find((entry) => entry.environmentId === targetId) ?? null)
+    : null;
+  const lifetimeId =
+    lifetimeChoice ??
+    defaultLinkLifetimeId(
+      existing === null ? null : DateTime.toEpochMillis(existing.expiresAt),
+      DateTime.toEpochMillis(DateTime.makeUnsafe(nowMinute)),
+    );
+  const lifetime = canMint ? linkLifetime(lifetimeId) : undefined;
+  const sourceSettingsWritable = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const target = useEnvironment(targetId);
+  const targetSettingsWritable = useEnvironmentScope(targetId, AuthSettingsWriteScope);
+  // Both ends need Linked environments on: one to hold the link, the other to accept it.
+  const turnsOn = [
+    ...(canTurnOnLinks(source?.serverConfig, sourceSettingsWritable) && source !== null
+      ? [source.label]
+      : []),
+    ...(canTurnOnLinks(target?.serverConfig, targetSettingsWritable) && target !== null
+      ? [target.label]
+      : []),
+  ];
+  const sourceWritable = useEnvironmentScope(environmentId, AuthAccessWriteScope);
+  const reverse = linkBack.reverseFor(targetId);
+  // The app's code gives full use of the source, so only a full-access link back pairs with it.
+  const offersInvite =
+    access === "full-access" &&
+    machine !== null &&
+    source !== null &&
+    linkBack.source !== null &&
+    sourceWritable &&
+    mayMint &&
+    ((alsoLinkBack && backOffer.kind === "offered") || reverse?.access === "full-access");
   const ready =
-    (through !== null ||
-      (selected !== null &&
-        (!needsAddress || address.trim().length > 0) &&
-        (canMint || pairingCode.trim().length > 0))) &&
-    (!linkingBothWays || isLifetimeChoiceValid(lifetime));
+    through !== null ||
+    (selected !== null &&
+      (!needsAddress || address.trim().length > 0) &&
+      (canMint || pairingCode.trim().length > 0));
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     if (!next) {
@@ -579,9 +412,8 @@ export function LinkEnvironmentDialog({
       setMintFailed(new Set());
       setThroughFailed(new Set());
       setAlsoLinkBack(false);
-      setBothWays(true);
-      setLifetime(DEFAULT_LIFETIME_CHOICE);
-      setBothWaysOutcomes(null);
+      setAlsoInvite(false);
+      setLifetimeChoice(null);
     }
   };
   // Settles to what to link with, or null after reporting why the linked machine gave no code.
@@ -616,7 +448,7 @@ export function LinkEnvironmentDialog({
   // Settles to the code to link with, or null after reporting why there is none.
   const resolvePairingCode = async () => {
     if (!canMint || targetId === null) return pairingCode.trim();
-    const minted = await mintPairingCodeOn(targetId, access);
+    const minted = await mintPairingCodeOn(targetId, access, lifetime);
     if (Result.isSuccess(minted)) return minted.success;
     setMintFailed((failed) => new Set(failed).add(targetId));
     failureToast(
@@ -625,52 +457,16 @@ export function LinkEnvironmentDialog({
     );
     return null;
   };
-  const submitBothWays = async (target: NonNullable<typeof machine>) => {
-    inFlight.current = true;
-    setBusy(true);
-    const outcomes = await runBothWays({
-      a: environmentId,
-      b: target.environmentId,
-      access,
-      lifetime,
-      ...(bothWaysOutcomes === null ? {} : { previous: bothWaysOutcomes }),
-    });
-    inFlight.current = false;
-    setBusy(false);
-    if (outcomes === null) {
-      failureToast(
-        gt("Could not link the environment"),
-        gt("Both machines must be saved in this app."),
-      );
-      return;
-    }
-    setBothWaysOutcomes(outcomes);
-    const summary = summarizeBothWays(outcomes);
-    // With every link kept as it was, or the invite skipped for want of an address, the results
-    // stay up to say so.
-    if (summary.closable) {
-      toastManager.add({
-        type: "success",
-        title: summary.invited
-          ? gt("Linked {label} bi-directionally and invited its desktop app to connect", {
-              label: target.label,
-            })
-          : gt("Linked {label} bi-directionally", { label: target.label }),
-      });
-      if (summary.lifetimeIgnored) warnLifetimeIgnored();
-      handleOpenChange(false);
-    }
-  };
   const submit = async () => {
-    if (linkingBothWays && machine !== null) {
-      if (!inFlight.current && ready) await submitBothWays(machine);
-      return;
-    }
     const [url, ...alternateUrls] =
       machine === null || needsAddress ? [address.trim()] : machine.urls;
     if (inFlight.current || !ready || url === undefined) return;
     inFlight.current = true;
     setBusy(true);
+    if (turnsOn.length > 0) {
+      await ensureLinkedEnvironmentsOn(environmentId);
+      if (targetId !== null) await ensureLinkedEnvironmentsOn(targetId);
+    }
     const throughInput = through === null ? null : await resolveThrough(through);
     const code = through === null ? await resolvePairingCode() : null;
     const result =
@@ -705,13 +501,29 @@ export function LinkEnvironmentDialog({
         ? await linkWithMintedCode({
             machine: linkBack.source,
             access,
-            mint: mintPairingCodeOn,
+            mint: (id, level) => mintPairingCodeOn(id, level, lifetime),
             link: async (input) => {
               const reverse = await linkOnTarget({ environmentId: targetId, input });
               return reverse._tag === "Success"
                 ? Result.succeed(reverse.value)
                 : Result.fail(squashAtomCommandFailure(reverse));
             },
+          })
+        : null;
+    const invited =
+      result?._tag === "Success" &&
+      alsoInvite &&
+      offersInvite &&
+      linkBack.source !== null &&
+      machine !== null &&
+      result.value.environmentId === machine.environmentId &&
+      (back?.kind === "linked" || reverse?.access === "full-access")
+        ? await inviteDesktopAppTo({
+            host: { environmentId, label: source?.label ?? "", urls: linkBack.source.urls },
+            app: { environmentId: machine.environmentId, label: machine.label },
+            appLinkAccess: back?.kind === "linked" ? access : (reverse?.access ?? access),
+            lifetime,
+            codeLabel: gt("App for {label}", { label: machine.label }),
           })
         : null;
     inFlight.current = false;
@@ -730,6 +542,25 @@ export function LinkEnvironmentDialog({
         failureToast(
           gt("Could not link {target} back to {source}", names),
           back.detail ?? linkBatchFailureLabel(back.failure, m),
+        );
+      }
+      if (invited?.kind === "invited") {
+        toastManager.add({
+          type: "success",
+          title: gt("Invited the desktop app on {target} to connect to {source}", names),
+        });
+      } else if (invited !== null) {
+        failureToast(
+          gt("Could not invite the desktop app on {target}", names),
+          invited.kind === "skipped"
+            ? invited.reason === "no_safe_address"
+              ? gt("Needs an https or Tailscale address")
+              : gt("Only with full access")
+            : invited.failure === "unsupported"
+              ? gt("That machine runs an older T3 Code")
+              : invited.failure === "no_code"
+                ? linkBatchFailureLabel("no_code", m)
+                : gt("Check that this app is signed in there with access management."),
         );
       }
       handleOpenChange(false);
@@ -782,26 +613,19 @@ export function LinkEnvironmentDialog({
                 value={selected}
                 disabled={busy}
                 onChange={(next) => {
-                  // The opt-in names one machine: it does not carry over to another.
-                  if (next !== selected) setAlsoLinkBack(false);
+                  // The opt-ins name one machine: they do not carry over to another.
+                  if (next !== selected) {
+                    setAlsoLinkBack(false);
+                    setAlsoInvite(false);
+                    setLifetimeChoice(null);
+                  }
                   setChoice(next);
-                  // Outcomes belong to the machine, access and lifetime they ran with.
-                  setBothWaysOutcomes(null);
                 }}
               />
             ) : null}
             {machine?.linked ? (
               <p className="text-xs text-muted-foreground">
-                {linkingBothWays ? (
-                  <T>
-                    Already linked. Bi-directional link keeps existing links as they are. To change
-                    how long they last, use Expiry on the link, or Renew under Authorized clients on
-                    the other machine. To change the access, forget the link first or untick
-                    Bi-directional link.
-                  </T>
-                ) : (
-                  <T>Already linked. Linking again renews it with the access you pick.</T>
-                )}
+                <T>Already linked. Linking again renews it with the access you pick.</T>
               </p>
             ) : null}
             {through !== null ? (
@@ -871,29 +695,18 @@ export function LinkEnvironmentDialog({
                 ) : null}
               </label>
             )}
-            <LinkAccessPicker
-              value={access}
-              onChange={(next) => {
-                setAccess(next);
-                setBothWaysOutcomes(null);
-              }}
-              disabled={busy}
-            />
-            {canLinkBothWays ? (
-              <BothWaysOption
-                checked={bothWays}
-                onCheckedChange={(next) => {
-                  setBothWays(next);
-                  setBothWaysOutcomes(null);
-                }}
-                lifetime={lifetime}
-                onLifetimeChange={(next) => {
-                  setLifetime(next);
-                  setBothWaysOutcomes(null);
-                }}
-                disabled={busy}
-              />
-            ) : machine === null || source === null ? null : backOffer.kind === "offered" ? (
+            <LinkAccessPicker value={access} onChange={setAccess} disabled={busy} />
+            {canMint ? (
+              <LinkExpiryPicker value={lifetimeId} onChange={setLifetimeChoice} disabled={busy} />
+            ) : null}
+            {turnsOn.length > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                {gt("Also turns on Linked environments on {label}.", {
+                  label: turnsOn.join(", "),
+                })}
+              </p>
+            ) : null}
+            {machine === null || source === null ? null : backOffer.kind === "offered" ? (
               <label className="flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default">
                 <Checkbox
                   checked={alsoLinkBack}
@@ -924,12 +737,21 @@ export function LinkEnvironmentDialog({
                 )}
               </p>
             ) : null}
-            {bothWaysOutcomes !== null && machine !== null ? (
-              <BothWaysResults
-                outcomes={bothWaysOutcomes}
-                aLabel={source?.label ?? gt("This machine")}
-                bLabel={machine.label}
-              />
+            {offersInvite ? (
+              <label
+                className={cn(
+                  "flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default",
+                  backOffer.kind === "offered" && "ml-6.5",
+                )}
+              >
+                <Checkbox checked={alsoInvite} disabled={busy} onCheckedChange={setAlsoInvite} />
+                <span className="block min-w-0 font-medium text-foreground">
+                  {gt("Also invite the desktop app on {target} to connect to {source}", {
+                    source: source?.label ?? "",
+                    target: machine?.label ?? "",
+                  })}
+                </span>
+              </label>
             ) : null}
           </form>
         </DialogPanel>
@@ -938,11 +760,7 @@ export function LinkEnvironmentDialog({
             <T>Cancel</T>
           </DialogClose>
           <Button form={formId} type="submit" disabled={busy || !ready}>
-            {busy
-              ? gt("Linking…")
-              : bothWaysOutcomes !== null
-                ? gt("Retry")
-                : gt("Link", { $context: "verb, links an environment" })}
+            {busy ? gt("Linking…") : gt("Link", { $context: "verb, links an environment" })}
           </Button>
         </DialogFooter>
       </DialogPopup>

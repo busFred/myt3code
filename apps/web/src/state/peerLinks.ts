@@ -9,7 +9,15 @@ import {
   createPeerLinkEnvironmentAtoms,
   linkThroughRoutes,
 } from "@t3tools/client-runtime/state/peerLinks";
-import { AuthAccessReadScope, AuthAccessWriteScope, type EnvironmentId } from "@t3tools/contracts";
+import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
+import {
+  AuthAccessReadScope,
+  AuthAccessWriteScope,
+  AuthSettingsWriteScope,
+  type EnvironmentId,
+  type PeerLinkSummary,
+  type ServerConfig,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { Atom } from "effect/reactivity";
 import { useContext, useEffect, useEffectEvent } from "react";
@@ -17,11 +25,13 @@ import { useContext, useEffect, useEffectEvent } from "react";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentAtomList, environmentIdsKey } from "./environmentAtomList";
-import { useEnvironmentIdentities, useEnvironments } from "./environments";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { readEnvironment, useEnvironmentIdentities, useEnvironments } from "./environments";
 import { environmentPresentations } from "./presentation";
 import { relayEnvironmentDiscovery } from "./relay";
+import { serverEnvironment } from "./server";
 import { useEnvironmentQuery } from "./query";
-import { useEnvironmentsWithScope } from "./session";
+import { readEnvironmentScope, useEnvironmentsWithScope } from "./session";
 import { useAtomCommand } from "./use-atom-command";
 
 export const peerLinkEnvironment = createPeerLinkEnvironmentAtoms(connectionAtomRuntime);
@@ -143,6 +153,36 @@ export function useLinkThroughRoutes(sourceId: EnvironmentId, enabled: boolean) 
   });
 }
 
+/**
+ * Linked environments is supported but off on a machine, and `settingsWritable` (this client's
+ * session there holds `settings:write`) lets this client turn it on before linking.
+ */
+export const canTurnOnLinks = (
+  config: Pick<ServerConfig, "environment" | "settings"> | null | undefined,
+  settingsWritable: boolean,
+): boolean =>
+  config?.environment.capabilities.peerLinks === true &&
+  !config.settings.linkedEnvironmentsEnabled &&
+  settingsWritable;
+
+/**
+ * Turns Linked environments on at `environmentId` where it is off. Both ends of a link need it:
+ * the linking one to hold links, the linked one to accept them.
+ */
+export async function ensureLinkedEnvironmentsOn(environmentId: EnvironmentId): Promise<boolean> {
+  const config = readEnvironment(environmentId)?.serverConfig;
+  if (config?.environment.capabilities.peerLinks !== true) return false;
+  if (config.settings.linkedEnvironmentsEnabled) return true;
+  if (!readEnvironmentScope(environmentId, AuthSettingsWriteScope)) return false;
+  const result = await runAtomCommand(
+    appAtomRegistry,
+    serverEnvironment.updateSettings,
+    { environmentId, input: { patch: { linkedEnvironmentsEnabled: true } } },
+    { reportFailure: false },
+  );
+  return result._tag === "Success";
+}
+
 const NOT_OFFERED: LinkBackOffer = { kind: "hidden" };
 
 /**
@@ -158,6 +198,7 @@ export function useLinkBackOffers(
   const { environments } = useEnvironments();
   const discovery = useAtomValue(relayEnvironmentDiscovery.stateValueAtom);
   const writable = useEnvironmentsWithScope(environments, AuthAccessWriteScope);
+  const settingsWritable = useEnvironmentsWithScope(environments, AuthSettingsWriteScope);
   const source = linkableMachines({
     environments,
     threadEnvironmentId: null,
@@ -177,9 +218,17 @@ export function useLinkBackOffers(
     .map((target) => target.environmentId);
   const lists = useAtomValue(peerLinkListsAtom(environmentIdsKey(listed)));
   const offers = new Map<EnvironmentId, LinkBackOffer>();
+  const reverse = new Map<EnvironmentId, PeerLinkSummary>();
   for (const target of targets) {
     if (source === undefined) break;
     const list = lists[listed.indexOf(target.environmentId)];
+    const back =
+      list?._tag === "Success"
+        ? list.value.links.find(
+            (link) => link.environmentId === sourceId && link.status !== "expired",
+          )
+        : undefined;
+    if (back !== undefined) reverse.set(target.environmentId, back);
     offers.set(
       target.environmentId,
       linkBackOffer({
@@ -192,6 +241,10 @@ export function useLinkBackOffers(
         target: {
           connected: target.connection.phase === "connected",
           offersLinks: offersLinkedEnvironments(target.serverConfig),
+          canTurnOnLinks: canTurnOnLinks(
+            target.serverConfig,
+            settingsWritable.has(target.environmentId),
+          ),
           writable: writable.has(target.environmentId),
           links: list?._tag === "Success" ? list.value.links : null,
         },
@@ -202,5 +255,8 @@ export function useLinkBackOffers(
     source: source ?? null,
     offerFor: (targetId: EnvironmentId | null): LinkBackOffer =>
       (targetId === null ? undefined : offers.get(targetId)) ?? NOT_OFFERED,
+    /** The unexpired link the target already holds to the source, where its links were read. */
+    reverseFor: (targetId: EnvironmentId | null): PeerLinkSummary | null =>
+      (targetId === null ? undefined : reverse.get(targetId)) ?? null,
   };
 }

@@ -37,6 +37,7 @@ import {
   linkNeedsAttention,
   linkTroubleRank,
 } from "./environmentsMap.logic";
+import { LinkExpiryMenu } from "./LinkExpiryMenu";
 import { peerLinkStatusText, useForgetPeerLink } from "./LinkedEnvironmentsSettings";
 import { savedBackendStatus } from "./SavedEnvironmentRows";
 
@@ -308,10 +309,12 @@ function LinkButton({
           <HealthGlyph health={edge.health} />
           {attention
             ? healthLabel(edge.health, gt)
-            : gt("Expires {date}", {
-                date: formatAccessTimestamp(DateTime.formatIso(edge.link.expiresAt)),
-                $context: "the date a link between two machines stops working",
-              })}
+            : isNeverExpiring(edge.link.expiresAt)
+              ? gt("Never expires")
+              : gt("Expires {date}", {
+                  date: formatAccessTimestamp(DateTime.formatIso(edge.link.expiresAt)),
+                  $context: "the date a link between two machines stops working",
+                })}
         </span>
       </button>
     </li>
@@ -569,9 +572,13 @@ function linksNote(node: FleetEnvironmentNode, gt: GT): string | null {
   }
   switch (node.outgoing) {
     case "off":
-      return gt("To link from {label}, turn on Linked environments in its Labs settings.", {
-        label: node.label,
-      });
+      return node.turnsOnLinks && node.linking === "ready"
+        ? gt("Linked environments is off there. Linking from {label} turns it on.", {
+            label: node.label,
+          })
+        : gt("To link from {label}, turn on Linked environments in its Labs settings.", {
+            label: node.label,
+          });
     case "unknown":
       return gt("This app may not read the links {label} holds.", { label: node.label });
     case "error":
@@ -815,14 +822,21 @@ function LinkDetails({
             </Button>
           ) : null}
           {canUnlink ? (
-            <Button
-              size="xs"
-              variant="destructive-outline"
-              disabled={busy}
-              onClick={() => void forget()}
-            >
-              {busy ? gt("Forgetting…") : gt("Forget")}
-            </Button>
+            <>
+              <LinkExpiryMenu
+                environmentId={edge.sourceEnvironmentId}
+                link={link}
+                disabled={busy}
+              />
+              <Button
+                size="xs"
+                variant="destructive-outline"
+                disabled={busy}
+                onClick={() => void forget()}
+              >
+                {busy ? gt("Forgetting…") : gt("Forget")}
+              </Button>
+            </>
           ) : null}
         </div>
       </div>
