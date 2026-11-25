@@ -9,6 +9,12 @@ import type { DatabaseMigrationProgress } from "@t3tools/contracts";
 
 import type { BackendStartupFailure } from "../backend/DesktopBackendManager.ts";
 
+/** What the attached background service reports it runs, published on each new service process. */
+export interface AttachedServiceBuild {
+  readonly serverVersion: string;
+  readonly serverBuild: string | undefined;
+}
+
 /** Startup health of the primary local backend, read by the startup recovery window. */
 export type PrimaryBackendStartup =
   | { readonly _tag: "Starting" }
@@ -30,6 +36,7 @@ export class DesktopState extends Context.Service<
     readonly canInstallUpdates: Ref.Ref<boolean>;
     readonly primaryBackendStartup: SubscriptionRef.SubscriptionRef<PrimaryBackendStartup>;
     readonly databaseMigrationProgress: Ref.Ref<DatabaseMigrationProgress | null>;
+    readonly attachedService: SubscriptionRef.SubscriptionRef<Option.Option<AttachedServiceBuild>>;
   }
 >()("@t3tools/desktop/app/DesktopState") {}
 
@@ -43,6 +50,7 @@ const make = Effect.all({
   canInstallUpdates: Ref.make(false),
   primaryBackendStartup: SubscriptionRef.make<PrimaryBackendStartup>({ _tag: "Starting" }),
   databaseMigrationProgress: Ref.make<DatabaseMigrationProgress | null>(null),
+  attachedService: SubscriptionRef.make(Option.none<AttachedServiceBuild>()),
 });
 
 export const layer = Layer.effect(DesktopState, make);

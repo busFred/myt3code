@@ -12,6 +12,7 @@ import { ChildProcessSpawner } from "effect/process";
 import * as NetService from "@t3tools/shared/Net";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { vi } from "vite-plus/test";
@@ -98,12 +99,16 @@ interface StubbedDesktop {
 const runStubbedDesktop = (stub: StubbedDesktop) =>
   Effect.gen(function* () {
     const quitting = yield* Ref.make(false);
+    const attachedService = yield* SubscriptionRef.make(
+      Option.none<DesktopState.AttachedServiceBuild>(),
+    );
     const runApp = DesktopApp.program
       .pipe(
         Effect.provide(NodeCrypto.layer),
         Effect.provideService(DesktopAppIdentity.DesktopAppIdentity, {
           resolveUserDataPath: Effect.succeed("/isolated/userdata"),
           configure: stub.record("identity"),
+          commitHash: Effect.succeedNone,
         } as DesktopAppIdentity.DesktopAppIdentity["Service"]),
         Effect.provideService(ElectronApp.ElectronApp, {
           setPath: () => Effect.void,
@@ -178,6 +183,7 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
         } as DesktopSnapShot.DesktopSnapShot["Service"]),
         Effect.provideService(DesktopState.DesktopState, {
           quitting,
+          attachedService,
         } as DesktopState.DesktopState["Service"]),
         Effect.provideService(DesktopWindow.DesktopWindow, {
           ensureMain: stub

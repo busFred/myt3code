@@ -40,6 +40,7 @@ import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopStartupRecovery from "./DesktopStartupRecovery.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopRemoteUpdates from "../updates/DesktopRemoteUpdates.ts";
+import * as DesktopServiceCatchUp from "../updates/DesktopServiceCatchUp.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopUpstreamRelease from "../updates/DesktopUpstreamRelease.ts";
 import * as DesktopSnapShot from "../snapShot/DesktopSnapShot.ts";
@@ -436,6 +437,7 @@ const startup = Effect.gen(function* () {
   // Sets canInstallUpdates, which the backend bootstrap payload reads.
   yield* updates.configure;
   yield* DesktopRemoteUpdates.listen;
+  yield* DesktopServiceCatchUp.listen;
   yield* (yield* DesktopUpstreamRelease.DesktopUpstreamRelease).start;
   yield* DesktopStartupRecovery.listen;
   const backendStarted = yield* startLocalBackend.pipe(

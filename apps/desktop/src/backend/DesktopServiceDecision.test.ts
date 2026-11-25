@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  appCatchUpDecision,
   closeChoiceBehavior,
   closeDecision,
   closeDialogChoices,
@@ -125,6 +126,33 @@ describe("background service update", () => {
     ["required", "failure", 1, "cancel"],
   ] as const)("%s %s response=%s -> %s", (trigger, phase, response, expected) => {
     expect(serviceUpdateResponse(trigger, phase, response)).toBe(expected);
+  });
+});
+
+describe("app catching up to the background service", () => {
+  it.each([
+    { label: "newer service", serviceVersion: "0.1.12-rev.1", expected: "update" },
+    { label: "newer service on a stable release", serviceVersion: "0.2.0", expected: "update" },
+    { label: "older service", serviceVersion: "0.1.10", expected: "none" },
+    { label: "same build", serviceBuild: "FD75C53052DF", expected: "none" },
+    { label: "same build, longer hash", serviceBuild: "fd75c53052df0123", expected: "none" },
+    {
+      label: "same version, other build",
+      serviceBuild: "d2d1243a5da8",
+      expected: "reinstall-if-published",
+    },
+    { label: "service build unknown", serviceBuild: undefined, expected: "none" },
+    { label: "app build unknown", appBuild: undefined, expected: "none" },
+    { label: "unparsable service version", serviceVersion: "dev", expected: "none" },
+  ] as const)("$label -> $expected", ({ expected, ...overrides }) => {
+    const { label: _label, ...input } = {
+      appVersion: "0.1.11",
+      appBuild: "fd75c53052df" as string | undefined,
+      serviceVersion: "0.1.11",
+      serviceBuild: "fd75c53052df" as string | undefined,
+      ...overrides,
+    };
+    expect(appCatchUpDecision(input)).toBe(expected);
   });
 });
 

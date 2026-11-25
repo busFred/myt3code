@@ -74,6 +74,37 @@ export const serviceUpdateDecision = (input: {
     : "skip";
 };
 
+/** Builds are commit hashes, which releases and the app may record at different lengths. */
+export const sameBuild = (left: string, right: string) => {
+  const [a, b] = [left.trim().toLowerCase(), right.trim().toLowerCase()];
+  return a.length > 0 && b.length > 0 && (a.startsWith(b) || b.startsWith(a));
+};
+
+/**
+ * Whether the app follows a background service that is ahead of it. Never a downgrade: an older
+ * service is the service's to update. A same-version service on another build counts only when
+ * that build is the release's, so the caller checks the published BUILD before reinstalling.
+ */
+export const appCatchUpDecision = (input: {
+  readonly appVersion: string;
+  readonly appBuild: string | undefined;
+  readonly serviceVersion: string;
+  readonly serviceBuild: string | undefined;
+}) => {
+  if (parseSemver(input.appVersion) === null || parseSemver(input.serviceVersion) === null)
+    return "none";
+  const order = compareSemverVersions(input.serviceVersion, input.appVersion);
+  if (order > 0) return "update";
+  if (
+    order < 0 ||
+    input.appBuild === undefined ||
+    input.serviceBuild === undefined ||
+    sameBuild(input.appBuild, input.serviceBuild)
+  )
+    return "none";
+  return "reinstall-if-published";
+};
+
 export const serviceUpdateResponse = (
   trigger: ServiceUpdateTrigger,
   phase: "confirm" | "failure",
