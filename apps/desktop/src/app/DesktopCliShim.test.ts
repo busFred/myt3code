@@ -4,9 +4,15 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, it as effectIt } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { type CliShimTarget, renderCliShim } from "./DesktopCliShim.ts";
+import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import { type CliShimTarget, installedRuntime, renderCliShim } from "./DesktopCliShim.ts";
 
 const directories: Array<string> = [];
 afterEach(() => {
@@ -26,9 +32,9 @@ const writeExecutable = (path: string, content: string) => {
   NodeFS.writeFileSync(path, content, { mode: 0o755 });
 };
 
-const writeShim = (root: string, target: CliShimTarget) => {
+const writeShim = (root: string, target: CliShimTarget, runtime?: string) => {
   const shim = NodePath.join(root, "bin", "t3");
-  writeExecutable(shim, renderCliShim({ target, shimPath: shim, t3Home: `${root}/home` }));
+  writeExecutable(shim, renderCliShim({ target, shimPath: shim, t3Home: `${root}/home`, runtime }));
   return shim;
 };
 
@@ -189,6 +195,23 @@ describe("renderCliShim", () => {
     ]);
   });
 
+  it("runs the installed t3, and the app's own once that is gone", () => {
+    const root = tempRoot();
+    writeExecutable(NodePath.join(root, "app"), REPORTER);
+    const runtime = NodePath.join(root, "home", "runtime", "versions", "1.2.3", "t3");
+    writeExecutable(runtime, '#!/bin/sh\necho "runtime node=$ELECTRON_RUN_AS_NODE $*"\n');
+    const shim = writeShim(
+      root,
+      { kind: "direct", executable: NodePath.join(root, "app"), entry: "/bin.mjs" },
+      runtime,
+    );
+    expect(run(shim, ["update", "--yes"]).stdout).toBe("runtime node= update --yes\n");
+    NodeFS.rmSync(runtime);
+    const fallback = run(shim, ["update"]);
+    expect(fallback.status).toBe(3);
+    expect(fallback.stdout).toContain("node=1");
+  });
+
   it("writes a Windows launcher that keeps cmd from reinterpreting paths", () => {
     const executable = "C:\\Apps\\R&whoami&X 100%\\!CHANNEL!\\T3 Code.exe";
     const script = renderCliShim({
@@ -208,4 +231,46 @@ describe("renderCliShim", () => {
     expect(bare).toEqual([]);
     expect(lines).toContain('set "T3CODE_CLI_PATH=C:\\Users\\José\\.t3\\bin\\t3.cmd"');
   });
+});
+
+effectIt.layer(NodeServices.layer)("installedRuntime", (it) => {
+  it.effect("is the newest runtime a recorded launcher runs", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-shim-runtime-" });
+      const runtime = (version: string) => path.join(baseDir, "runtime", "versions", version, "t3");
+      for (const version of ["1.2.3", "1.10.0"]) {
+        yield* fs.makeDirectory(path.dirname(runtime(version)), { recursive: true });
+        yield* fs.writeFileString(runtime(version), "");
+      }
+      const script = (target: string) => `#!/bin/sh\nexec '${target}' "$@"\n`;
+      const launchers = {
+        older: path.join(baseDir, "a", "t3"),
+        newer: path.join(baseDir, "b", "t3"),
+        missing: path.join(baseDir, "c", "t3"),
+        foreign: path.join(baseDir, "d", "t3"),
+      };
+      for (const launcher of Object.values(launchers)) {
+        yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+      }
+      yield* fs.writeFileString(launchers.older, script(runtime("1.2.3")));
+      yield* fs.symlink(runtime("1.10.0"), launchers.newer);
+      yield* fs.writeFileString(launchers.missing, script(runtime("9.0.0")));
+      yield* fs.writeFileString(launchers.foreign, script("/usr/local/bin/t3"));
+      const find = installedRuntime.pipe(
+        Effect.provideService(DesktopEnvironment.DesktopEnvironment, {
+          path,
+          baseDir,
+          platform: "linux",
+        } as DesktopEnvironment.DesktopEnvironment["Service"]),
+      );
+      assert.isUndefined(yield* find);
+      yield* fs.writeFileString(
+        path.join(baseDir, "runtime", "launchers"),
+        `${Object.values(launchers).join("\n")}\n`,
+      );
+      assert.equal(yield* find, runtime("1.10.0"));
+    }),
+  );
 });

@@ -1,5 +1,10 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
+  readCliShimRuntime,
+  readCliShimTarget,
+  renderCliShim,
+} from "@t3tools/shared/desktopCliShim";
+import {
   CLI_RELEASE_BASE_URL_ENV,
   CLI_RELEASE_BUILD_FILE,
   CLI_RELEASE_CHANNELS,
@@ -339,6 +344,39 @@ export const repointRecordedLaunchers = Effect.fn("cli.update.repoint_recorded_l
     return repointed;
   },
 );
+
+/**
+ * The app's `t3` launcher runs the runtime this home's launchers run, so it moves with them. One
+ * without that branch (an app-only machine, or an older app) is the app's to rewrite.
+ */
+const repointDesktopLauncher = Effect.fn("cli.update.repoint_desktop_launcher")(function* (input: {
+  readonly baseDir: string;
+  readonly targetEntryPath: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  const shimPath = path.join(input.baseDir, "bin", platform === "win32" ? "t3.cmd" : "t3");
+  const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
+  if (Option.isNone(contents) || readCliShimRuntime(contents.value) === undefined) return;
+  const target = readCliShimTarget(contents.value);
+  if (target === undefined) return;
+  yield* fs
+    .writeFileString(
+      shimPath,
+      renderCliShim({
+        target,
+        shimPath,
+        t3Home: input.baseDir,
+        runtime: input.targetEntryPath,
+      }),
+    )
+    .pipe(
+      Effect.catch((error) =>
+        Console.warn(`Could not repoint the desktop app's t3 launcher at ${shimPath}: ${error}`),
+      ),
+    );
+});
 
 /** Windows executables see their own path, so find the installer shim by matching t3.cmd targets on PATH. */
 export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(function* (
@@ -841,6 +879,9 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
           targetEntryPath: runtime.entryPath,
         })
       : false;
+  if (Option.isSome(repointed) || recordedRepointed) {
+    yield* repointDesktopLauncher({ baseDir: input.baseDir, targetEntryPath: runtime.entryPath });
+  }
 
   // The app's installer closes it; reopen it only when it was open and the service switches now.
   const appStep =
@@ -898,9 +939,10 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     const unit = yield* fs
       .readFile(status.unitPath)
       .pipe(Effect.map(decodeServiceUnit), Effect.option);
+    // The runtime this t3 runs from is kept as a running process, not by its version.
     yield* prunePinnedRuntimes({
       baseDir: input.baseDir,
-      keep: [currentVersion, targetVersion],
+      keep: [targetVersion],
       references: Option.toArray(Option.flatMapNullishOr(unit, BootService.bootServiceProgramOf)),
     });
   }

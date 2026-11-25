@@ -7,8 +7,10 @@ import {
   DESKTOP_CLI_SHIM_MARKER as MARKER,
   DESKTOP_CLI_SHIM_SERVER_ENTRY as SERVER_ENTRY,
   renderCliShim,
+  standaloneLauncherTarget,
   type CliShimTarget,
 } from "@t3tools/shared/desktopCliShim";
+import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
@@ -23,6 +25,49 @@ export const launcherPath = (environment: DesktopEnvironment.DesktopEnvironment[
     "bin",
     environment.platform === "win32" ? "t3.cmd" : "t3",
   );
+
+/** The newest standalone t3 this home's recorded launchers run, which this launcher then runs too. */
+export const installedRuntime = Effect.gen(function* () {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const fs = yield* FileSystem.FileSystem;
+  const path = environment.path;
+  const versionsDir = path.join(environment.baseDir, "runtime", "versions");
+  const records = yield* fs
+    .readFileString(path.join(environment.baseDir, "runtime", "launchers"))
+    .pipe(Effect.orElseSucceed(() => ""));
+  let newest: { readonly version: string; readonly executable: string } | undefined;
+  for (const launcher of new Set(records.split(/\r?\n/).filter((line) => path.isAbsolute(line)))) {
+    const link = yield* fs.readLink(launcher).pipe(Effect.option);
+    // Stat first so a runtime binary recorded by mistake is never read whole.
+    const small = yield* fs.stat(launcher).pipe(
+      Effect.map((info) => info.type === "File" && info.size <= 4096n),
+      Effect.orElseSucceed(() => false),
+    );
+    const executable = Option.isSome(link)
+      ? path.resolve(path.dirname(launcher), link.value)
+      : small
+        ? standaloneLauncherTarget(
+            yield* fs.readFileString(launcher).pipe(Effect.orElseSucceed(() => "")),
+            environment.platform,
+          )
+        : undefined;
+    if (executable === undefined) continue;
+    const [version, name, ...rest] = path.relative(versionsDir, executable).split(/[\\/]/);
+    if (
+      version === undefined ||
+      parseSemver(version) === null ||
+      !/^t3(?:\.exe)?$/i.test(name ?? "") ||
+      rest.length > 0 ||
+      !(yield* fs.exists(executable).pipe(Effect.orElseSucceed(() => false)))
+    ) {
+      continue;
+    }
+    if (newest === undefined || compareSemverVersions(version, newest.version) > 0) {
+      newest = { version, executable };
+    }
+  }
+  return newest?.executable;
+});
 
 export const install = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -42,7 +87,8 @@ export const install = Effect.gen(function* () {
         }),
         onNone: () => ({ kind: "direct" as const, executable: process.execPath, entry }),
       });
-  const content = renderCliShim({ target, shimPath, t3Home: environment.baseDir });
+  const runtime = yield* installedRuntime;
+  const content = renderCliShim({ target, shimPath, t3Home: environment.baseDir, runtime });
 
   return yield* Effect.gen(function* () {
     const existing = yield* fs.readFileString(shimPath).pipe(Effect.option);
