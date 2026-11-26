@@ -23,11 +23,10 @@ import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import { PlusIcon } from "lucide-react";
-import { T, useGT, useMessages, Var } from "gt-react";
+import { T, useGT, useLocale, useMessages, Var } from "gt-react";
 import { type ReactNode, useId, useRef, useState } from "react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
-import { cn } from "~/lib/utils";
 import { useEnvironment } from "~/state/environments";
 import { mintPairingCodeOn } from "~/state/peerPairingCode";
 import { inviteDesktopAppTo } from "~/state/peerLinkSessions";
@@ -401,6 +400,7 @@ export function LinkEnvironmentDialog({
     ...(turnsOnSource ? [source.label] : []),
     ...(turnsOnTarget ? [target.label] : []),
   ];
+  const locale = useLocale();
   const sourceWritable = useEnvironmentScope(environmentId, AuthAccessWriteScope);
   const sourceConnection = usePreparedConnection(environmentId);
   const reverse = linkBack.reverseFor(targetId);
@@ -750,68 +750,80 @@ export function LinkEnvironmentDialog({
                 disabled={busy || (sourceLinks.data === null && sourceLinks.error === null)}
               />
             ) : null}
-            {turnsOn.length > 0 ? (
-              <p className="text-xs text-muted-foreground">
-                {gt("Also turns on Linked environments on {label}.", {
-                  label: turnsOn.join(", "),
-                })}
-              </p>
-            ) : null}
-            {machine === null || source === null ? null : backOffer.kind === "offered" ? (
-              <label className="flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default">
-                <Checkbox
-                  checked={alsoLinkBack}
-                  disabled={busy}
-                  onCheckedChange={setAlsoLinkBack}
-                />
-                <span className="min-w-0 space-y-0.5">
-                  <span className="block font-medium text-foreground">
-                    {gt("Also link {target} back to {source}", {
-                      source: source.label,
-                      target: machine.label,
+            {turnsOn.length > 0 ||
+            invite !== null ||
+            (machine !== null &&
+              source !== null &&
+              (backOffer.kind === "offered" || backOffer.kind === "blocked")) ? (
+              <div className="space-y-3 rounded-lg border p-3">
+                <p className="text-xs font-medium text-foreground">{gt("Both ways")}</p>
+                {machine === null || source === null ? null : backOffer.kind === "offered" ? (
+                  <label className="flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default">
+                    <Checkbox
+                      checked={alsoLinkBack}
+                      disabled={busy}
+                      onCheckedChange={setAlsoLinkBack}
+                    />
+                    <span className="min-w-0 space-y-0.5">
+                      <span className="block font-medium text-foreground">
+                        {gt("Also link {target} back to {source}", {
+                          source: source.label,
+                          target: machine.label,
+                        })}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {gt("Agents on {target} can then work on {source} too.", {
+                          source: source.label,
+                          target: machine.label,
+                        })}
+                      </span>
+                    </span>
+                  </label>
+                ) : backOffer.kind === "blocked" ? (
+                  <p className="text-xs text-muted-foreground">
+                    {linkBackBlockLabel(
+                      backOffer.reason,
+                      { source: source.label, target: machine.label },
+                      m,
+                    )}
+                  </p>
+                ) : null}
+                {invite !== null ? (
+                  inviteSendable ? (
+                    <label className="flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default">
+                      <Checkbox
+                        checked={alsoInvite}
+                        disabled={busy}
+                        onCheckedChange={setAlsoInvite}
+                      />
+                      <span className="min-w-0 space-y-0.5">
+                        <span className="block font-medium text-foreground">
+                          {gt("Invite {target}'s desktop app", { target: invite.app.label })}
+                        </span>
+                        <span className="block text-xs text-muted-foreground">
+                          {gt("It adds {source} to its environments within a day.", {
+                            source: invite.host.label,
+                          })}
+                        </span>
+                      </span>
+                    </label>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      {gt(
+                        "This app connects to {label} over plain http, so it cannot invite the desktop app there.",
+                        { label: invite.app.label },
+                      )}
+                    </p>
+                  )
+                ) : null}
+                {turnsOn.length > 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {gt("Turns on Linked environments on {label}.", {
+                      label: new Intl.ListFormat(locale, { type: "conjunction" }).format(turnsOn),
                     })}
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    {gt("Agents on {target} can then work on {source} too.", {
-                      source: source.label,
-                      target: machine.label,
-                    })}
-                  </span>
-                </span>
-              </label>
-            ) : backOffer.kind === "blocked" ? (
-              <p className="text-xs text-muted-foreground">
-                {linkBackBlockLabel(
-                  backOffer.reason,
-                  { source: source.label, target: machine.label },
-                  m,
-                )}
-              </p>
-            ) : null}
-            {invite !== null ? (
-              inviteSendable ? (
-                <label
-                  className={cn(
-                    "flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default",
-                    !linkingBack && backOffer.kind === "offered" && "ml-6.5",
-                  )}
-                >
-                  <Checkbox checked={alsoInvite} disabled={busy} onCheckedChange={setAlsoInvite} />
-                  <span className="block min-w-0 font-medium text-foreground">
-                    {gt("Also invite the desktop app on {target} to connect to {source}", {
-                      source: invite.host.label,
-                      target: invite.app.label,
-                    })}
-                  </span>
-                </label>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  {gt(
-                    "This app connects to {label} over plain http, so it cannot invite the desktop app there.",
-                    { label: invite.app.label },
-                  )}
-                </p>
-              )
+                  </p>
+                ) : null}
+              </div>
             ) : null}
           </form>
         </DialogPanel>

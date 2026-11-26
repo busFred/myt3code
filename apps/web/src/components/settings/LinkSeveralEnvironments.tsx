@@ -16,7 +16,7 @@ import {
   type EnvironmentId,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
-import { T, useGT, useMessages } from "gt-react";
+import { T, useGT, useLocale, useMessages } from "gt-react";
 import { useId, useRef, useState } from "react";
 
 import { useEnvironments } from "~/state/environments";
@@ -94,6 +94,7 @@ export function LinkSeveralEnvironmentsDialog({
   readonly presetOnly?: boolean;
 }) {
   const gt = useGT();
+  const locale = useLocale();
   const m = useMessages();
   const formId = useId();
   const { environments } = useEnvironments();
@@ -466,48 +467,62 @@ export function LinkSeveralEnvironmentsDialog({
             ) : null}
             <LinkAccessPicker value={access} onChange={setAccess} disabled={busy} />
             <LinkExpiryPicker value={lifetimeId} onChange={setLifetimeId} disabled={busy} />
-            {turnsOn.length > 0 ? (
-              <p className="text-xs text-muted-foreground">
-                {gt("Also turns on Linked environments on {label}.", {
-                  label: turnsOn.join(", "),
-                })}
-              </p>
-            ) : null}
-            {backOffered && sourceLabel !== undefined ? (
-              <label className="flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default">
-                <Checkbox
-                  checked={alsoLinkBack}
-                  disabled={busy}
-                  onCheckedChange={setAlsoLinkBack}
-                />
-                <span className="min-w-0 space-y-0.5">
-                  <span className="block font-medium text-foreground">
-                    {gt("Also link each machine back to {source}", { source: sourceLabel })}
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    {gt("Agents there can then work on {source} too.", { source: sourceLabel })}
-                    {alsoLinkBack && oneWayOnly > 0
-                      ? ` ${gt(
-                          "{count, plural, one {# machine stays one-way.} other {# machines stay one-way.}}",
-                          { count: oneWayOnly },
-                        )}`
-                      : null}
-                  </span>
-                </span>
-              </label>
-            ) : null}
-            {backOffered &&
-            alsoLinkBack &&
-            access === "full-access" &&
-            sourceLabel !== undefined ? (
-              <label className="ml-6.5 flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default">
-                <Checkbox checked={alsoInvite} disabled={busy} onCheckedChange={setAlsoInvite} />
-                <span className="block min-w-0 font-medium text-foreground">
-                  {gt("Also invite each machine's desktop app to connect to {source}", {
-                    source: sourceLabel,
-                  })}
-                </span>
-              </label>
+            {turnsOn.length > 0 || (backOffered && sourceLabel !== undefined) ? (
+              <div className="space-y-3 rounded-lg border p-3">
+                <p className="text-xs font-medium text-foreground">{gt("Both ways")}</p>
+                {backOffered && sourceLabel !== undefined ? (
+                  <label className="flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default">
+                    <Checkbox
+                      checked={alsoLinkBack}
+                      disabled={busy}
+                      onCheckedChange={setAlsoLinkBack}
+                    />
+                    <span className="min-w-0 space-y-0.5">
+                      <span className="block font-medium text-foreground">
+                        {gt("Also link each machine back to {source}", { source: sourceLabel })}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {gt("Agents there can then work on {source} too.", { source: sourceLabel })}
+                        {alsoLinkBack && oneWayOnly > 0
+                          ? ` ${gt(
+                              "{count, plural, one {# machine stays one-way.} other {# machines stay one-way.}}",
+                              { count: oneWayOnly },
+                            )}`
+                          : null}
+                      </span>
+                    </span>
+                  </label>
+                ) : null}
+                {backOffered &&
+                alsoLinkBack &&
+                access === "full-access" &&
+                sourceLabel !== undefined ? (
+                  <label className="flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default">
+                    <Checkbox
+                      checked={alsoInvite}
+                      disabled={busy}
+                      onCheckedChange={setAlsoInvite}
+                    />
+                    <span className="min-w-0 space-y-0.5">
+                      <span className="block font-medium text-foreground">
+                        {gt("Invite each machine's desktop app")}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {gt("Each adds {source} to its environments within a day.", {
+                          source: sourceLabel,
+                        })}
+                      </span>
+                    </span>
+                  </label>
+                ) : null}
+                {turnsOn.length > 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {gt("Turns on Linked environments on {label}.", {
+                      label: new Intl.ListFormat(locale, { type: "conjunction" }).format(turnsOn),
+                    })}
+                  </p>
+                ) : null}
+              </div>
             ) : null}
           </form>
         </DialogPanel>
