@@ -13,6 +13,7 @@ import { isMissingEndpointFailure } from "../components/settings/sessionLifetime
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { authEnvironment } from "./auth";
 import { peerLinkEnvironment } from "./peerLinks";
+import { readPreparedConnection } from "./session";
 
 // The failure cause can hold the request, and with it a pairing code; keep it out of the console.
 const run = async <W, A, E>(
@@ -61,15 +62,13 @@ export function inviteDesktopAppTo(input: {
       revokeCode: (environmentId, id) =>
         run(authEnvironment.revokePairingLink, { environmentId, input: { id } }),
       isUnsupported: isMissingEndpointFailure,
+      appConnectionUrl: (environmentId) =>
+        readPreparedConnection(environmentId)?.httpBaseUrl ?? null,
     },
   });
 }
 
-/**
- * Gives `link`, held by `sourceId`, a new lifetime on the machine it reaches, then has the source
- * ask that machine when it now ends, so the new expiry shows. That second step is best effort: an
- * older source answers 404 and shows the new expiry on its next call there.
- */
+/** Gives `link`, held by `sourceId`, a new lifetime on the machine it reaches. */
 export async function setPeerLinkExpiry(
   sourceId: EnvironmentId,
   link: Pick<PeerLinkSummary, "environmentId" | "peerSessionId">,
@@ -81,13 +80,14 @@ export async function setPeerLinkExpiry(
     ops: {
       renew: (environmentId, input) => run(authEnvironment.renewClient, { environmentId, input }),
       isUnsupported: isMissingEndpointFailure,
+      refreshSource: () =>
+        run(authEnvironment.refreshPeerLinkExpiry, {
+          environmentId: sourceId,
+          input: { environmentId: link.environmentId },
+        }),
     },
   });
   if (outcome.kind === "done") {
-    await run(authEnvironment.refreshPeerLinkExpiry, {
-      environmentId: sourceId,
-      input: { environmentId: link.environmentId },
-    });
     appAtomRegistry.refresh(peerLinkEnvironment.list({ environmentId: sourceId, input: {} }));
   }
   return outcome;

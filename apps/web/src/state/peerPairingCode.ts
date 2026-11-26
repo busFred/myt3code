@@ -18,15 +18,15 @@ const mintPairingCode = createPeerLinkCodeCommand(connectionAtomRuntime);
 const mintMcpApprovalCode = createMcpApprovalCodeCommand(connectionAtomRuntime);
 
 /**
- * A fresh pairing code minted on `environmentId` with this client's session
- * there, for linking with `access`, its session lasting `lifetime` (absent keeps
- * that server's default). Fails with `PeerPairingCodeError` when the session may
- * not create one.
+ * A fresh link code minted on `environmentId` with this client's session there, at `access`
+ * for `lifetime` (absent: that server's default). `onLifetimeDropped` hears of a server too
+ * old to keep the lifetime. Fails with `PeerPairingCodeError` when the session may not mint.
  */
 export async function mintPairingCodeOn(
   environmentId: EnvironmentId,
   access: AuthMcpClientAccess,
   lifetime?: AuthSessionLifetime,
+  onLifetimeDropped?: (environmentId: EnvironmentId) => void,
 ): Promise<Result.Result<string, unknown>> {
   const result = await runAtomCommand(
     appAtomRegistry,
@@ -34,9 +34,9 @@ export async function mintPairingCodeOn(
     { environmentId, input: { access, ...(lifetime === undefined ? {} : { lifetime }) } },
     { reportFailure: false },
   );
-  return result._tag === "Success"
-    ? Result.succeed(result.value)
-    : Result.fail(squashAtomCommandFailure(result));
+  if (result._tag !== "Success") return Result.fail(squashAtomCommandFailure(result));
+  if (result.value.lifetimeDropped) onLifetimeDropped?.(environmentId);
+  return Result.succeed(result.value.credential);
 }
 
 /** A fresh code on `environmentId` that approves one app's sign-in at `access`. */

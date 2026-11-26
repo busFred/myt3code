@@ -49,11 +49,13 @@ export const linkLifetime = (id: RenewLifetimeId): AuthSessionLifetime | undefin
 /**
  * Where the link expiry picker starts. A link being made again keeps how long it lasts, so
  * renewing never shortens one that never expires; one ending over a month away lasts a year.
+ * `undefined`: the source's links are not read yet, so there is no default to give.
  */
 export function defaultLinkLifetimeId(
-  existingExpiresAtMillis: number | null,
+  existingExpiresAtMillis: number | null | undefined,
   nowMillis: number,
-): RenewLifetimeId {
+): RenewLifetimeId | null {
+  if (existingExpiresAtMillis === undefined) return null;
   if (existingExpiresAtMillis === null) return "30-days";
   if (isNeverExpiring(existingExpiresAtMillis)) return "never";
   return existingExpiresAtMillis - nowMillis > 31 * DAY_MILLIS ? "1-year" : "30-days";

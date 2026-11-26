@@ -352,8 +352,7 @@ export function fleetLinkBackOffered(graph: FleetGraph, edge: FleetLinkEdge): bo
     },
     target: {
       connected: target.phase === "connected",
-      offersLinks: target.linking !== "off" && !target.turnsOnLinks,
-      canTurnOnLinks: target.turnsOnLinks,
+      offersLinks: target.linking !== "off",
       writable: target.canWriteAccess,
       links:
         target.outgoing === "loaded"

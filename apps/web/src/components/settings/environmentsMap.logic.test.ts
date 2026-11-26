@@ -537,7 +537,7 @@ describe("fleetLinkOffer", () => {
     expect(reason("guest", "cups")).toBe("source-forbidden");
   });
 
-  it("links from a machine with links off that the client may turn them on at, and back to it", () => {
+  it("links from a machine with links off that the client may turn them on at", () => {
     const off = { offersLinks: false, canTurnOnLinks: true } as const;
     const turnable = build([environment("nolabs", "off", off), environment("cups")]);
     expect(fleetLinkOffer(turnable, node("nolabs"), node("cups"))).toMatchObject({
@@ -552,13 +552,13 @@ describe("fleetLinkOffer", () => {
     expect(fleetLinkOffer(forbidden, node("nolabs"), node("cups"))).toMatchObject({
       reason: "source-forbidden",
     });
-    // Its links are not read while off, and linking back from it turns them on first.
+    // The map does not read its links while off, and one it kept to cups would be replaced.
     const oneWay = build([
       environment("cups", [link("nolabs")]),
       environment("nolabs", "off", off),
     ]);
     const edgeToIt = oneWay.edges.filter(isLinkEdge).find((entry) => entry.to === node("nolabs"))!;
-    expect(fleetLinkBackOffered(oneWay, edgeToIt)).toBe(true);
+    expect(fleetLinkBackOffered(oneWay, edgeToIt)).toBe(false);
   });
 });
 

@@ -13,17 +13,28 @@ import type {
   AuthRevokePairingLinkInput,
 } from "@t3tools/contracts";
 import { WS_METHODS } from "@t3tools/contracts";
+import { carriesCredentialsSafely } from "@t3tools/shared/hostClassification";
 import * as Effect from "effect/Effect";
 import type { HttpClient } from "effect/http";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Stream from "effect/Stream";
 import { Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { subscribe } from "../rpc/client.ts";
 import { executeConnectedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 import { createEnvironmentCommand, createEnvironmentSubscriptionAtomFamily } from "./runtime.ts";
 
 const ACCESS_REQUEST_TIMEOUT_MS = 8_000;
+
+/** This client reaches the environment over plain http, which must not carry an invite's code. */
+class AppInviteUnsafeConnectionError extends Schema.TaggedError<AppInviteUnsafeConnectionError>()(
+  "AppInviteUnsafeConnectionError",
+  {},
+) {}
 // These carry or return pairing codes, which must not follow a redirect to another origin.
 const NO_REDIRECTS: RequestInit = { redirect: "error" };
 
@@ -143,15 +154,22 @@ export function createAuthEnvironmentAtoms<R, E>(
     }),
     createAppInvite: createEnvironmentCommand(runtime, {
       label: "environment-data:server:access-create-app-invite",
-      execute: (input: AuthCreateAppInviteInput) =>
-        executeConnectedEnvironmentHttpRequest({
+      execute: Effect.fnUntraced(function* (input: AuthCreateAppInviteInput) {
+        // The invite carries another environment's full-access code: never over plain http.
+        const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+        const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+        if (Option.isSome(prepared) && !carriesCredentialsSafely(prepared.value.httpBaseUrl)) {
+          return yield* new AppInviteUnsafeConnectionError();
+        }
+        return yield* executeConnectedEnvironmentHttpRequest({
           group: "access",
           method: "POST",
           url: (urls) => urls.createAppInvite(),
           timeoutMs: ACCESS_REQUEST_TIMEOUT_MS,
           requestInit: NO_REDIRECTS,
           request: ({ client, headers }) => client.createAppInvite({ headers, payload: input }),
-        }),
+        });
+      }),
     }),
     revokeAppInvite: createEnvironmentCommand(runtime, {
       label: "environment-data:server:access-revoke-app-invite",

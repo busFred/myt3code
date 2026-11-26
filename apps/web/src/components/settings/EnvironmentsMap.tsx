@@ -464,6 +464,7 @@ export function EnvironmentsMap(
   const openLinkDialog = (
     environmentId: EnvironmentId,
     offer: Extract<FleetLinkOffer, { kind: "link" }> | null,
+    linkingBack = false,
   ) => {
     setDropped(null);
     setLinkRequest((current) => ({
@@ -474,7 +475,7 @@ export function EnvironmentsMap(
         offer === null
           ? { choice: null }
           : offer.target.kind === "machine"
-            ? { choice: offer.target.environmentId }
+            ? { choice: offer.target.environmentId, ...(linkingBack ? { linkingBack } : {}) }
             : {
                 choice: ANOTHER_ADDRESS,
                 address: offer.target.address ?? "",
@@ -483,9 +484,9 @@ export function EnvironmentsMap(
     }));
   };
   /** One link from `sourceId` to `targetId`, whatever is selected. */
-  const requestOneLink = (sourceId: string, targetId: string) => {
+  const requestOneLink = (sourceId: string, targetId: string, linkingBack = false) => {
     const offer = fleetLinkOffer(graph, sourceId, targetId);
-    if (offer.kind === "link") openLinkDialog(offer.sourceEnvironmentId, offer);
+    if (offer.kind === "link") openLinkDialog(offer.sourceEnvironmentId, offer, linkingBack);
   };
   // One way in for every gesture: the handle, a drop, the details and the toolbar.
   const requestLink = (sourceId: string, targetId: string | null) => {
@@ -559,7 +560,7 @@ export function EnvironmentsMap(
           found={found}
           onSelect={select}
           onLinkFrom={(sourceId) => requestLink(sourceId, null)}
-          onLinkBack={(edge) => requestOneLink(edge.to, edge.from)}
+          onLinkBack={(edge) => requestOneLink(edge.to, edge.from, true)}
           onToggleStack={toggleStack}
         />
       </SettingsSearchTarget>

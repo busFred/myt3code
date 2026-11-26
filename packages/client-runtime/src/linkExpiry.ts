@@ -12,7 +12,11 @@ import * as Result from "effect/Result";
  * `not_found`: that session is gone there. `unsupported`: that server predates renewing.
  */
 export type LinkExpiryOutcome =
-  | { readonly kind: "done" }
+  /**
+   * `sourceUpdated`: the linking side asked for the new expiry. It learns a shorter one only
+   * when asked, so until then it shows the old one; renewing again asks again.
+   */
+  | { readonly kind: "done"; readonly sourceUpdated: boolean }
   | {
       readonly kind: "failed";
       readonly failure: "unknown_session" | "not_found" | "unsupported" | "other";
@@ -32,6 +36,8 @@ export async function renewPeerLink(input: {
       input: AuthRenewClientSessionInput,
     ) => Promise<Result.Result<{ readonly renewed: boolean }, unknown>>;
     readonly isUnsupported?: (failure: unknown) => boolean;
+    /** Has the linking side ask the other when the link now ends. */
+    readonly refreshSource: () => Promise<Result.Result<unknown, unknown>>;
   };
 }): Promise<LinkExpiryOutcome> {
   const { link, ops } = input;
@@ -44,7 +50,9 @@ export async function renewPeerLink(input: {
       expectedSubject: MCP_CLIENT_SESSION_SUBJECT,
     });
     if (Result.isSuccess(renewed)) {
-      return renewed.success.renewed ? { kind: "done" } : { kind: "failed", failure: "not_found" };
+      if (!renewed.success.renewed) return { kind: "failed", failure: "not_found" };
+      const refreshed = await ops.refreshSource().catch((cause: unknown) => Result.fail(cause));
+      return { kind: "done", sourceUpdated: Result.isSuccess(refreshed) };
     }
     return {
       kind: "failed",
@@ -54,3 +62,9 @@ export async function renewPeerLink(input: {
     return { kind: "failed", failure: "other" };
   }
 }
+
+/** The server minting a link's code predates lifetimes and dropped the one asked for. */
+export const peerLinkLifetimeDropped = (
+  requested: AuthSessionLifetime | undefined,
+  minted: AuthSessionLifetime | undefined,
+): boolean => requested !== undefined && minted === undefined;

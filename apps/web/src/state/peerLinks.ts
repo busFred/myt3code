@@ -207,12 +207,14 @@ export function useLinkBackOffers(
   }).find((machine) => machine.environmentId === sourceId);
   const wanted = new Set(targetIds);
   const targets = environments.filter((environment) => wanted.has(environment.environmentId));
+  // One with links off still answers its list: links it kept work again once they are on.
   const listed = targets
     .filter(
       (target) =>
         enabled &&
         target.connection.phase === "connected" &&
-        offersLinkedEnvironments(target.serverConfig) &&
+        (offersLinkedEnvironments(target.serverConfig) ||
+          canTurnOnLinks(target.serverConfig, settingsWritable.has(target.environmentId))) &&
         writable.has(target.environmentId),
     )
     .map((target) => target.environmentId);

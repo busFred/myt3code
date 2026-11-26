@@ -34,6 +34,7 @@ const recordingOps = (fail: Record<string, unknown> = {}) => {
     },
     revokeCode: (environmentId, id) => result(`revoke:${environmentId}:${id}`, undefined),
     isUnsupported: (failure) => failure === NOT_FOUND,
+    appConnectionUrl: () => "https://b.example.ts.net",
   };
   return { ops, calls, invited };
 };
@@ -77,6 +78,40 @@ describe("inviteDesktopApp", () => {
       }),
     ).toEqual({ kind: "failed", failure: "other" });
     expect(refused.calls).toContain("revoke:environment-a:app-link-environment-a");
+
+    // A request that throws leaves the code unused as well.
+    const thrown = recordingOps();
+    expect(
+      await inviteDesktopApp({
+        host: host(["https://a.example.ts.net"]),
+        app,
+        appLinkAccess: "full-access",
+        ops: { ...thrown.ops, createInvite: () => Promise.reject(new Error("offline")) },
+      }),
+    ).toEqual({ kind: "failed", failure: "other" });
+    expect(thrown.calls).toContain("revoke:environment-a:app-link-environment-a");
+  });
+
+  it("sends the code only over a connection to the app's machine that encrypts it", async () => {
+    for (const [url, sent] of [
+      ["http://192.168.1.9:3773", false],
+      [null, false],
+      ["http://b.tail1234.ts.net:3773", true],
+      ["https://b.example.com", true],
+    ] as const) {
+      const { ops, calls } = recordingOps();
+      const outcome = await inviteDesktopApp({
+        host: host(["https://a.example.ts.net"]),
+        app,
+        appLinkAccess: "full-access",
+        ops: { ...ops, appConnectionUrl: () => url },
+      });
+      expect(outcome, String(url)).toEqual(
+        sent ? { kind: "invited" } : { kind: "skipped", reason: "unsafe_connection" },
+      );
+      // Nothing is minted for an invite that cannot be sent.
+      expect(calls.length > 0, String(url)).toBe(sent);
+    }
   });
 
   it("sends the invite's code only to addresses that encrypt it", async () => {

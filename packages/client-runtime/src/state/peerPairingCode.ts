@@ -21,6 +21,7 @@ import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import { peerLinkLifetimeDropped } from "../linkExpiry.ts";
 import * as ManagedRelay from "../relay/managedRelay.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 import { createEnvironmentCommand } from "./runtime.ts";
@@ -144,12 +145,15 @@ const mintPeerLinkCode = Effect.fnUntraced(function* (input: {
       cause: "The environment did not issue a peer-link code.",
     });
   }
-  return minted.credential;
+  return {
+    credential: minted.credential,
+    lifetimeDropped: peerLinkLifetimeDropped(input.lifetime, minted.lifetime),
+  };
 });
 
 /**
  * `createPeerPairingCodeCommand` with a lifetime for the link's session. Older servers drop
- * the lifetime, and the link gets their default.
+ * the lifetime, and the link gets their default: `lifetimeDropped` says so.
  */
 export function createPeerLinkCodeCommand<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,

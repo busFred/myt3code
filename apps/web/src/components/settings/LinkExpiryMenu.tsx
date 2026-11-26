@@ -30,7 +30,8 @@ export function LinkExpiryPicker({
   onChange,
   disabled = false,
 }: {
-  readonly value: RenewLifetimeId;
+  /** Null until picked where no default applies yet. */
+  readonly value: RenewLifetimeId | null;
   readonly onChange: (next: RenewLifetimeId) => void;
   readonly disabled?: boolean;
 }) {
@@ -50,7 +51,7 @@ export function LinkExpiryPicker({
         }}
       >
         <SelectTrigger aria-labelledby={labelId}>
-          <SelectValue>{labels[value]}</SelectValue>
+          <SelectValue>{value === null ? null : labels[value]}</SelectValue>
         </SelectTrigger>
         <SelectPopup alignItemWithTrigger={false}>
           {RENEW_LIFETIMES.map(({ id }) => (
@@ -80,6 +81,7 @@ export function LinkExpiryMenu({
 }) {
   const gt = useGT();
   const nowMinute = useNowMinute();
+  const source = useEnvironment(environmentId);
   const savedPeer = useEnvironment(link.environmentId);
   const mayManagePeer = useEnvironmentScope(link.environmentId, AuthAccessWriteScope);
   const labels = useLifetimeLabels();
@@ -99,7 +101,7 @@ export function LinkExpiryMenu({
     if (outcome.kind === "done") {
       const described = describeLifetime(lifetime);
       toastManager.add({
-        type: "success",
+        type: outcome.sourceUpdated ? "success" : "warning",
         title:
           described.kind === "never"
             ? gt("{label} never expires", { label: link.label })
@@ -107,6 +109,14 @@ export function LinkExpiryMenu({
                 "{days, plural, one {{label} now expires in {days} day} other {{label} now expires in {days} days}}",
                 { label: link.label, days: described.days },
               ),
+        ...(outcome.sourceUpdated
+          ? {}
+          : {
+              description: gt(
+                "{source} could not be told yet and still shows the old expiry. Pick the expiry again to retry.",
+                { source: source?.label ?? "" },
+              ),
+            }),
       });
       return;
     }

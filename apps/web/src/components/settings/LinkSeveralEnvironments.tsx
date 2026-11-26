@@ -118,6 +118,8 @@ export function LinkSeveralEnvironmentsDialog({
   const [lifetimeId, setLifetimeId] = useState<RenewLifetimeId>("30-days");
   const [alsoInvite, setAlsoInvite] = useState(false);
   const [invites, setInvites] = useState(NO_INVITES);
+  // Machines whose server kept the default lifetime, being too old for the one picked.
+  const [dropped, setDropped] = useState(NO_MACHINES);
   const settingsWritable = useEnvironmentsWithScope(environments, AuthSettingsWriteScope);
   // Enter then a click can both run before a re-render; this guard is synchronous.
   const inFlight = useRef(false);
@@ -180,6 +182,7 @@ export function LinkSeveralEnvironmentsDialog({
       setLifetimeId("30-days");
       setAlsoInvite(false);
       setInvites(NO_INVITES);
+      setDropped(NO_MACHINES);
     }
   };
   const toggle = (id: EnvironmentId, checked: boolean) =>
@@ -201,7 +204,9 @@ export function LinkSeveralEnvironmentsDialog({
       // Each code is minted on the machine being linked to, which must accept links first.
       mint: async (id, level) => {
         await ensureLinkedEnvironmentsOn(id);
-        return mintPairingCodeOn(id, level, lifetime);
+        return mintPairingCodeOn(id, level, lifetime, (old) =>
+          setDropped((current) => new Set(current).add(old)),
+        );
       },
       link: async (input) => {
         const result = await link({ environmentId, input });
@@ -449,6 +454,12 @@ export function LinkSeveralEnvironmentsDialog({
                   ? ` ${gt(
                       "{count, plural, one {# desktop app could not be invited.} other {# desktop apps could not be invited.}}",
                       { count: inviteFailed },
+                    )}`
+                  : null}
+                {dropped.size > 0
+                  ? ` ${gt(
+                      "{count, plural, one {# machine runs an older T3 Code that ignored the expiry, so its link lasts the default 30 days.} other {# machines run an older T3 Code that ignored the expiry, so their links last the default 30 days.}}",
+                      { count: dropped.size },
                     )}`
                   : null}
               </p>

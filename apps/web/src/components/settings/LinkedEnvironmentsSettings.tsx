@@ -18,6 +18,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { peerLinkHealth, type PeerLinkHealth } from "@t3tools/client-runtime/state/peerLinks";
+import { carriesCredentialsSafely } from "@t3tools/shared/hostClassification";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -242,6 +243,8 @@ export interface LinkEnvironmentPrefill {
     readonly environmentId: EnvironmentId;
     readonly label: string;
   };
+  /** The picked machine already links here: this link is the way back. */
+  readonly linkingBack?: true;
 }
 
 /**
@@ -312,6 +315,11 @@ export function LinkEnvironmentDialog({
   const [throughFailed, setThroughFailed] = useState<ReadonlySet<EnvironmentId>>(new Set());
   const [alsoLinkBack, setAlsoLinkBack] = useState(false);
   const [alsoInvite, setAlsoInvite] = useState(false);
+  // Machines whose server kept the default lifetime for a code minted in this submit.
+  const dropped = useRef(new Set<EnvironmentId>());
+  const onLifetimeDropped = (id: EnvironmentId) => {
+    dropped.current.add(id);
+  };
   // Null until picked: a link being made again starts at how long it lasts now.
   const [lifetimeChoice, setLifetimeChoice] = useState<RenewLifetimeId | null>(null);
   const nowMinute = useNowMinute();
@@ -363,45 +371,72 @@ export function LinkEnvironmentDialog({
       : null;
   const linkBack = useLinkBackOffers(environmentId, targetId === null ? [] : [targetId], open);
   const backOffer = linkBack.offerFor(targetId);
-  // A pasted code carries its own lifetime, and a code got through a link carries none.
-  const existing = machine?.linked
-    ? (sourceLinks.data?.links.find((entry) => entry.environmentId === targetId) ?? null)
-    : null;
+  // A pasted code carries its own lifetime, and a code got through a link carries none. Until
+  // the source's links are read, a link it holds there may never expire: no default yet.
+  const existing =
+    sourceLinks.data === null
+      ? undefined
+      : (sourceLinks.data.links.find(
+          (entry) => entry.environmentId === targetId && entry.status !== "expired",
+        ) ?? null);
   const lifetimeId =
     lifetimeChoice ??
     defaultLinkLifetimeId(
-      existing === null ? null : DateTime.toEpochMillis(existing.expiresAt),
+      existing === undefined || existing === null
+        ? existing
+        : DateTime.toEpochMillis(existing.expiresAt),
       DateTime.toEpochMillis(DateTime.makeUnsafe(nowMinute)),
     );
-  const lifetime = canMint ? linkLifetime(lifetimeId) : undefined;
+  const lifetime = canMint && lifetimeId !== null ? linkLifetime(lifetimeId) : undefined;
   const sourceSettingsWritable = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const target = useEnvironment(targetId);
   const targetSettingsWritable = useEnvironmentScope(targetId, AuthSettingsWriteScope);
-  // Both ends need Linked environments on: one to hold the link, the other to accept it.
+  // Both ends need Linked environments on: one to hold the link, the other to accept it. A typed
+  // address may be another machine, so only one of this app's own addresses names the target.
+  const turnsOnSource =
+    source !== null && canTurnOnLinks(source.serverConfig, sourceSettingsWritable);
+  const turnsOnTarget =
+    target !== null && !needsAddress && canTurnOnLinks(target.serverConfig, targetSettingsWritable);
   const turnsOn = [
-    ...(canTurnOnLinks(source?.serverConfig, sourceSettingsWritable) && source !== null
-      ? [source.label]
-      : []),
-    ...(canTurnOnLinks(target?.serverConfig, targetSettingsWritable) && target !== null
-      ? [target.label]
-      : []),
+    ...(turnsOnSource ? [source.label] : []),
+    ...(turnsOnTarget ? [target.label] : []),
   ];
   const sourceWritable = useEnvironmentScope(environmentId, AuthAccessWriteScope);
+  const sourceConnection = usePreparedConnection(environmentId);
   const reverse = linkBack.reverseFor(targetId);
-  // The app's code gives full use of the source, so only a full-access link back pairs with it.
-  const offersInvite =
-    access === "full-access" &&
-    machine !== null &&
-    source !== null &&
-    linkBack.source !== null &&
-    sourceWritable &&
-    mayMint &&
-    ((alsoLinkBack && backOffer.kind === "offered") || reverse?.access === "full-access");
+  const linkingBack = prefill?.linkingBack === true && selected === prefill.choice;
+  // An app's code gives full use of the machine it joins, so it pairs only with a full-access
+  // link from the app's machine to that one: in a link back, this link; otherwise the way back.
+  const invite =
+    machine === null || source === null || access !== "full-access" || !sourceWritable || !mayMint
+      ? null
+      : linkingBack
+        ? {
+            host: {
+              environmentId: machine.environmentId,
+              label: machine.label,
+              urls: machine.urls,
+            },
+            app: { environmentId, label: source.label },
+            connection: sourceConnection,
+          }
+        : linkBack.source !== null &&
+            ((alsoLinkBack && backOffer.kind === "offered") || reverse?.access === "full-access")
+          ? {
+              host: { environmentId, label: source.label, urls: linkBack.source.urls },
+              app: { environmentId: machine.environmentId, label: machine.label },
+              connection: connected,
+            }
+          : null;
+  // The code travels to the app's machine over this app's connection there.
+  const inviteSendable =
+    invite !== null &&
+    carriesCredentialsSafely(Option.getOrNull(invite.connection)?.httpBaseUrl ?? "");
   const ready =
     through !== null ||
     (selected !== null &&
       (!needsAddress || address.trim().length > 0) &&
-      (canMint || pairingCode.trim().length > 0));
+      (canMint ? lifetimeId !== null : pairingCode.trim().length > 0));
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     if (!next) {
@@ -448,7 +483,7 @@ export function LinkEnvironmentDialog({
   // Settles to the code to link with, or null after reporting why there is none.
   const resolvePairingCode = async () => {
     if (!canMint || targetId === null) return pairingCode.trim();
-    const minted = await mintPairingCodeOn(targetId, access, lifetime);
+    const minted = await mintPairingCodeOn(targetId, access, lifetime, onLifetimeDropped);
     if (Result.isSuccess(minted)) return minted.success;
     setMintFailed((failed) => new Set(failed).add(targetId));
     failureToast(
@@ -463,10 +498,9 @@ export function LinkEnvironmentDialog({
     if (inFlight.current || !ready || url === undefined) return;
     inFlight.current = true;
     setBusy(true);
-    if (turnsOn.length > 0) {
-      await ensureLinkedEnvironmentsOn(environmentId);
-      if (targetId !== null) await ensureLinkedEnvironmentsOn(targetId);
-    }
+    dropped.current.clear();
+    if (turnsOnSource) await ensureLinkedEnvironmentsOn(environmentId);
+    if (turnsOnTarget && targetId !== null) await ensureLinkedEnvironmentsOn(targetId);
     const throughInput = through === null ? null : await resolveThrough(through);
     const code = through === null ? await resolvePairingCode() : null;
     const result =
@@ -501,7 +535,7 @@ export function LinkEnvironmentDialog({
         ? await linkWithMintedCode({
             machine: linkBack.source,
             access,
-            mint: (id, level) => mintPairingCodeOn(id, level, lifetime),
+            mint: (id, level) => mintPairingCodeOn(id, level, lifetime, onLifetimeDropped),
             link: async (input) => {
               const reverse = await linkOnTarget({ environmentId: targetId, input });
               return reverse._tag === "Success"
@@ -513,17 +547,17 @@ export function LinkEnvironmentDialog({
     const invited =
       result?._tag === "Success" &&
       alsoInvite &&
-      offersInvite &&
-      linkBack.source !== null &&
-      machine !== null &&
-      result.value.environmentId === machine.environmentId &&
-      (back?.kind === "linked" || reverse?.access === "full-access")
+      invite !== null &&
+      inviteSendable &&
+      result.value.environmentId === machine?.environmentId &&
+      (linkingBack || back?.kind === "linked" || reverse?.access === "full-access")
         ? await inviteDesktopAppTo({
-            host: { environmentId, label: source?.label ?? "", urls: linkBack.source.urls },
-            app: { environmentId: machine.environmentId, label: machine.label },
-            appLinkAccess: back?.kind === "linked" ? access : (reverse?.access ?? access),
+            host: invite.host,
+            app: invite.app,
+            appLinkAccess:
+              linkingBack || back?.kind === "linked" ? access : (reverse?.access ?? access),
             lifetime,
-            codeLabel: gt("App for {label}", { label: machine.label }),
+            codeLabel: gt("App for {label}", { label: invite.app.label }),
           })
         : null;
     inFlight.current = false;
@@ -544,24 +578,37 @@ export function LinkEnvironmentDialog({
           back.detail ?? linkBatchFailureLabel(back.failure, m),
         );
       }
+      const inviteNames = {
+        source: invite?.host.label ?? "",
+        target: invite?.app.label ?? "",
+      };
       if (invited?.kind === "invited") {
         toastManager.add({
           type: "success",
-          title: gt("Invited the desktop app on {target} to connect to {source}", names),
+          title: gt("Invited the desktop app on {target} to connect to {source}", inviteNames),
         });
       } else if (invited !== null) {
         failureToast(
-          gt("Could not invite the desktop app on {target}", names),
+          gt("Could not invite the desktop app on {target}", inviteNames),
           invited.kind === "skipped"
-            ? invited.reason === "no_safe_address"
-              ? gt("Needs an https or Tailscale address")
-              : gt("Only with full access")
+            ? invited.reason === "not_full_access"
+              ? gt("Only with full access")
+              : gt("Needs an https or Tailscale address")
             : invited.failure === "unsupported"
               ? gt("That machine runs an older T3 Code")
               : invited.failure === "no_code"
                 ? linkBatchFailureLabel("no_code", m)
                 : gt("Check that this app is signed in there with access management."),
         );
+      }
+      for (const id of dropped.current) {
+        toastManager.add({
+          type: "warning",
+          title: gt("{host} runs an older T3 Code", {
+            host: (id === environmentId ? source?.label : machine?.label) ?? "",
+          }),
+          description: gt("It ignored the expiry, so the link lasts the default 30 days."),
+        });
       }
       handleOpenChange(false);
     } else if (!isAtomCommandInterrupted(result)) {
@@ -697,7 +744,11 @@ export function LinkEnvironmentDialog({
             )}
             <LinkAccessPicker value={access} onChange={setAccess} disabled={busy} />
             {canMint ? (
-              <LinkExpiryPicker value={lifetimeId} onChange={setLifetimeChoice} disabled={busy} />
+              <LinkExpiryPicker
+                value={lifetimeId}
+                onChange={setLifetimeChoice}
+                disabled={busy || (sourceLinks.data === null && sourceLinks.error === null)}
+              />
             ) : null}
             {turnsOn.length > 0 ? (
               <p className="text-xs text-muted-foreground">
@@ -737,21 +788,30 @@ export function LinkEnvironmentDialog({
                 )}
               </p>
             ) : null}
-            {offersInvite ? (
-              <label
-                className={cn(
-                  "flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default",
-                  backOffer.kind === "offered" && "ml-6.5",
-                )}
-              >
-                <Checkbox checked={alsoInvite} disabled={busy} onCheckedChange={setAlsoInvite} />
-                <span className="block min-w-0 font-medium text-foreground">
-                  {gt("Also invite the desktop app on {target} to connect to {source}", {
-                    source: source?.label ?? "",
-                    target: machine?.label ?? "",
-                  })}
-                </span>
-              </label>
+            {invite !== null ? (
+              inviteSendable ? (
+                <label
+                  className={cn(
+                    "flex cursor-pointer items-start gap-2.5 text-sm has-data-disabled:cursor-default",
+                    !linkingBack && backOffer.kind === "offered" && "ml-6.5",
+                  )}
+                >
+                  <Checkbox checked={alsoInvite} disabled={busy} onCheckedChange={setAlsoInvite} />
+                  <span className="block min-w-0 font-medium text-foreground">
+                    {gt("Also invite the desktop app on {target} to connect to {source}", {
+                      source: invite.host.label,
+                      target: invite.app.label,
+                    })}
+                  </span>
+                </label>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {gt(
+                    "This app connects to {label} over plain http, so it cannot invite the desktop app there.",
+                    { label: invite.app.label },
+                  )}
+                </p>
+              )
             ) : null}
           </form>
         </DialogPanel>

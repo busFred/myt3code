@@ -136,8 +136,6 @@ export const linkBackOffer = (input: {
   if (!target.writable) return { kind: "blocked", reason: "target_no_access" };
   if (!source.writable) return { kind: "blocked", reason: "source_no_access" };
   if (source.urls.length === 0) return { kind: "blocked", reason: "source_no_address" };
-  // With links off there, a link it may still hold does not work: linking back replaces it.
-  if (turnsOnLinks) return { kind: "offered", turnsOnLinks: true };
   // Unknown or already there: offering it could replace a working token.
   if (
     target.links === null ||
@@ -147,7 +145,7 @@ export const linkBackOffer = (input: {
   ) {
     return { kind: "hidden" };
   }
-  return { kind: "offered" };
+  return turnsOnLinks ? { kind: "offered", turnsOnLinks: true } : { kind: "offered" };
 };
 
 export const linkBackBlockLabel = (

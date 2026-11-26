@@ -215,14 +215,13 @@ describe("linkBackOffer", () => {
     ).toEqual({ kind: "offered" });
   });
 
-  it("turns Linked environments on first where the client may, whatever links it held", () => {
+  it("turns Linked environments on first where the client may", () => {
     const off = { offersLinks: false, canTurnOnLinks: true } as const;
     expect(offer({ target: off })).toEqual({ kind: "offered", turnsOnLinks: true });
-    expect(
-      offer({
-        target: { ...off, links: [{ environmentId: id("source"), status: "reachable" }] },
-      }),
-    ).toEqual({ kind: "offered", turnsOnLinks: true });
+    // Links it kept while off work again once it is on: linking back would replace them.
+    for (const links of [null, [{ environmentId: id("source"), status: "reachable" }]] as const) {
+      expect(offer({ target: { ...off, links } })).toEqual({ kind: "hidden" });
+    }
     // Every other rule still holds.
     expect(offer({ target: { ...off, writable: false } })).toEqual({
       kind: "blocked",

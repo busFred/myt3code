@@ -67,6 +67,8 @@ describe("link lifetime", () => {
     ["a link ending within a month", now + 20 * DAY, "30-days"],
     ["a link ending in half a year", now + 180 * DAY, "1-year"],
     ["an expired link", now - DAY, "30-days"],
+    // The source's links are not read yet: a link there may never expire.
+    ["a machine whose link is not known yet", undefined, null],
   ] as const)("starts renewing %s at %s", (_name, expiresAt, expected) => {
     expect(defaultLinkLifetimeId(expiresAt, now)).toBe(expected);
   });
