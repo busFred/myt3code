@@ -15,12 +15,31 @@ import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import { describe, expect, it } from "vite-plus/test";
+import { TestClock } from "effect/testing";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as DirectEndpoints from "./DirectEndpoints.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
 import { readIsolatedLinuxBridges, resolveBoundEndpoints } from "./DirectEndpoints.ts";
+
+// A host that listens on Tailscale, whatever the machine running the test has.
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const networkInterfaces = () => ({
+    tailscale0: [
+      {
+        address: "100.64.1.2",
+        netmask: "255.192.0.0",
+        family: "IPv4" as const,
+        mac: "00:00:00:00:00:00",
+        internal: false,
+        cidr: "100.64.1.2/10",
+      },
+    ],
+  });
+  return { ...actual, networkInterfaces, default: { ...actual, networkInterfaces } };
+});
 
 const INTERFACES: ReturnType<typeof NodeOS.networkInterfaces> = {
   lo0: [
@@ -331,26 +350,31 @@ const TAILSCALE_STATUS_JSON = JSON.stringify({
   Self: { DNSName: "bb-1.tail1234.ts.net.", TailscaleIPs: ["100.64.1.2"] },
 });
 
-const layerTailscaleUp = Layer.succeed(
-  ChildProcessSpawner.ChildProcessSpawner,
-  ChildProcessSpawner.make(() =>
-    Effect.succeed(
-      ChildProcessSpawner.makeHandle({
-        pid: ChildProcessSpawner.ProcessId(1),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-        isRunning: Effect.succeed(false),
-        kill: () => Effect.void,
-        unref: Effect.succeed(Effect.void),
-        stdin: Sink.drain,
-        stdout: Stream.make(new TextEncoder().encode(TAILSCALE_STATUS_JSON)),
-        stderr: Stream.empty,
-        all: Stream.empty,
-        getInputFd: () => Sink.drain,
-        getOutputFd: () => Stream.empty,
-      }),
+const makeLayerTailscaleUp = (onSpawn: Effect.Effect<void> = Effect.void) =>
+  Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make(() =>
+      onSpawn.pipe(
+        Effect.as(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+            isRunning: Effect.succeed(false),
+            kill: () => Effect.void,
+            unref: Effect.succeed(Effect.void),
+            stdin: Sink.drain,
+            stdout: Stream.make(new TextEncoder().encode(TAILSCALE_STATUS_JSON)),
+            stderr: Stream.empty,
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          }),
+        ),
+      ),
     ),
-  ),
-);
+  );
+
+const layerTailscaleUp = makeLayerTailscaleUp();
 
 const T3_DESCRIPTOR_BODY = JSON.stringify({
   environmentId: "serve-test",
@@ -372,14 +396,14 @@ const layerServeProbe = (status: number) =>
     HttpClient.make((request) => Effect.succeed(serveProbeResponse(request, status))),
   );
 
-const layerServeConfig = (host = "127.0.0.1") =>
+const layerServeConfig = (host = "127.0.0.1", tailscaleServeEnabled = true) =>
   Layer.effect(
     ServerConfig.ServerConfig,
     Effect.map(ServerConfig.ServerConfig, (config) => ({
       ...config,
       host,
       port: 3773,
-      tailscaleServeEnabled: true,
+      tailscaleServeEnabled,
       tailscaleServePort: 443,
     })),
   ).pipe(
@@ -477,6 +501,32 @@ describe("DirectEndpoints Tailscale Serve", () => {
   effectIt.effect("leaves the tailnet name out when Serve is not forwarding", () =>
     Effect.gen(function* () {
       expect(yield* resolveWithServe(502)).toEqual([]);
+    }),
+  );
+});
+
+describe("DirectEndpoints tailnet name", () => {
+  effectIt.effect("asks Tailscale for the name once a minute while only listening on it", () =>
+    Effect.gen(function* () {
+      const spawns = yield* Ref.make(0);
+      const service = yield* DirectEndpoints.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            layerServeConfig("0.0.0.0", false),
+            NodeFileSystem.layer,
+            makeLayerTailscaleUp(Ref.update(spawns, (count) => count + 1)),
+            layerServeProbe(200),
+          ),
+        ),
+      );
+      const named = { kind: "tailnet", httpBaseUrl: "http://bb-1.tail1234.ts.net:3773/" };
+      expect(yield* service.resolve()).toContainEqual(named);
+      yield* TestClock.adjust("59 seconds");
+      expect(yield* service.resolve()).toContainEqual(named);
+      expect(yield* Ref.get(spawns)).toBe(1);
+      yield* TestClock.adjust("2 seconds");
+      expect(yield* service.resolve()).toContainEqual(named);
+      expect(yield* Ref.get(spawns)).toBe(2);
     }),
   );
 });

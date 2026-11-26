@@ -4,6 +4,7 @@ import {
   probeTailscaleHttpsEndpoint,
   readTailscaleStatus,
 } from "@t3tools/tailscale";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -36,6 +37,8 @@ type NetworkInterfacesMap = ReturnType<typeof NodeOS.networkInterfaces>;
 
 // Stay below the config discovery timeout so slow Tailscale drops only the tailnet name.
 const TAILSCALE_ENDPOINT_TIMEOUT = Duration.seconds(3);
+// Every client connect resolves, so a machine that only listens on Tailscale reuses the name it read.
+const TAILNET_NAME_TTL_MILLIS = Duration.toMillis(Duration.seconds(60));
 
 export class DirectEndpoints extends Context.Service<
   DirectEndpoints,
@@ -194,6 +197,7 @@ export const make = Effect.gen(function* () {
 
   const servedEndpoint = yield* Ref.make<Option.Option<string>>(Option.none());
   const tailnetName = yield* Ref.make<Option.Option<string>>(Option.none());
+  const tailnetNameReadAt = yield* Ref.make<Option.Option<number>>(Option.none());
   const boundEndpoints = Effect.fnUntraced(function* (magicDnsName: Option.Option<string>) {
     const interfaces = NodeOS.networkInterfaces();
     const isolatedBridges =
@@ -225,7 +229,17 @@ export const make = Effect.gen(function* () {
     );
     if (!config.tailscaleServeEnabled && !listensOnTailnet) {
       yield* Ref.set(tailnetName, Option.none());
+      yield* Ref.set(tailnetNameReadAt, Option.none());
       return yield* resolveAvailable();
+    }
+    if (!config.tailscaleServeEnabled) {
+      const readAt = yield* Ref.get(tailnetNameReadAt);
+      if (
+        Option.isSome(readAt) &&
+        (yield* Clock.currentTimeMillis) - readAt.value < TAILNET_NAME_TTL_MILLIS
+      ) {
+        return yield* resolveAvailable();
+      }
     }
     const readName = yield* Ref.make<Option.Option<string>>(Option.none());
     // Serve setup can fail without stopping startup; advertise only after it answers as this server.
@@ -249,6 +263,7 @@ export const make = Effect.gen(function* () {
       Effect.provideService(HttpClient.HttpClient, httpClient),
     );
     yield* Ref.set(tailnetName, yield* Ref.get(readName));
+    yield* Ref.set(tailnetNameReadAt, Option.some(yield* Clock.currentTimeMillis));
     if (config.tailscaleServeEnabled) yield* Ref.set(servedEndpoint, servedUrl);
     return yield* resolveAvailable();
   });

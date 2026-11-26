@@ -1295,6 +1295,15 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
         if (ChildProcess.isStandardCommand(command)) spawned.push(command);
         return delegate.spawn(ChildProcess.make(process.execPath, ["-e", ""]));
       });
+      // A .deb kept for a printed `sudo dpkg -i` is swept once old; a recent one may still be wanted.
+      const desktopFolders = `${baseDir}/runtime/desktop`;
+      for (const name of ["install-stale", "install-recent"]) {
+        yield* fs.makeDirectory(`${desktopFolders}/${name}`, { recursive: true });
+        yield* fs.writeFileString(`${desktopFolders}/${name}/app.deb`, "deb");
+      }
+      yield* TestClock.setTime(Duration.toMillis(Duration.days(1)));
+      yield* fs.utimes(`${desktopFolders}/install-stale`, 0, 0);
+      yield* fs.utimes(`${desktopFolders}/install-recent`, 86_400, 86_400);
       const installerName = `T3-Code-${version}-x64.exe`;
       const output = yield* update(baseDir, {
         platform: "win32",
@@ -1317,8 +1326,11 @@ it.layer(NodeServices.layer)("t3 update of an installed t3 command", (it) => {
         "@echo off",
         `"%~dp0${installerName}" /S`,
         '>"%~dp0result" echo %ERRORLEVEL%',
+        `del "%~dp0${installerName}"`,
         "",
       ]);
+      assert.isFalse(yield* fs.exists(`${desktopFolders}/install-stale`));
+      assert.isTrue(yield* fs.exists(`${desktopFolders}/install-recent`));
       // No re-read of the app, which the installer has not replaced yet.
       assert.notInclude(output, "Desktop app:");
       assert.isTrue(output.endsWith("  The desktop app installer finishes in the background."));

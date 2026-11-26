@@ -26,6 +26,7 @@ import {
   DpopFailureReason,
   type DpopFailureReason as DpopFailureReasonType,
   CLOUD_CONNECT_SESSION_SUBJECT,
+  DESKTOP_SERVICE_SESSION_SUBJECT,
   MCP_CLIENT_SESSION_SUBJECT,
   mcpClientScopes,
   NON_RENEWABLE_SESSION_SUBJECTS,
@@ -1269,6 +1270,27 @@ export const make = Effect.gen(function* () {
     return yield* toAccessTokenResult(session);
   });
 
+  // Each launch of an app attached to the service signs in again. Only the local CLI mints a
+  // desktop-service grant, so an invited app's session on this host is never one of these. A
+  // session with a live connection belongs to an app still running, which a second app must not cut off.
+  const retireIdleDesktopServiceSessions = (keep: AuthSessionId) =>
+    sessions.listActive().pipe(
+      Effect.flatMap((active) =>
+        Effect.forEach(
+          active.filter(
+            (session) =>
+              session.subject === DESKTOP_SERVICE_SESSION_SUBJECT &&
+              session.method === "bearer-access-token" &&
+              !session.connected &&
+              session.sessionId !== keep,
+          ),
+          (session) => sessions.revoke(session.sessionId),
+          { discard: true },
+        ),
+      ),
+      Effect.ignore({ log: true }),
+    );
+
   const exchangeBootstrapCredentialForAccessToken: EnvironmentAuth["Service"]["exchangeBootstrapCredentialForAccessToken"] =
     (credential, requestedScopes, requestMetadata, input) => {
       const exchangeSince = (revocationsAtStart: number) =>
@@ -1323,6 +1345,11 @@ export const make = Effect.gen(function* () {
                 .pipe(
                   Effect.mapError(
                     (cause) => new ServerAuthAuthenticatedAccessTokenIssueError({ cause }),
+                  ),
+                  Effect.tap((issued) =>
+                    grant.subject === DESKTOP_SERVICE_SESSION_SUBJECT
+                      ? retireIdleDesktopServiceSessions(issued.sessionId)
+                      : Effect.void,
                   ),
                 );
               // A proof-key exchange holds the lock from before it spends its credential.

@@ -1050,6 +1050,60 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
       ),
     );
 
+    it.effect("replaces only the local app's idle service sessions when it attaches again", () =>
+      Effect.gen(function* () {
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const sessions = yield* SessionStore.SessionStore;
+        const attach = Effect.gen(function* () {
+          const link = yield* serverAuth.createPairingLink({
+            subject: "desktop-service",
+            label: "T3 Code Desktop",
+          });
+          const token = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+            link.credential,
+            undefined,
+            requestMetadata,
+          );
+          return (yield* serverAuth.authenticateHttpRequest(makeBearerRequest(token.access_token)))
+            .sessionId;
+        });
+        const activeIds = serverAuth
+          .listSessions()
+          .pipe(Effect.map((active) => active.map((entry) => entry.sessionId)));
+
+        const quitApp = yield* attach;
+        // An app on another machine takes an invite with a plain pairing code, not a service one.
+        const invitation = yield* serverAuth.issuePairingCredential({
+          label: "Laptop desktop app",
+        });
+        const invitedToken = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+          invitation.credential,
+          undefined,
+          requestMetadata,
+        );
+        const invitedApp = (yield* serverAuth.authenticateHttpRequest(
+          makeBearerRequest(invitedToken.access_token),
+        )).sessionId;
+
+        const runningApp = yield* attach;
+        expect(yield* activeIds).toEqual(expect.arrayContaining([invitedApp, runningApp]));
+        expect(yield* activeIds).not.toContain(quitApp);
+
+        yield* sessions.markConnected(runningApp);
+        const secondApp = yield* attach;
+        expect(yield* activeIds).toEqual(
+          expect.arrayContaining([invitedApp, runningApp, secondApp]),
+        );
+
+        yield* sessions.markDisconnected(runningApp);
+        const nextLaunch = yield* attach;
+        const finalIds = yield* activeIds;
+        expect(finalIds).toEqual(expect.arrayContaining([invitedApp, nextLaunch]));
+        expect(finalIds).not.toContain(runningApp);
+        expect(finalIds).not.toContain(secondApp);
+      }).pipe(Effect.provide(layerEnvironmentAuth())),
+    );
+
     it.effect("issues startup pairing URLs that bootstrap administrative sessions", () =>
       Effect.gen(function* () {
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;

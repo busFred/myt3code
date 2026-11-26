@@ -352,8 +352,22 @@ describe("DesktopBackendPool", () => {
         const layer = Layer.merge(
           DesktopState.layer,
           layerPool(Ref.makeUnsafe("Local"), {
+            // Only the recorded owner's origin answers, as a stopped service's would not.
             httpClient: HttpClient.make((request) =>
-              Effect.succeed(HttpClientResponse.fromWeb(request, new Response("{}"))),
+              Ref.get(owner).pipe(
+                Effect.map((current) =>
+                  HttpClientResponse.fromWeb(
+                    request,
+                    new Response("{}", {
+                      status:
+                        Option.isSome(current) &&
+                        current.value.origin === new URL(request.url).origin
+                          ? 200
+                          : 503,
+                    }),
+                  ),
+                ),
+              ),
             ),
             onReady: Queue.offer(events, "ready").pipe(Effect.asVoid),
             onNotReady: Queue.offer(events, "not-ready").pipe(Effect.asVoid),

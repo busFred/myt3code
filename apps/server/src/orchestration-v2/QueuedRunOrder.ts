@@ -93,6 +93,8 @@ function runJoinsBatch(run: OrchestrationV2Run, head: OrchestrationV2Run): boole
     run.delegatedTaskId === undefined &&
     run.sourcePlanRef === undefined &&
     run.delegatedCompletion === undefined &&
+    // A result is asked of one whole turn, so a run that asks for one runs alone.
+    run.outputSchema === undefined &&
     modelSelectionsEqual(run.modelSelection, head.modelSelection)
   );
 }

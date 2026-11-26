@@ -154,12 +154,18 @@ describe("queued agent message batch", () => {
     ["a delegated task's run", { run: { delegatedTaskId: "node:task" } }],
     ["a plan's implementation", { run: { sourcePlanRef: { threadId: "thread:x", planId: "p" } } }],
     ["a delegated completion run", { run: { delegatedCompletion } }],
+    ["a message that asks for a result", { run: { outputSchema: { answer: { type: "string" } } } }],
     ["composer context", { message: { context: { records: [] } } }],
     ["an idle compaction", { message: { idleCompaction: { scheduledAt: "x" } } }],
     ["a workflow script", { message: { workflowScript: true } }],
     ["a delivery on the thread's selection", { message: { followsThreadSelection: true } }],
   ])("ends the batch at %s", (_name, entry) => {
     expect(batchOf([{}, {}, entry, {}])).toEqual(["run:0", "run:1"]);
+  });
+
+  it("starts a message that asks for a result alone, taking no followers", () => {
+    const asksForResult = { run: { outputSchema: { answer: { type: "string" } } } };
+    expect(batchOf([asksForResult, {}, {}])).toEqual([]);
   });
 
   it("batches deliveries on the thread's selection only with each other", () => {

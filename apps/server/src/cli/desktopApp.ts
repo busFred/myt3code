@@ -408,6 +408,7 @@ export const isWindowsAppRunning = Effect.fn("cli.desktop_app.is_running")(funct
 });
 
 const HANDOFF_PREFIX = "handoff-";
+const INSTALL_PREFIX = "install-";
 const HANDOFF_RESULT = "result";
 const HANDOFF_SCRIPT = "install.cmd";
 // Long enough for an installer another update handed off to have started and finished.
@@ -470,10 +471,11 @@ export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* 
   }
   // Its own folder per run, so concurrent updates never run each other's installer.
   const parent = path.join(input.baseDir, "runtime", "desktop");
-  // A handed-off installer outlives its run, and another update's may not have started yet.
+  // A handed-off installer outlives its run, and another update's may not have started yet. An
+  // `install-` folder holds a .deb kept for a printed command, which nothing else removes.
   const settledBefore = (yield* Clock.currentTimeMillis) - Duration.toMillis(HANDOFF_GRACE);
   for (const entry of yield* fs.readDirectory(parent).pipe(Effect.orElseSucceed(() => []))) {
-    if (!entry.startsWith(HANDOFF_PREFIX)) continue;
+    if (!entry.startsWith(HANDOFF_PREFIX) && !entry.startsWith(INSTALL_PREFIX)) continue;
     const folder = path.join(parent, entry);
     const createdAt = yield* fs.stat(folder).pipe(
       Effect.map((info) => Option.getOrUndefined(info.mtime)?.getTime()),
@@ -486,7 +488,7 @@ export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* 
     Effect.andThen(
       fs.makeTempDirectory({
         directory: parent,
-        prefix: input.handoff && install.kind === "nsis" ? HANDOFF_PREFIX : "install-",
+        prefix: input.handoff && install.kind === "nsis" ? HANDOFF_PREFIX : INSTALL_PREFIX,
       }),
     ),
     Effect.mapError(failed(`Could not prepare ${parent}.`)),
@@ -533,6 +535,7 @@ export const installDesktopApp = Effect.fn("cli.desktop_app.install")(function* 
           "@echo off",
           `"%~dp0${input.fileName}" ${args.join(" ")}`,
           `>"%~dp0${HANDOFF_RESULT}" echo %ERRORLEVEL%`,
+          `del "%~dp0${input.fileName}"`,
           "",
         ].join("\r\n"),
       )
